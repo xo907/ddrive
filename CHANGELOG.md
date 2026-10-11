@@ -3,6 +3,13 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.1 (2026-10-10)
+
+- Messages: the mark "not on the drive yet" now reads "text not on the drive yet" and says why. It
+  is about the message's text, which is written to the drive every ten minutes (when archiving: when a
+  channel is finished). Attachments are saved right away, so a message could carry the mark while
+  the log already showed its file as uploaded.
+
 ## 1.3.0 (2026-10-10)
 
 - Discord messages: a logger and an archiver for your own Discord account (brought over from Pretty

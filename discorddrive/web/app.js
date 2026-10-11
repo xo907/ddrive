@@ -3296,7 +3296,7 @@ function msgRow(m) {
         m.deleted_ts && h("span", { class: "tag busy", title: fmtFull.format(m.deleted_ts) }, "deleted"),
         m.edits.length ? h("span", { class: "tag" }, "edited") : null,
         m.flagged ? h("span", { class: "tag" }, "keyword") : null,
-        !m.on_drive && h("span", { class: "tag", title: "Recorded on this computer. It is written to the drive within ten minutes." }, "not on the drive yet")),
+        !m.on_drive && h("span", { class: "tag", title: "The text of this message is recorded on this computer and is written to the drive within ten minutes (when archiving: when the channel is finished). Its attachments are saved to the drive right away." }, "text not on the drive yet")),
       m.content && h("div", { class: "ch-text" }, m.content),
       m.edits.map((e) => h("div", { class: "ch-old" }, h("span", {}, `Before the edit${e.ts ? " of " + fmtFull.format(e.ts) : ""}`), e.old_content)),
       m.attachments.map((a) => !a.path ? h("span", { class: "ch-file off", title: "Not saved to the drive" }, icon("file"), a.filename || "file")
@@ -3479,7 +3479,7 @@ function drawLive(body) {
     problem.hidden = !lg.error;
     problem.textContent = lg.error || "";
     const waiting = chat.totals ? chat.totals.waiting : 0;
-    captured.textContent = `${plural(lg.captured, "message")} recorded since the drive started${waiting ? ` · ${waiting.toLocaleString()} not on the drive yet` : ""}`;
+    captured.textContent = `${plural(lg.captured, "message")} recorded since the drive started${waiting ? ` · ${waiting.toLocaleString()} waiting to be written to the drive` : ""}`;
   }
   if (act) act.replaceChildren(pill, toggle);
   const opt = (label, hint, key) => h("div", { class: "ch-opt" }, h("div", { class: "t" }, label, hint && h("div", { class: "s" }, hint)),

@@ -649,7 +649,7 @@ one device only.
 ```
 
 The logger writes what it recorded to the drive every ten minutes and when it stops (until then a
-message is marked "not on the drive yet"), and joins a day's small files into one the day after. Other
+message is marked "text not on the drive yet"; its attachments are saved right away), and joins a day's small files into one the day after. Other
 devices read these files, so Messages works on all of them. Deleting a file removes its messages
 from the lists. `/Discord` can be [password-locked](#password-locked-folders): recording carries on,
 and the messages are hidden in the dashboard until you unlock it.
