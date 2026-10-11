@@ -999,7 +999,8 @@ the drive or the menu starts. What changed is what you type and what things are 
 inside the program is `ddrive` (`python -m ddrive`), the programs are `DDrive.exe`, `DDriveLite.exe`,
 `ddrive` and `ddrive-lite`, and the environment variables start with `DDRIVE_` (the old ones still
 work). If you wrote a systemd unit or a script of your own that names the old module, change it there.
-The repository moved too: point your clone at the new address with
+The repository moved too. **Update DDrive** in the menu points your copy at the new address by
+itself; if you update with `git pull`, do it once by hand:
 `git remote set-url origin https://github.com/xo907/ddrive.git`.
 
 In the menu choose **4 (Update DDrive)**. It stops the drive, downloads the latest version,

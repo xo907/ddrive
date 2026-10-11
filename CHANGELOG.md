@@ -22,6 +22,8 @@ list under the account menu, "What's new".
 - What an account does is no longer written to the owner's log (file names showed up there). Error
   messages are still logged.
 - README: new screenshots, an Accounts section with the above, and a Legal section.
+- Updating from the menu moves a copy that was downloaded from the earlier repository over to the new
+  one by itself; nothing has to be downloaded again.
 
 ## 1.5.0 (2026-10-11)
 

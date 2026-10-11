@@ -17,6 +17,7 @@ OLD = "DiscordDrive"
 OLD_ENV = "DISCORDDRIVE_"
 OLD_PID = "discorddrive.pid"
 OLD_CRON_TAG = "# DiscordDrive autostart"
+OLD_REPO, NEW_REPO = "xo907/discord-drive", "xo907/ddrive"
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -36,6 +37,20 @@ def pid_file(data_dir, name):
     """The pid file of the running drive: an old version that is still running wrote the old one."""
     new, old = os.path.join(data_dir, name), os.path.join(data_dir, OLD_PID)
     return old if os.path.exists(old) and not os.path.exists(new) else new
+
+
+def move_remote(root) -> bool:
+    """Point a copy that was downloaded from the program's earlier repository at the new one, so that
+    updating keeps working. True when the address was changed."""
+    try:
+        url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=root, capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return False
+    if OLD_REPO not in url.lower():
+        return False
+    at = url.lower().index(OLD_REPO)
+    new = url[:at] + NEW_REPO + url[at + len(OLD_REPO):]
+    return subprocess.run(["git", "remote", "set-url", "origin", new], cwd=root, capture_output=True).returncode == 0
 
 
 def old_autostart(remove=False) -> bool:

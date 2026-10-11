@@ -282,6 +282,9 @@ def update():
         stop_drive()
         print()
     step("Downloading the latest version")
+    from . import legacy
+    if legacy.move_remote(ROOT):
+        info(f"The project moved: updates now come from https://github.com/{legacy.NEW_REPO}")
     result = subprocess.run(["git", "pull", "--ff-only"], cwd=ROOT, capture_output=True, text=True)
     for line in (result.stdout + result.stderr).strip().splitlines():
         info(line)

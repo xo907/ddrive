@@ -146,6 +146,22 @@ class ConfigProtectionTest(unittest.TestCase):
         self.assertEqual(Config.load().bot_token, "new-way")
         Config(channel_id="1", volume_name="Holiday", protect_config=False).save(self.path)
         self.assertEqual(Config.load().volume_name, "Holiday")                                  # a label somebody chose stays
+        # a copy downloaded from the earlier repository updates from the new one
+        if shutil.which("git"):
+            import subprocess
+            repo = os.path.join(self.tmp, "clone")
+            os.makedirs(repo)
+            git = lambda *a: subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            for old, new in (("https://github.com/" + legacy.OLD_REPO + ".git", "https://github.com/xo907/ddrive.git"),
+                             ("git@github.com:" + legacy.OLD_REPO + ".git", "git@github.com:xo907/ddrive.git")):
+                git("remote", "remove", "origin")
+                git("remote", "add", "origin", old)
+                self.assertTrue(legacy.move_remote(repo))
+                self.assertEqual(git("remote", "get-url", "origin"), new)
+                self.assertFalse(legacy.move_remote(repo))                                      # already there
+            git("remote", "set-url", "origin", "https://example.com/somebody/fork.git")
+            self.assertFalse(legacy.move_remote(repo))                                          # somebody's own copy is left alone
         # the running drive of the old version is still found, to stop it
         data = os.path.join(self.tmp, "d")
         os.makedirs(data)
