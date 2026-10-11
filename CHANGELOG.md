@@ -3,6 +3,11 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.5 (2026-10-10)
+
+- Messages → Saved updates by itself: new, edited and deleted messages appear within a few seconds,
+  with your search and filters kept.
+
 ## 1.3.4 (2026-10-10)
 
 - Scroll bars are thin and blend in (in the menu, the lists and the pages); the ones inside a panel

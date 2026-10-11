@@ -3433,9 +3433,13 @@ function drawSaved(body) {
   const search = h("input", { class: "ch-input ch-search", type: "search", placeholder: "Search the text", value: chatView.q, spellcheck: "false",
                               oninput: (e) => { clearTimeout(typing); typing = setTimeout(() => { chatView.q = e.target.value.trim(); chatView.shown = 60; load(); }, 250); } });
   const filters = () => ({ ...(chatView.q ? { q: chatView.q } : {}), ...(chatView.channel ? { channel: chatView.channel } : {}), ...msgFilter(chatView.kind) });
-  async function load() {
-    const r = await api("/api/chat/messages" + q({ ...filters(), limit: chatView.shown })).catch((e) => { toast(e.message); return null; });
+  let shown = null;
+  async function load(quiet) {
+    const r = await api("/api/chat/messages" + q({ ...filters(), limit: chatView.shown })).catch((e) => { if (!quiet) toast(e.message); return null; });
     if (!r || !list.isConnected) return;
+    const now = r.total + "|" + r.messages.map((m) => `${m.id}:${m.touched}:${m.on_drive}`).join();
+    if (now === shown) return;               // nothing new: leave the list (and what is selected in it) alone
+    shown = now;
     list.replaceChildren(...r.messages.map(msgRow));
     more.hidden = r.messages.length >= r.total;
     none.hidden = r.total > 0;
@@ -3478,6 +3482,8 @@ function drawSaved(body) {
     chipRow(MSG_KINDS, chatView.kind, (k) => { chatView.kind = k; chatView.shown = 60; load(); }),
     list, none, h("div", { class: "ch-more" }, more));
   load();
+  // New, edited and deleted messages show up by themselves.
+  chatTimer = setInterval(() => { if (!document.hidden && route.name === "messages" && list.isConnected) load(true); }, 4000);
 }
 
 // ---- live logger
