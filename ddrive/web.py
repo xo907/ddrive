@@ -972,7 +972,17 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                    for i in acc.invites()]
         self._json({"mode": acc.mode(), "quota": int(cfg.account_quota_bytes or 0), "max": int(cfg.accounts_max or 0),
                     "legal": {k: getattr(cfg, k) or "" for k in ("operator_name", "operator_contact", "legal_region")},
-                    "accounts": acc.listing(), "invites": invites, "path": "/signup", "url": f"{base}/signup" if base else ""})
+                    "accounts": acc.listing(), "invites": invites, "path": "/signup", "url": f"{base}/signup" if base else "",
+                    "backups": acc.restorable()})
+
+    def _post_api_accounts_restore(self):
+        """Bring back the list of accounts another computer (or this one, before its disk was lost) saved."""
+        try:
+            count = self.app.accounts.restore(str(self._body_json().get("id") or ""))
+        except AccountError as e:
+            raise ApiError(409, str(e)) from None
+        log.warning("Web dashboard: the list of %d account(s) was brought back from Discord.", count)
+        self._json({"ok": True, "count": count})
 
     def _post_api_accounts_invite(self):
         body = self._body_json()

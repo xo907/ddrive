@@ -140,6 +140,9 @@ def privacy(cfg):
              "how many files it holds and how much room they take;",
              "its encryption key, itself encrypted on the server. The server needs it to finish uploads, serve your "
              "share links and do background work while you are not signed in. The 24 words themselves are not stored."],
+            "This is kept on the operator's server. A copy of it without the encryption key is kept in the same "
+            "private channel on Discord as the files, encrypted with the operator's key, so that the accounts can be "
+            "found again if the server's disk is lost. Discord cannot read it.",
         ]),
         ("2. What you store", [
             "Files, photos, notes, bookmarks, contacts, saved messages, share links and the settings of your account.",

@@ -3,6 +3,25 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.1.0 (2026-10-11)
+
+- **Accounts survive the loss of the computer that serves them.** Until now the list of accounts was
+  only on that computer (`accounts.json`): if its disk died, nothing could find the accounts' file
+  lists again, although everything they stored was still on Discord. A copy of the list is now kept
+  in the channel: one pinned message per computer that serves accounts, encrypted with the drive's
+  key, without the accounts' keys. It is written within a minute of an account being made, switched
+  off or deleted and otherwise at most every ten minutes, and each copy replaces the one before.
+- **Settings, Accounts: Bring accounts back.** A computer that has no accounts is shown the saved
+  list, with the name of the computer that saved it and when, and brings it back when you say so.
+  Each account then works again once it has signed in with its 24 words. Nothing is brought back by
+  itself: a second device on the same drive sees the list too, and two computers must not serve the
+  same accounts. What an account changed after the last saved copy (ten minutes at most) is not
+  brought back.
+- The checkpoint of an account's file list that the saved copy names is kept until a newer copy is in
+  the channel, so the copy never points at a deleted message. At most one earlier checkpoint per
+  account is kept for this.
+- The privacy policy says that this copy exists. README: the Accounts section no longer asks you to
+  back up `accounts.json` yourself and describes getting accounts back.
 ## 2.0.2 (2026-10-11)
 
 - Health, "Parts that can't be repaired", has a **Check again** button: it asks Discord for every

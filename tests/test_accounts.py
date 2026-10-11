@@ -289,7 +289,7 @@ class AccountsTest(helpers.DriveTest):
                            ("/api/pin", {"path": "/", "on": True}), ("/api/check/start", {"path": "/"}),
                            ("/api/sync/save", {"job": {}}), ("/api/sync/remote-edit", {"on": True}),
                            ("/api/signin/phrase", {}), ("/api/signin/passkey/options", {}), ("/api/webdav/password", {"password": "12345678"}),
-                           ("/api/accounts/invite", {"uses": 0}), ("/api/accounts/delete", {"id": "x"}),
+                           ("/api/accounts/invite", {"uses": 0}), ("/api/accounts/delete", {"id": "x"}), ("/api/accounts/restore", {"id": "1"}),
                            ("/api/accounts/disable", {"id": "x", "off": True})):
             self.assertEqual(self.post(path, body, cookie)[0], 403, path)
         self.assertEqual(self.d.cfg.signup_mode, "public")
@@ -394,6 +394,138 @@ class AccountsTest(helpers.DriveTest):
         self.assertEqual(self.get("/api/status", again)[0], 503)
         again = self.sign_in(phrase)
         self.assertEqual(self.get("/api/file?path=/Docs.bin", again)[1], data)
+
+    # ------------------------------------------------------------ the list of accounts, kept in the channel too
+    def lists(self):
+        """The saved lists of accounts in the channel: [(message id, what is in it)]."""
+        return [(m["id"], self.acc._unpack(self.d.backend.download(m["id"], None)[0]))
+                for m in self.d.backend.pinned(accounts.LIST_MARKER)]
+
+    def checkpoint(self, aid):
+        return self.acc._recs[aid]["checkpoint"]["mid"]
+
+    def change(self, cookie, path, data):
+        """Store a file in an account and close its drive, which saves a new checkpoint of its file list."""
+        self.assertEqual(self.put(cookie, path, data), 200)
+        acct = self.opened(cookie)
+        self.upload(acct)
+        self.assertTrue(self.acc._close(acct.id, force=True))
+        return self.checkpoint(acct.id)
+
+    def test_the_list_of_accounts_is_kept_in_the_channel(self):
+        self.d.cfg.signup_mode = "public"
+        anna, phrase = self.sign_up()
+        aid = self.get("/api/status", anna)[1]["account"]
+        self.assertEqual(self.lists(), [])
+        first = self.change(anna, "/one.txt", b"1")
+        self.acc.tidy()                                                # a new account doesn't wait
+        (mid, saved), = self.lists()
+        self.assertEqual((saved["device"], list(saved["accounts"]), saved["accounts"][aid]["checkpoint"]["mid"]), ("aaaa", [aid], first))
+        # nothing in it opens an account, and Discord can't read it
+        key = words.phrase_to_key(phrase).hex()
+        self.assertNotIn(key, json.dumps(saved))
+        self.assertEqual(self.acc._secrets[aid]["key"], key)
+        raw = self.d.backend.download(mid, None)[0]
+        self.assertTrue(raw.startswith(b"DENC"))
+        self.assertNotIn(aid.encode(), raw)
+        # a new checkpoint: the one the saved list names stays until a newer list is there
+        second = self.change(anna, "/two.txt", b"2")
+        self.assertNotEqual(second, first)
+        self.assertIsNotNone(self.d.backend.message_info(first))
+        self.acc.tidy()                                                # not written on every checkpoint
+        self.assertEqual([m for m, _ in self.lists()], [mid])
+        third = self.change(anna, "/three.txt", b"3")
+        self.assertIsNone(self.d.backend.message_info(second))         # no saved list names it: gone at once
+        self.assertIsNotNone(self.d.backend.message_info(first))
+        self.acc._backup_at = 0                                        # ...ten minutes later
+        self.acc.tidy()
+        (newer, saved), = self.lists()                                 # one list: it replaced the earlier one
+        self.assertNotEqual(newer, mid)
+        self.assertEqual(saved["accounts"][aid]["checkpoint"]["mid"], third)
+        self.assertIsNone(self.d.backend.message_info(first))
+        self.assertEqual(self.acc._recs[aid]["kept"], [third])
+        # while Discord can't be reached nothing piles up, and what the saved list names stays
+        works = self.d.backend.save_pinned
+
+        def fails(*args):
+            raise OSError("no connection")
+        self.d.backend.save_pinned = fails
+        with self.assertLogs("ddrive.accounts", "WARNING"):
+            self.assertFalse(self.acc.backup())
+        fourth = self.change(anna, "/four.txt", b"4")
+        with self.assertLogs("ddrive.accounts", "WARNING"):
+            self.assertFalse(self.acc.backup())
+        fifth = self.change(anna, "/five.txt", b"5")
+        self.assertEqual([self.d.backend.message_info(m) is not None for m in (third, fourth, fifth)], [True, False, True])
+        self.d.backend.save_pinned = works
+        self.assertTrue(self.acc.backup())
+        self.assertIsNone(self.d.backend.message_info(third))
+        self.assertEqual([p["accounts"][aid]["checkpoint"]["mid"] for _, p in self.lists()], [fifth])
+        self.assertEqual(self.names(self.sign_in(phrase)), ["five.txt", "four.txt", "one.txt", "three.txt", "two.txt"])
+        # the owner's own checkpoints and the other device are not disturbed by it
+        other = self.drive("bbbb")
+        self.assertEqual(other.index.children(1), [])
+        # no accounts and no invites: no list
+        self.assertEqual(self.post("/api/accounts/delete", {"id": aid}, self.owner)[0], 200)
+        self.acc.tidy()
+        self.assertEqual(self.lists(), [])
+
+    def test_the_accounts_come_back_after_the_disk_is_lost(self):
+        import socket
+        self.d.cfg.signup_mode = "public"
+        anna, phrase = self.sign_up()
+        ben, bens = self.sign_up()
+        data = os.urandom(150 * 1024)
+        self.change(anna, "/Docs.bin", data)
+        self.change(ben, "/ben.txt", b"ben's notes")
+        ben_id = accounts.account_id(words.phrase_to_key(bens))
+        self.assertEqual(self.post("/api/accounts/disable", {"id": ben_id, "off": True}, self.owner)[0], 200)
+        code = self.acc.invite_new(0, 0, "for later")
+        self.acc.tidy()                                                # the list is saved
+        self.change(anna, "/later.txt", b"after the list was saved")   # ...and something changes after that
+        # a second device on the drive sees the saved list and does nothing with it by itself
+        second = accounts.Accounts(self.drive("bbbb"))
+        self.assertEqual((second.count(), second.find(words.phrase_to_key(phrase))), (0, None))
+        self.assertEqual([(b["device"], b["accounts"], b["here"]) for b in second.restorable()], [("aaaa", 2, False)])
+        self.assertEqual(self.acc.restorable(), [])                    # nor is the computer that has the accounts offered it
+        # the computer's disk is lost, without a goodbye
+        self.acc._backup_wanted = False
+        self.web.stop()
+        self.d.stop_background_services()
+        shutil.rmtree(self.d.cfg.resolved_data_dir)
+        # the owner sets it up again: the drive is back, the accounts are not
+        self.d = self.drive("cccc", web_token="secret-token")
+        self.web = self.d.start_web(port=0)
+        self.acc = self.web.accounts
+        self.owner = self.sign_in(self.owner_phrase)
+        self.assertEqual(self.acc.count(), 0)
+        self.assertIsNone(self.sign_in(phrase))
+        info = self.get("/api/accounts", self.owner)[1]
+        self.assertEqual(info["accounts"], [])
+        (found,) = info["backups"]
+        self.assertEqual((found["device"], found["host"], found["accounts"], found["here"]), ("aaaa", socket.gethostname()[:40], 2, False))
+        self.assertAlmostEqual(found["saved"], time.time(), delta=120)
+        # bringing it back is the owner's decision
+        self.assertEqual(self.post("/api/accounts/restore", {"id": found["id"]}, None)[0], 401)
+        self.assertEqual(self.post("/api/accounts/restore", {"id": "12345"}, self.owner)[0], 409)
+        self.assertEqual(self.post("/api/accounts/restore", {"id": found["id"]}, self.owner), (200, {"ok": True, "count": 2}))
+        info = self.get("/api/accounts", self.owner)[1]
+        self.assertEqual(sorted((a["id"], a["ready"], a["disabled"]) for a in info["accounts"]),
+                         sorted([(accounts.account_id(words.phrase_to_key(phrase)), False, False), (ben_id, False, True)]))
+        self.assertEqual((info["backups"], [i["code"] for i in info["invites"]]), ([], [code]))
+        self.assertEqual(self.post("/api/accounts/restore", {"id": found["id"]}, self.owner)[0], 409)      # only once
+        # the 24 words open the account again, with what it had when the list was saved
+        again = self.sign_in(phrase)
+        self.assertEqual(self.names(again), ["Docs.bin"])
+        self.assertEqual(self.get("/api/file?path=/Docs.bin", again)[1], data)
+        self.assertEqual(self.put(again, "/new.txt", b"it goes on"), 200)
+        self.assertEqual(self.post("/api/accounts/restore", {"id": found["id"]}, again)[0], 403)
+        self.assertIsNone(self.sign_in(bens))                          # switched off stays switched off
+        self.assertEqual(self.post("/api/accounts/disable", {"id": ben_id, "off": False}, self.owner)[0], 200)
+        self.assertEqual(self.get("/api/file?path=/ben.txt", self.sign_in(bens))[1], b"ben's notes")
+        # this computer keeps the list from now on; the lost one's copy is gone, so nobody is offered it again
+        self.assertEqual([(p["device"], len(p["accounts"])) for _, p in self.lists()], [("cccc", 2)])
+        self.assertEqual(second.backups(max_age=0)[0]["device"], "cccc")
 
     def test_accounts_survive_a_restart(self):
         self.d.cfg.signup_mode = "public"

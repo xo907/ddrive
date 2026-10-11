@@ -16,6 +16,14 @@ Only the computer that serves an account knows its file list, so its change jour
 computer (there is nobody to sync with). A checkpoint of the file list still goes to Discord, as the
 drive's own does: if the account's folder here is lost, the next sign-in rebuilds it from there.
 
+The list of accounts says where each checkpoint is, so a copy of it is kept in the channel too
+(Accounts.backup): one pinned message per computer that serves accounts, encrypted with the drive's
+key, replaced when the list has changed. It has no account keys in it. If the computer's disk is
+lost, the owner brings the list back on the rebuilt computer (Settings, Accounts) and each account
+works again once it has signed in with its words. Nothing brings it back by itself: a second device
+on the same channel sees the copy too, and two computers serving the same accounts would each keep
+a journal of their own.
+
 What the computer keeps of an account (accounts.json): its id (a hash of the key, which doesn't give
 the key away), when it was made and used, and the key itself, encrypted for this computer like the
 secrets of the config file (secretbox.py). The key has to be here for the things an account's drive
@@ -26,6 +34,7 @@ Who may make an account is `signup_mode`: closed (nobody), invite (with a code m
 Settings) or public (anybody who can reach the dashboard).
 """
 
+import gzip
 import hashlib
 import hmac
 import json
@@ -41,7 +50,7 @@ from dataclasses import asdict
 from .backend import LocalBackend
 from .config import Config, MiB
 from .crypto import KeyRing
-from .journal import Journal, OP_PREFIX
+from .journal import Journal, OP_PREFIX, _hostname
 from .logbuf import hush_accounts, quiet
 from .shares import Shares
 from . import words
@@ -50,6 +59,8 @@ log = logging.getLogger("ddrive.accounts")
 
 MODES = ("closed", "invite", "public")
 MARKER = "DISCORDDRIVE_ACCOUNT"     # an account's index checkpoint in the channel (the drive's own: backend.INDEX_MARKER)
+LIST_MARKER = "DDRIVE_ACCOUNTS"     # a computer's copy of its list of accounts in the channel (pinned)
+BACKUP_EVERY = 600.0                # the copy is written at most this often, unless something can't wait
 IDLE_CLOSE = 600.0                  # an account's drive is closed this long after it was last used
 JOURNAL_KEEP = 15 * 86400.0         # how long an account's applied journal entries are kept on this computer
 OFFER_MINUTES = 30                  # how long somebody has to write down a new phrase and confirm it
@@ -174,9 +185,10 @@ class AccountBackend:
                                  f"{MARKER} c={cursor}\nAn account's index checkpoint.")
         old = self.checkpoint.get("mid") or previous_message_id
         self.checkpoint = {"mid": chunk.message_id, "cursor": str(cursor or "0")}
-        if self.on_checkpoint is not None:
-            self.on_checkpoint(dict(self.checkpoint))
-        if old and old != chunk.message_id:
+        # The copy of the list of accounts in the channel may still name the previous one: then it
+        # stays until a newer copy has been written (Accounts.backup deletes it).
+        keep = self.on_checkpoint is not None and self.on_checkpoint(dict(self.checkpoint))
+        if old and old != chunk.message_id and not keep:
             try:
                 self.base.delete(old)
             except Exception as e:
@@ -389,6 +401,12 @@ class Accounts:
         self._secrets = {}                  # account id -> {"key": hex, "token": its Discord login}
         self._signups = {}                  # address -> [times of the accounts made from it]
         self._dirty = False
+        self._replaces = ""                 # the copy in the channel this list was brought back from
+        self._backup_lock = threading.Lock()    # one copy of the list is written at a time
+        self._backup_wanted = False         # the list changed since its copy in the channel was written
+        self._backup_soon = False           # ...in a way that shouldn't wait for BACKUP_EVERY
+        self._backup_at = 0.0
+        self._found = (0.0, [])             # (when looked, the copies in the channel)
         self._stop = threading.Event()
         self._thread = None
         self._load()
@@ -411,6 +429,8 @@ class Accounts:
             return
         self._recs = dict(raw.get("accounts") or {})
         self._invites = dict(raw.get("invites") or {})
+        self._replaces = str(raw.get("replaces") or "")
+        self._backup_wanted = bool(self._recs or self._invites)     # whatever changed last may not be in the copy
         kept = raw.get("secrets") or {}
         if raw.get("protected"):
             from . import secretbox
@@ -429,6 +449,8 @@ class Accounts:
         if self._broken:
             raise AccountError("the list of accounts on this computer is damaged")
         data = {"accounts": self._recs, "invites": self._invites}
+        if self._replaces:
+            data["replaces"] = self._replaces
         plain = json.dumps(self._secrets, separators=(",", ":"))
         if self.drive.local_test_dir or not getattr(self.cfg, "protect_config", True):
             data["secrets"] = self._secrets
@@ -448,10 +470,16 @@ class Accounts:
         self._dirty = False
 
     def _checkpointed(self, aid, checkpoint):
+        """An account's file list has a new checkpoint. True: its previous one has to stay for now."""
         with self._lock:
-            if aid in self._recs:
-                self._recs[aid]["checkpoint"] = checkpoint
-                self._save()
+            rec = self._recs.get(aid)
+            if rec is None:
+                return False
+            old = (rec.get("checkpoint") or {}).get("mid")
+            rec["checkpoint"] = checkpoint
+            self._save()
+            self._backup_wanted = True
+            return bool(old) and old in (rec.get("kept") or [])
 
     def _set_token(self, aid, token):
         with self._lock:
@@ -524,6 +552,7 @@ class Accounts:
             self._secrets[aid] = {"key": key.hex(), "token": ""}
             if code in self._invites:
                 self._invites[code]["used"] = self._invites[code].get("used", 0) + 1
+            self._backup_wanted = self._backup_soon = True
             if addr is not None:
                 self._signups[addr] = [t for t in self._signups.get(addr, []) if t > time.time() - 3600] + [time.time()]
             self._save()
@@ -635,6 +664,8 @@ class Accounts:
                     self._save()
                 except Exception as e:
                     log.debug("saving the list of accounts: %s", e)
+        if self._backup_wanted and (self._backup_soon or time.time() - self._backup_at >= BACKUP_EVERY):
+            self.backup()
 
     def start(self):
         hush_accounts()
@@ -667,6 +698,173 @@ class Accounts:
                     self._save()
                 except Exception:
                     pass
+        if self._backup_wanted:
+            self.backup()
+
+    # ------------------------------------------------------------ the copy of the list in the channel
+    # Each account's record says which message holds the checkpoint of its file list, and every new
+    # checkpoint replaces the one before. So a copy of the list is only good while the checkpoints it
+    # names exist: a record's "kept" are the checkpoints a copy names or is about to, and they are
+    # deleted when a newer copy is in the channel, never before.
+    def _pack(self, payload) -> bytes:
+        raw = gzip.compress(json.dumps(payload, separators=(",", ":")).encode("utf-8"), 6)
+        crypto = self.drive.crypto
+        return crypto.encrypt(raw) if crypto else raw
+
+    def _unpack(self, data: bytes):
+        if data.startswith(b"DENC"):
+            if not self.drive.crypto:
+                raise ValueError("it is encrypted, and this drive has no key")
+            data = self.drive.crypto.decrypt(data)
+        payload = json.loads(gzip.decompress(data))
+        if not isinstance(payload, dict) or not isinstance(payload.get("accounts"), dict):
+            raise ValueError("not a list of accounts")
+        return payload
+
+    def _drop(self, mids):
+        for mid in mids:
+            try:
+                self.drive.backend.delete(mid)
+            except Exception as e:
+                log.debug("a message that is no longer needed could not be deleted: %s", e)
+
+    def backup(self):
+        """Write the list of accounts, without their keys, to the channel. True if it is there now."""
+        if self._broken:
+            return False
+        backend, device = self.drive.backend, self.cfg.device_id or ""
+        with self._backup_lock:
+            with self._lock:
+                self._backup_wanted = self._backup_soon = False
+                named, added = {}, {}
+                for aid, rec in self._recs.items():
+                    mid = named[aid] = (rec.get("checkpoint") or {}).get("mid") or ""
+                    if mid and mid not in (rec.get("kept") or []):
+                        rec.setdefault("kept", []).append(mid)
+                        added[aid] = mid
+                payload = {"v": 1, "device": device, "host": _hostname(), "saved": time.time(), "invites": self._invites,
+                           "accounts": {aid: {k: v for k, v in rec.items() if k != "kept"} for aid, rec in self._recs.items()}}
+                data = self._pack(payload) if named or self._invites else None
+                try:
+                    if added:
+                        self._save()
+                except Exception as e:
+                    log.debug("saving the list of accounts: %s", e)
+            mine = f"{LIST_MARKER} d={device}\n"
+            try:
+                new = None
+                if data is not None:
+                    new = backend.save_pinned(f"accounts_{secrets.token_hex(8)}.bin", data,
+                                              mine + "The list of accounts of one computer.")
+                # ...and the copies it replaces: this computer's earlier ones, and the one it was brought back from.
+                gone = {self._replaces}
+                try:
+                    gone.update(m["id"] for m in backend.pinned(LIST_MARKER) if (m.get("content") or "").startswith(mine))
+                except Exception:
+                    if new is None:             # nothing to keep any more, and the copy may still be there
+                        raise
+                gone = sorted(gone - {new, ""})
+            except Exception as e:
+                log.warning("The list of accounts could not be saved to Discord (%s); it is tried again.", e)
+                drop = []
+                with self._lock:
+                    self._backup_wanted = True
+                    self._backup_at = time.time()
+                    for aid, mid in added.items():      # as it was: nothing in the channel names these
+                        rec = self._recs.get(aid)
+                        if rec is not None and mid in (rec.get("kept") or []):
+                            rec["kept"].remove(mid)
+                            if (rec.get("checkpoint") or {}).get("mid") != mid:
+                                drop.append(mid)
+                    try:
+                        self._save()
+                    except Exception:
+                        pass
+                self._drop(drop)
+                return False
+            drop = list(gone)
+            with self._lock:
+                for aid, mid in named.items():
+                    rec = self._recs.get(aid)
+                    if rec is None:
+                        continue
+                    drop += [m for m in rec.get("kept") or [] if m != mid and m != (rec.get("checkpoint") or {}).get("mid")]
+                    rec["kept"] = [mid] if mid else []
+                self._replaces = ""
+                self._backup_at = time.time()
+                self._found = (0.0, [])
+                try:
+                    self._save()
+                except Exception as e:
+                    log.debug("saving the list of accounts: %s", e)
+            self._drop(drop)
+            return True
+
+    def backups(self, max_age=30.0):
+        """The lists of accounts kept in the channel, the newest of each computer: [{"id", "device",
+        "host", "saved", "accounts", "here"}]. For bringing one back on a computer that has none."""
+        when, found = self._found
+        if time.time() - when < max_age:
+            return found
+        backend, newest = self.drive.backend, {}
+        try:
+            for m in backend.pinned(LIST_MARKER):
+                try:
+                    p = self._unpack(backend.download(m["id"], (m.get("attachments") or [{}])[0].get("url"))[0])
+                except Exception as e:
+                    log.warning("A saved list of accounts (message %s) can't be read: %s", m["id"], e)
+                    continue
+                dev, saved = str(p.get("device") or ""), float(p.get("saved") or 0)
+                if p["accounts"] and (dev not in newest or saved > newest[dev]["saved"]):
+                    newest[dev] = {"id": str(m["id"]), "device": dev, "host": str(p.get("host") or ""), "saved": saved,
+                                   "accounts": len(p["accounts"]), "here": dev == (self.cfg.device_id or "")}
+        except Exception as e:
+            log.debug("looking for saved lists of accounts: %s", e)
+            return []
+        found = sorted(newest.values(), key=lambda b: -b["saved"])
+        self._found = (time.time(), found)
+        return found
+
+    def restorable(self):
+        """What the owner can bring back here: only a computer without accounts is offered any."""
+        with self._lock:
+            if self._recs or self._broken:
+                return []
+        return self.backups()
+
+    def restore(self, mid):
+        """Bring back the list of accounts saved in message `mid`: the owner's decision, on a computer
+        that has no accounts, when the computer that served them is gone. Returns how many there are."""
+        backend = self.drive.backend
+        if str(mid) not in {b["id"] for b in self.backups(max_age=0)}:
+            raise AccountError("That saved list of accounts isn't there any more.")
+        try:
+            p = self._unpack(backend.download(str(mid), None)[0])
+        except Exception as e:
+            raise AccountError(f"The saved list of accounts can't be read: {e}") from None
+        recs = {}
+        for aid, rec in p["accounts"].items():
+            if re.fullmatch(r"[0-9a-f]{16}", str(aid)) and isinstance(rec, dict) and rec.get("check"):
+                rec = dict(rec, id=aid)
+                cp = (rec.get("checkpoint") or {}).get("mid")
+                rec["kept"] = [cp] if cp else []
+                recs[aid] = rec
+        with self._lock:
+            if self._broken:
+                raise AccountError("the list of accounts on this computer is damaged")
+            if self._recs:
+                raise AccountError("This computer already has accounts.")
+            self._recs = recs
+            self._secrets = {}
+            invites = p.get("invites") if isinstance(p.get("invites"), dict) else {}
+            self._invites = {**invites, **self._invites}
+            self._replaces = str(mid)
+            self._save()
+            self._backup_wanted = self._backup_soon = True
+        log.info("The list of %d account(s) saved by %s was brought back to this computer.", len(recs),
+                 p.get("host") or p.get("device") or "another computer")
+        self.backup()                        # from now on this computer keeps the copy
+        return len(recs)
 
     # ------------------------------------------------------------ for the owner
     def listing(self):
@@ -695,6 +893,7 @@ class Accounts:
                 return False
             rec["disabled"] = bool(off)
             self._save()
+            self._backup_wanted = self._backup_soon = True      # a list brought back later has it switched off too
         if off:
             self._close(aid, force=True)
         log.info("Account %s was switched %s.", aid, "off" if off else "on again")
@@ -726,13 +925,14 @@ class Accounts:
                         pass
             finally:
                 idx.close()
-        if (rec.get("checkpoint") or {}).get("mid"):
-            mids.add(rec["checkpoint"]["mid"])
-        self.drive.index.trash_add([m for m in mids if m])
         with self._lock:
+            mids.add((rec.get("checkpoint") or {}).get("mid"))
+            mids.update(rec.get("kept") or [])
             self._recs.pop(aid, None)
             self._secrets.pop(aid, None)
             self._save()
+            self._backup_wanted = self._backup_soon = True      # a list brought back later doesn't have it any more
+        self.drive.index.trash_add([m for m in mids if m])
         shutil.rmtree(folder, ignore_errors=True)
         log.info("Account %s was deleted (%d piece(s) are being removed from Discord).", aid, len(mids))
         return True
@@ -753,6 +953,7 @@ class Accounts:
             self._invites[code] = {"created": time.time(), "expires": time.time() + days * 86400 if days else None,
                                    "uses": max(0, int(uses)), "used": 0, "note": str(note or "")[:80]}
             self._save()
+            self._backup_wanted = True
         return code
 
     def invite_revoke(self, code):
@@ -760,4 +961,5 @@ class Accounts:
             if self._invites.pop(str(code or ""), None) is None:
                 return False
             self._save()
+            self._backup_wanted = True
         return True

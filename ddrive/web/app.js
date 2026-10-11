@@ -3096,7 +3096,18 @@ async function accountsSection(into) {
             if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
                 && await attempt(() => api("/api/accounts/delete", { id: a.id }), "Account deleted")) { await refreshStatus(); redraw(); }
           } }, "Delete")))))
-      : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one above." : "None yet."));
+      : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one above." : "None yet."),
+    // This computer has no accounts, and the drive holds a list another one saved (or this one, before its disk was lost).
+    ...(d.accounts.length || !(d.backups || []).length ? [] : [
+      h("h2", {}, "Bring accounts back"),
+      h("p", { class: "muted", style: "margin:0 0 12px" }, "The drive holds a saved list of accounts. If the computer that served them is gone, this one can take over: each account works again, with its files, once it has signed in with its 24 words. Don't do this while the other computer is still running: two computers serving the same accounts lose each other's changes."),
+      h("div", { class: "settings" }, d.backups.map((b) => row(
+        `${plural(b.accounts, "account")} saved by ${b.host || "a computer"}${b.here ? " (this computer's name on the drive)" : ""}`,
+        `Last saved ${fmtFull.format(new Date(b.saved * 1000))}`,
+        h("button", { class: "btn small", onclick: async () => {
+          if (await ask({ title: "Bring these accounts back here?", ok: "Bring back", danger: true, text: `From now on this computer serves the ${plural(b.accounts, "account")} that ${b.host || "the other computer"} saved on ${fmtFull.format(new Date(b.saved * 1000))}. Only do this if that computer is gone or no longer runs DDrive.` })
+              && await attempt(() => api("/api/accounts/restore", { id: b.id }), "Accounts brought back")) { await refreshStatus(); redraw(); }
+        } }, "Bring back"))))]));
 }
 
 // ------------------------------------------------------------------ your account (somebody signed in to one)

@@ -222,6 +222,23 @@ class DiscordBackend:
             return None
         return latest["id"], self.load_index_message(latest)
 
+    # ------------------------------------------------- other pinned messages
+    def save_pinned(self, filename: str, data: bytes, content: str) -> str:
+        """Store a message that has to be found again without knowing its id (the backup of the list
+        of accounts): it is pinned, as index checkpoints are. `content` starts with its marker."""
+        msg = self.api.send_file(self.channel_id, filename, data, content)
+        try:
+            self.api.pin(self.channel_id, msg["id"])
+        except DiscordError:
+            self.delete(msg["id"])          # not pinned, nothing would ever find it
+            raise
+        return msg["id"]
+
+    def pinned(self, marker: str):
+        """The pinned messages whose text starts with `marker`."""
+        return [m for m in self.api.list_pins(self.channel_id)
+                if (m.get("content") or "").startswith(marker) and m.get("attachments")]
+
     def load_index_message(self, msg) -> bytes:
         raw_data = self.api.download_url(msg["attachments"][0]["url"])
         if raw_data.startswith(b"DENC"):
@@ -359,14 +376,27 @@ class LocalBackend:
             self.delete(previous_message_id)
         return chunk.message_id
 
-    def find_latest_index(self):
+    def _pinned_msgs(self):
         msgs = []
         for mid in self._pins():
             try:
                 msgs.append(self._msg(mid))
             except FileNotFoundError:
                 pass
-        return _pick_latest([m for m in msgs if _is_index_msg(m)])
+        return msgs
+
+    def find_latest_index(self):
+        return _pick_latest([m for m in self._pinned_msgs() if _is_index_msg(m)])
+
+    def save_pinned(self, filename, data, content):
+        mid = self.upload(filename, data, content).message_id
+        pins = self._pins() + [mid]
+        with open(os.path.join(self.root, "pins.json"), "w") as f:
+            json.dump(pins, f)
+        return mid
+
+    def pinned(self, marker):
+        return [m for m in self._pinned_msgs() if (m.get("content") or "").startswith(marker) and m.get("attachments")]
 
     def load_index_message(self, msg) -> bytes:
         data, _ = self.download(msg["id"], None)

@@ -644,9 +644,29 @@ nobody is signed in. So an account trusts whoever runs the dashboard, as with an
 
 Accounts live on the computer that made them, in `accounts/` of the data folder: the list
 (`accounts.json`) and each account's file list. A checkpoint of every account's file list is also
-kept in the channel, so a lost account folder is rebuilt at the next sign-in. `accounts.json` itself
-is not in the channel: include it in a backup of that computer, because without it the accounts can't
-be found again. A second device on the same drive does not serve the first one's accounts.
+kept in the channel, so a lost account folder is rebuilt at the next sign-in. A second device on the
+same drive does not serve the first one's accounts.
+
+**If that computer's disk is lost.** The list of accounts says where each account's checkpoint is, so
+a copy of the list is kept in the channel as well: one pinned message per computer that serves
+accounts, encrypted with your drive's key. It is written within a minute of an account being made,
+switched off or deleted, and otherwise at most every ten minutes, replacing the copy before it. It
+holds what the list holds except the accounts' keys. To get the accounts back:
+
+1. Set DDrive up again on the rebuilt (or a new) computer with your 24 words, as for any device.
+2. Open Settings → Accounts. A computer that has no accounts is shown the saved list under **Bring
+   accounts back**, with the name of the computer that saved it and when. Press **Bring back**.
+3. Each account works again once it has signed in with its 24 words (they are its key, and the saved
+   list doesn't have it). Until then its share links don't work. Accounts that were switched off stay
+   switched off, and invites are back too.
+
+Nothing is brought back by itself, and that is on purpose: a second device on the same drive is
+offered the same list, and two computers serving the same accounts would each keep their own record
+of changes and lose each other's. Only bring the list back when the computer that saved it is gone or
+no longer runs DDrive. What an account changed in its last minutes (after the last copy of the list
+was saved, ten minutes at most) is not brought back: the record of that was on the lost disk. You
+don't have to back up `accounts.json` yourself; a backup of the data folder still saves the accounts'
+keys, so share links keep working without everybody signing in first.
 
 ## Faster uploads with more bots
 
@@ -912,7 +932,7 @@ File contents live in Discord. Locally, DDrive only uses:
 | Files being edited | `staging/` | An existing file is downloaded completely while it is open for writing, then removed after it is re-uploaded |
 | Viewed files (read cache) | `cache/` | **Disk mode (default):** kept up to `cache_max_bytes` (5 GiB) so re-opening is instant. **Memory mode:** never written to disk |
 | Offline-pinned files | `cache/` | Until you unpin them (`free-space`) |
-| [Accounts](#accounts) | `accounts/` | Only if somebody has one: the list of accounts (`accounts.json`, their keys encrypted for this computer) and one folder per account with the same things as above (file list, files being written, up to 256 MiB of read cache) |
+| [Accounts](#accounts) | `accounts/` | Only if somebody has one: the list of accounts (`accounts.json`, their keys encrypted for this computer; a copy without the keys is kept in the channel) and one folder per account with the same things as above (file list, files being written, up to 256 MiB of read cache) |
 | Discord messages (search list) | `chat.db` | Only if you use [Discord messages](#discord-messages). The text of the messages (no attachments), for searching: a copy of the files in `/Discord`, rebuilt from them when needed |
 
 **Memory-only cache.** To keep viewed files off the disk entirely, set `"cache_mode": "memory"`
