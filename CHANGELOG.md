@@ -3,6 +3,31 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.3.0 (2026-10-11)
+
+- **DDrive Lite for Android.** A new app (`DDriveLite.apk` in each release, Android 8 or later) that
+  makes a phone one of the computers on the host's **Sync** page. In the app you give the host's
+  address and your 24 words and turn on folder syncing; the phone then shows up on the Sync page, and
+  its folders are added and run from there like any other computer's, with the folder browser looking
+  at the phone's storage (`DCIM`, `Pictures`, `Download`, a memory card).
+- All six modes work on the phone. **Back up** copies new photos and files by themselves; **Move to the
+  drive** also deletes each one from the phone once the host has it safely stored, which frees the
+  phone; two-way and the download modes copy to the phone as well. The gallery is told about files
+  that came or went.
+- It runs in the background with a notification that says what it is doing, starts again with the
+  phone, copies **only on Wi-Fi** unless you turn that off, and keeps the 24 words encrypted with a key
+  in Android's keystore. A live folder is looked at once a minute and synced when something in it
+  changed (and every 15 minutes anyway).
+- Files a sync removes from the phone are moved to `DDrive Lite/Removed by sync` and kept 30 days.
+  Android's half-written and gallery-deleted files are never copied.
+- The app is in `android/`; its tests run the phone's syncing against a real DDrive host. It is signed
+  with a key kept outside the repository, so a release only has the APK when that key is in the
+  repository's secrets.
+- New in this version and so far checked by its tests only, not yet by long use on phones: start with
+  a folder you have another copy of.
+- Tests: the recovery-phrase test no longer fails by chance about once in 256 runs (it swapped two
+  words of a random phrase and expected that to be noticed, which an 8-bit check can't promise).
+
 ## 2.2.0 (2026-10-11)
 
 - **DDrive Lite can sync folders, and you run it all from the dashboard.** On the lite computer you

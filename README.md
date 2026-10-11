@@ -803,6 +803,44 @@ Ubuntu and Raspberry Pi OS (`ddrive-lite`), which contain only this.
 - Everything the host's dashboard account may see is on the drive. Password-locked folders stay
   hidden (unlocking them is done in the dashboard).
 
+## DDrive Lite for Android
+
+An app that makes a phone one of the computers on the host's Sync page: it backs up the camera roll,
+or any other folder of the phone, to the drive by itself, and can free the phone of what it has
+uploaded. Each release has **DDriveLite.apk**; install it by opening the file on the phone (Android
+8 or later; Android asks once whether your browser or file manager may install apps).
+
+1. Open the app, give the address of the host's dashboard and your 24 words (the drive's recovery
+   phrase, or the words of an [account](#accounts)), and turn on **Folder syncing**.
+2. Allow what it asks for: *All files access* (any folder can be chosen, and the modes that copy to
+   the phone can write), notifications (the one that says syncing is running) and running in the
+   background (otherwise Android stops it after a while).
+3. On the host's dashboard, open **Sync**. The phone is listed there with its name. Add a folder: the
+   folder browser shows the phone's storage (`DCIM`, `Pictures`, `Download`, a memory card), and the
+   modes are the ones of [Sync and back up folders](#sync-and-back-up-folders). Everything else is done
+   on that page too: start, stop, pause, change, remove, and see how it is going.
+
+- **Back up** copies new photos and files; **Move to the drive** also deletes each one from the phone
+  once the host has it safely in Discord (same size and date, fully uploaded), which frees the phone;
+  **Two-way** and the download modes copy from the drive to the phone as well.
+- A *live* folder is looked at once a minute; when something in it changed it is synced, and every
+  15 minutes anyway (which is how changes on the drive reach the phone). Android may hold the app
+  back while the phone sleeps; it catches up when the phone is used or charging.
+- **Only on Wi-Fi** is on at first, so a photo library doesn't go over mobile data. The Sync page
+  then shows "Waiting for Wi-Fi" for the phone's folders.
+- Files a sync removes from the phone (download mirror, two-way) are moved to `DDrive Lite/Removed by
+  sync` in the phone's storage and kept 30 days. Half-written and gallery-deleted files
+  (`.pending-*`, `.trashed-*`, `.thumbnails`) are never copied.
+- The 24 words are kept on the phone encrypted with a key in Android's keystore. Over plain `http`
+  they travel unencrypted when signing in: fine on your own Wi-Fi, use the host's `https` address
+  elsewhere.
+- The app syncs folders; it does not show the drive as a folder on the phone. For browsing the drive
+  on a phone, open the dashboard in the browser (it works as an app there: "Add to Home screen").
+- It is built from `android/` (`./gradlew :core:test :app:assembleRelease`); the tests run the phone's
+  syncing against a real DDrive host. Releases are signed with a key that is kept outside the
+  repository (the secrets `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`); an update only
+  installs over an app signed with the same key.
+
 ## Password-locked folders
 
 Lock a folder or a file with a password and it is gone, with everything in it, until the password is
@@ -881,7 +919,8 @@ the drive at once, elsewhere and for changes on the drive it checks every few se
   here" at the bottom of Sync (on that computer), or `config sync_remote_edit true`.
 - Computers that use the drive through [DDrive Lite](#ddrive-lite) can sync their folders too. Turn
   it on there (`lite sync on`); each such computer is then listed on this Sync page under the host's
-  folders, and its folders are added and run from here.
+  folders, and its folders are added and run from here. So is a phone with
+  [DDrive Lite for Android](#ddrive-lite-for-android).
 
 ## Snapshots
 

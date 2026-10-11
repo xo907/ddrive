@@ -31,3 +31,26 @@ jobs:
         if: failure()
         shell: bash
         run: python .github/failures.py
+
+  # DDrive Lite for Android: its folder syncing is tested here against a real DDrive host, and the app is built.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the encryption library (the tests' host needs it)
+        run: python -m pip install cryptography
+      - name: Test the syncing and build the app
+        working-directory: android
+        env:
+          DDRIVE_PYTHON: python
+        run: ./gradlew --console=plain :core:test :app:assembleDebug :app:lintDebug
+      - name: Say what failed (shown on the run's summary page)
+        if: failure()
+        run: python .github/android_failures.py

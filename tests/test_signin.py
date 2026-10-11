@@ -91,11 +91,12 @@ class PhraseTest(unittest.TestCase):
         self.assertEqual(words.phrase_to_key("  " + phrase.upper().replace(" ", ",\n ")), key)        # however it is typed
         self.assertEqual(parse_key(phrase), key)
         self.assertEqual(parse_key(key.hex()), key)
-        swapped = phrase.split()
+        # Words in the wrong order. With a fixed key: the check is 8 bits, so of the keys made at random
+        # one in 256 would have a swapped pair that happens to pass.
+        swapped = words.key_to_phrase(bytes(range(32))).split()
         swapped[0], swapped[1] = swapped[1], swapped[0]
-        if swapped != phrase.split():
-            with self.assertRaisesRegex(ValueError, "don't fit together"):
-                words.phrase_to_key(" ".join(swapped))
+        with self.assertRaisesRegex(ValueError, "don't fit together"):
+            words.phrase_to_key(" ".join(swapped))
         with self.assertRaisesRegex(ValueError, "24 words"):
             words.phrase_to_key("abandon ability able")
         with self.assertRaisesRegex(ValueError, "word 2, 'abilty'.*did you mean 'ability'"):

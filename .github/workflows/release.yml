@@ -54,9 +54,47 @@ jobs:
           name: deb
           path: dist/*.deb
 
+  # DDrive Lite for Android. The key it is signed with is not in the repository: it comes from the
+  # repository's secrets (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD). Without them no APK is made.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build and sign the app
+        working-directory: android
+        env:
+          DDRIVE_PYTHON: python
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          DDRIVE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          python -m pip install cryptography
+          mkdir -p ../dist
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::No signing key in this repository's secrets: the release has no Android app."
+            ./gradlew --console=plain :core:test :app:assembleDebug
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ddrive-lite.jks"
+          export DDRIVE_KEYSTORE="$RUNNER_TEMP/ddrive-lite.jks"
+          ./gradlew --console=plain :core:test :app:assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk ../dist/DDriveLite.apk
+          rm -f "$RUNNER_TEMP/ddrive-lite.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*.apk
+          if-no-files-found: ignore
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows-exe, deb]
+    needs: [windows-exe, deb, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -68,4 +106,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "DDrive $GITHUB_REF_NAME" \
-            --notes "Windows: DDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./ddrive_*.deb. Lite (uses a drive that runs on another computer): DDriveLite.exe, or sudo apt install ./ddrive-lite_*.deb"
+            --notes "Windows: DDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./ddrive_*.deb. Lite (uses a drive that runs on another computer): DDriveLite.exe, or sudo apt install ./ddrive-lite_*.deb. Android phones: DDriveLite.apk (backs up the phone's folders to the drive; set up from the host's Sync page)"

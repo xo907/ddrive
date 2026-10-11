@@ -2697,7 +2697,7 @@ async function renderSync(quiet) {
   ];
   const liteHint = h("p", { class: "muted sync-hint" }, devices.length ? "More computers: " : "Other computers: ",
     "one that uses this drive through DDrive Lite shows up here once folder syncing is turned on there (",
-    h("code", {}, "lite sync on"), ", or in its menu). Its folders are then added and changed on this page.");
+    h("code", {}, "lite sync on"), ", or in its menu), and so does a phone with the DDrive Lite app. Their folders are then added and changed on this page.");
   if (!(quiet && (ctxEl || document.querySelector("dialog.modal[open]")))) {
     keepScroll = !!quiet;
     try {
@@ -2760,7 +2760,7 @@ function syncForm(j, dev) {
               : { name: "", local: "", remote: "", mode: "backup", trigger: "live", every: 60, at: "03:00", exclude: "" };
   const inp = (key, attrs = {}) => h("input", { value: v[key] ?? "", spellcheck: "false", autocomplete: "off", ...attrs,
                                                  oninput: (e) => { v[key] = e.target.value; } });
-  const local = inp("local", { placeholder: windows ? "C:\\Users\\you\\Downloads" : "/home/you/Documents" });
+  const local = inp("local", { placeholder: windows ? "C:\\Users\\you\\Downloads" : dev && dev.home ? dev.home.replace(/\/$/, "") + "/Pictures" : "/home/you/Documents" });
   const shown = (p) => dev ? p : drivePathShown(p);          // a lite computer may show the drive under any letter, or not at all
   const remote = inp("remote", { placeholder: !dev && d.windows ? `${d.mount}\\Downloads` : "/Downloads" });
   if (v.remote) remote.value = shown(v.remote);
