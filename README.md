@@ -301,6 +301,8 @@ other devices**:
 - **Sharing both ways**: expiring, password-protected links to give files out, and **file requests**
   that let others send files into a folder without seeing it.
 - **Save from a link**: the drive downloads a web address straight into a folder.
+- **Lite**: other computers can use the drive through one that runs it, with nothing stored on them
+  ([more](#discorddrive-lite)).
 - **Discord messages**: archive your own conversations and log new messages as they arrive, including
   ones later edited or deleted; kept on the drive ([more](#discord-messages)).
 - **Other apps (WebDAV)**: open the drive from phone file managers, "Map network drive", Finder, rclone.
@@ -662,6 +664,36 @@ and the messages are hidden in the dashboard until you unlock it.
 > risk is yours to weigh. The token is full access to your account: never share it. Logging also
 > keeps what other people wrote, including what they later delete; treat it as you would any private
 > conversation.
+
+## DiscordDrive Lite
+
+Use a drive that runs on another computer (the **host**) without running one yourself. A lite
+computer has no bot, no encryption key and no copy of the drive: it shows the host's drive as a drive
+letter (Windows) or a folder (Linux) and streams, downloads and uploads through the host.
+
+```text
+run.bat lite connect http://192.168.1.20:8765     sign in to the host (asks for user name and password)
+run.bat lite mount                                the host's drive appears as Z: (or: -m Y:, -b for the background)
+run.bat lite stop                                 take it away again
+run.bat lite status | ls [folder] | get <file or folder> [to] | put <file or folder> [folder] | disconnect
+```
+
+(`./run.sh lite ...` on Linux.)
+
+- **On the host**: the full DiscordDrive, running, with its dashboard reachable from the lite computer
+  (Settings → *On your network*, or your https domain) and a dashboard **password** (Settings →
+  Sign-in). Lite signs in with that user name and password; passkeys can't be used by a program.
+- **On the lite computer**: this program and, for the drive letter or folder, the same driver the
+  full drive uses (WinFsp on Windows, libfuse on Linux). `ls`, `get` and `put` work without it.
+- **Reading** fetches only the parts a program asks for, a few MB at a time, and keeps the last ones
+  in memory: videos play and seek without being downloaded, and nothing is written to disk.
+- **Writing** goes to a temporary file that is handed to the host when the file is closed and then
+  removed. The host stores it on the drive like any other file (encrypted, uploaded to Discord,
+  versioned). Changing part of an existing file fetches it first and sends it back whole.
+- The password is stored encrypted for that computer and account, like the full drive's secrets.
+  Over plain `http` it travels unencrypted when signing in: fine at home, use `https` elsewhere.
+- Everything the host's dashboard account may see is on the drive. Password-locked folders stay
+  hidden (unlocking them is done in the dashboard).
 
 ## Password-locked folders
 

@@ -3,6 +3,15 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.0 (2026-10-10)
+
+- DiscordDrive Lite: use a drive that runs on another computer, on Windows and Linux. `lite connect
+  <address>` signs in to the host's dashboard (its user name and password), `lite mount` shows the
+  host's drive as a drive letter or folder, `lite stop` takes it away; `lite ls`, `get` and `put` list,
+  download and upload without mounting. The lite computer holds no bot, key, index or copy of the
+  drive: files are streamed from the host a part at a time (video plays and seeks without being
+  downloaded), and a saved file is handed to the host and then removed here.
+
 ## 1.3.7 (2026-10-10)
 
 - Live logger: hiding the options is now done on the panel itself ("‹ Hide options" above "What to

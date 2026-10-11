@@ -2414,8 +2414,14 @@ def main():
     p_menu = subparsers.add_parser("context-menu", help="Install Windows Explorer right-click menu")
     p_menu.add_argument("action", choices=["install", "uninstall"], default="install", nargs="?")
 
+    p_lite = subparsers.add_parser("lite", add_help=False,
+                                   help="Use a drive that runs on another computer: lite connect <address>, lite mount, lite stop")
+    p_lite.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
+    if args.command == "lite":
+        from .lite import main as lite_main
+        return lite_main(args.rest, args.verbose)
     if args.command == "mount":
         return cmd_mount(args)
     elif args.command == "stop":
