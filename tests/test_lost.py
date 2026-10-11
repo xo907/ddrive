@@ -1,5 +1,7 @@
 """When a piece can't be repaired, the files it belongs to are named."""
 
+import time
+
 import helpers
 
 
@@ -35,6 +37,56 @@ class LostPiecesTest(helpers.DriveTest):
         self.assertEqual(d.healer.lost_files()[0]["path"], "/Docs/final.pdf")
         d.index.purge_node(d.index.resolve("/Docs/final.pdf")["id"])      # deleted for good: nothing left to report
         self.assertEqual([e["kind"] for e in d.healer.lost_files()], ["version"])
+
+    def test_a_piece_that_can_be_read_after_all_is_taken_off_the_list(self):
+        d = self.drive(parity_enabled=False, dedup=False)
+        self.write(d, "/clip.mp4", b"video " * 5000)
+        self.upload(d)
+        d.cache.free_space(force=True)
+        mid = self.mids(d, "/clip.mp4")[0]
+        path = d.backend._p(mid, "bin")
+        with open(path, "rb") as f:
+            stored = f.read()
+        d.backend.delete(mid)                                             # for a moment Discord says it isn't there
+        self.assertIsNone(d.healer.recover(mid))
+        self.assertEqual([e["path"] for e in d.healer.lost_files()], ["/clip.mp4"])
+        with open(path, "wb") as f:                                       # ...but it is
+            f.write(stored)
+        self.assertEqual(d.healer.recheck_lost(), 0)                      # not looked at again right away
+        self.assertEqual(d.healer.recheck_lost(now=time.time() + 400), 1)
+        self.assertEqual(d.healer.lost_files(), [])
+        self.assertEqual(self.read(d, "/clip.mp4"), b"video " * 5000)
+        d.cache.free_space(force=True)
+        d.backend.delete(mid)                                             # really gone: it stays listed, and is asked about less often
+        self.assertIsNone(d.healer.recover(mid))
+        self.assertEqual(d.healer.recheck_lost(now=time.time() + 400), 0)
+        self.assertEqual(d.healer.recheck_lost(now=time.time() + 500), 0)
+        self.assertEqual(d.healer._rechecked[mid][0], 1)
+        self.assertEqual(len(d.healer.lost_files()), 1)
+
+    def test_a_piece_this_computer_still_holds_is_uploaded_again(self):
+        d = self.drive(parity_enabled=False, dedup=False)
+        self.write(d, "/clip.mp4", b"video " * 5000)
+        self.upload(d)
+        self.assertEqual(self.read(d, "/clip.mp4"), b"video " * 5000)    # opened here: in this computer's read cache
+        mid = self.mids(d, "/clip.mp4")[0]
+        d.backend.delete(mid)                                             # gone from Discord, no spare pieces
+        self.assertIsNotNone(d.healer.recover(mid))                       # not lost: this computer has it
+        d.journal.sync_once()
+        self.assertEqual(d.healer.lost_files(), [])
+        self.assertNotEqual(self.mids(d, "/clip.mp4")[0], mid)            # stored again under a new message
+        other = self.drive("bbbb")                                        # so another device can read it too
+        self.assertEqual(self.read(other, "/clip.mp4"), b"video " * 5000)
+        # one that was already listed (found by an earlier version) is repaired the same way
+        d.fs._chunk_maps.clear()
+        self.assertEqual(self.read(d, "/clip.mp4", cold=False), b"video " * 5000)
+        mid = self.mids(d, "/clip.mp4")[0]
+        d.backend.delete(mid)
+        d.healer._note_lost(mid)
+        self.assertEqual(len(d.healer.lost_files()), 1)
+        self.assertEqual(d.healer.recheck_lost(now=time.time() + 400), 1)
+        d.journal.sync_once()
+        self.assertEqual(d.healer.lost_files(), [])
 
     def test_a_lost_spare_piece_is_not_a_damaged_file(self):
         d = self.drive()

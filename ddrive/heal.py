@@ -45,6 +45,7 @@ class Healer:
         self.stats = {"rebuilt": 0, "repaired": 0, "lost": 0}
         self._lost_logged = set()
         self._lost_list = (0.0, [])       # lost_files(), kept a moment (the dashboard asks every few seconds)
+        self._rechecked = {}              # lost piece -> (times looked at again, when next)
 
     # ------------------------------------------------------------ fetching
     def _fetch(self, mid, sha):
@@ -161,10 +162,87 @@ class Healer:
             except DiscordError as e:
                 log.warning("Could not rebuild piece %s right now: %s", mid, e)
                 return None
+        # No spare pieces can rebuild it. Before calling it lost: one failed request is not proof, and this
+        # computer may still hold the piece (it then plays here while being gone for every other device).
+        try:
+            data = self._read_again(mid)
+            if data is None:
+                data = self._from_this_computer(mid)
+        except DiscordError as e:
+            log.warning("Could not check piece %s right now: %s", mid, e)
+            return None
+        if data is not None:
+            return data
         with self._lock:
             self.stats["lost"] += 1
         self._note_lost(mid)
         return None
+
+    def _sha(self, mid):
+        info = self.index.piece_info(mid)
+        return info[2] if info else None
+
+    def _read_again(self, mid):
+        """The piece straight from Discord, or None if it really isn't there (or isn't readable)."""
+        sha = self._sha(mid)
+        try:
+            payload, _ = self.backend.download(mid, None)
+            data = codec.decode(payload, self.crypto, sha)
+        except DiscordError as e:
+            if e.status in (403, 404):
+                return None
+            raise
+        except AuthenticationError:
+            return None
+        return data if not sha or hashlib.sha256(data).hexdigest() == sha else None
+
+    def _from_this_computer(self, mid):
+        """The piece from this computer's read cache, if it is still there; it is then uploaded again."""
+        sha = self._sha(mid)
+        data = self.cache.peek(mid) if self.cache is not None else None
+        if data is None or (sha and hashlib.sha256(data).hexdigest() != sha):
+            return None
+        log.warning("Piece %s was missing from Discord; this computer still had it and uploads it again", mid)
+        self.schedule_repair(mid, data)
+        return data
+
+    def recheck_lost(self, limit=20, now=None):
+        """Look again at pieces noted as lost: one that can be read after all (the request that failed was a
+        passing problem) is taken off the list, one this computer still holds is uploaded again. Each piece
+        is looked at after 5 minutes, then less and less often. Returns how many were cleared or repaired."""
+        now = time.time() if now is None else now
+        lost = self._lost()
+        done = 0
+        for mid in list(lost)[:max(1, limit) * 10]:
+            if done >= limit:
+                break
+            times, due = self._rechecked.get(mid, (0, lost[mid] + 300))
+            if now < due or not self.index.is_referenced(mid):
+                continue
+            self._rechecked[mid] = (times + 1, now + min(6 * 3600, 300 * 2 ** (times + 1)))
+            try:
+                if self._read_again(mid) is not None:
+                    current = self._lost()
+                    current.pop(mid, None)
+                    self.index.kv_set("lost_pieces", json.dumps(current, separators=(",", ":")))
+                    with self._lock:
+                        self._lost_logged.discard(mid)
+                    self._lost_list = (0.0, [])
+                    self._rechecked.pop(mid, None)
+                    use = self.index.piece_users(mid)
+                    names = list(dict.fromkeys(use["files"] + [v["path"] for v in use["versions"]]))[:5]
+                    log.info("Piece %s can be read after all%s: it is no longer listed as damaged.", mid,
+                             f" ({', '.join(names)})" if names else "")
+                    done += 1
+                elif self._from_this_computer(mid) is not None:
+                    self._lost_list = (0.0, [])
+                    done += 1
+            except DiscordError as e:
+                log.debug("re-checking lost pieces: %s", e)
+                break
+        for mid in [m for m in self._rechecked if m not in lost]:
+            self._rechecked.pop(mid, None)
+        return done
 
     # ------------------------------------------------------------ what can't be repaired
     def _lost(self):
@@ -475,7 +553,8 @@ class Maintenance:
     def _loop(self):
         while not self._stop.wait(self.TICK):
             for name, fn in (("check", self.scrub_step), ("protect", self.protect_step),
-                             ("snapshot", self.snapshot_step), ("offline", self.offline_step)):
+                             ("snapshot", self.snapshot_step), ("offline", self.offline_step),
+                             ("recheck", self.recheck_step)):
                 if self._stop.is_set():
                     return
                 try:
@@ -485,6 +564,14 @@ class Maintenance:
 
     def _uploads_busy(self):
         return self.uploader is not None and not self.uploader.is_idle()
+
+    def recheck_step(self):
+        """Now and then look again at the pieces listed as lost (see Healer.recheck_lost)."""
+        now = time.time()
+        if now < getattr(self, "_next_recheck", 0.0):
+            return
+        self._next_recheck = now + 60
+        self.healer.recheck_lost()
 
     # ------------------------------------------------------------ checking
     def scrub_state(self):

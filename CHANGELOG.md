@@ -3,6 +3,16 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.0.1 (2026-10-11)
+
+- Health no longer calls a file damaged that plays fine. A piece was listed as lost the first time
+  Discord didn't hand it over, and stayed listed for good. Now a piece that looks gone is asked for
+  once more before it is listed, and listed pieces are looked at again (after 5 minutes, then less
+  and less often): one that can be read after all comes off the list.
+- A piece that really is gone from Discord but is still in this computer's read cache (which is why
+  the file plays here) is uploaded again from there, so the file is whole for every device. Until
+  now only spare pieces were used to rebuild.
+
 ## 2.0.0 (2026-10-11)
 
 - **The program is now called DDrive.** The name, the programs (`DDrive.exe`, `DDriveLite.exe`,
