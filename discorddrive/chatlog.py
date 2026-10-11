@@ -25,8 +25,9 @@ from .webplus import ApiErrorProxy
 
 log = logging.getLogger("discorddrive.chat")
 
-FLUSH_SECONDS = 600.0        # what the logger recorded is written to the drive this often
+FLUSH_SECONDS = 30.0         # what was recorded is written to the drive at most this long after it arrived
 SCAN_SECONDS = 60.0          # how often files from other devices are looked for
+TICK = 5.0
 SEGMENT = 5000               # archived messages per file
 DEFAULT_RULES = {
     "scope": "all",          # all | custom
@@ -456,14 +457,17 @@ class Chat:
             except Exception as e:
                 log.warning("Discord messages: could not start: %s", e)
                 break
-        compacted = 0.0
-        while not self._stop.wait(SCAN_SECONDS):
+        compacted = scanned = 0.0
+        while not self._stop.wait(TICK):
             try:
                 if not self.in_use():
                     continue
-                self.store.scan(self._stop)
-                if time.monotonic() - self._flushed >= FLUSH_SECONDS:
+                if time.monotonic() - self._flushed >= FLUSH_SECONDS and self.store.pending():
                     self.flush()
+                if time.monotonic() - scanned < SCAN_SECONDS:
+                    continue
+                scanned = time.monotonic()
+                self.store.scan(self._stop)
                 if time.monotonic() - compacted >= 3600:
                     compacted = time.monotonic()
                     self.store.compact_live()
@@ -658,7 +662,13 @@ class ChatHandlers:
 
     def _get_api_chat_messages(self):
         self._chat_guard()
-        self._json(self.chat.store.messages(self._query()))
+        found = self.chat.store.messages(self._query())
+        for m in found["messages"]:
+            for a in m["attachments"]:
+                if a.get("path"):                # a small preview is shown instead of fetching the file itself
+                    node = self.drive.index.resolve(a["path"])
+                    a["thumb"] = bool(node is not None and self._thumb_read(node))
+        self._json(found)
 
     def _get_api_chat_places(self):
         self._chat_guard()

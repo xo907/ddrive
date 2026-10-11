@@ -3296,11 +3296,13 @@ function msgRow(m) {
         m.deleted_ts && h("span", { class: "tag busy", title: fmtFull.format(m.deleted_ts) }, "deleted"),
         m.edits.length ? h("span", { class: "tag" }, "edited") : null,
         m.flagged ? h("span", { class: "tag" }, "keyword") : null,
-        !m.on_drive && h("span", { class: "tag", title: "The text of this message is recorded on this computer and is written to the drive within ten minutes (when archiving: when the channel is finished). Its attachments are saved to the drive right away." }, "text not on the drive yet")),
+        !m.on_drive && h("span", { class: "tag", title: "The text of this message was just recorded and is written to the drive within half a minute. Its attachments are saved to the drive right away." }, "text not on the drive yet")),
       m.content && h("div", { class: "ch-text" }, m.content),
       m.edits.map((e) => h("div", { class: "ch-old" }, h("span", {}, `Before the edit${e.ts ? " of " + fmtFull.format(e.ts) : ""}`), e.old_content)),
       m.attachments.map((a) => !a.path ? h("span", { class: "ch-file off", title: "Not saved to the drive" }, icon("file"), a.filename || "file")
-        : (a.content_type || "").startsWith("image/") ? h("a", { href: fileUrl(a.path), target: "_blank", rel: "noopener" }, h("img", { class: "ch-img", src: fileUrl(a.path), alt: a.filename || "", loading: "lazy" }))
+        : a.thumb ? h("a", { class: "ch-thumb", href: fileUrl(a.path), target: "_blank", rel: "noopener", title: `${a.filename || "file"}${a.size ? " · " + size(a.size) : ""}` },
+                      h("img", { src: "/api/thumb" + q({ path: a.path }), alt: a.filename || "", loading: "lazy" }),
+                      (a.content_type || "").startsWith("video/") && h("span", { class: "play" }, icon("play")))
         : h("a", { class: "ch-file", href: fileUrl(a.path), target: "_blank", rel: "noopener" }, icon("file"), a.filename || "file", a.size ? h("span", { class: "muted" }, size(a.size)) : null)),
       !m.content && !m.attachments.length ? h("div", { class: "ch-text muted" }, m.embeds.length ? "(a link preview)" : "(no text)") : null));
 }

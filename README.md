@@ -648,8 +648,10 @@ one device only.
 /Discord/Live/2026-10/2026-10-10 14.05.33 <device>.jsonl                        what the logger recorded
 ```
 
-The logger writes what it recorded to the drive every ten minutes and when it stops (until then a
-message is marked "text not on the drive yet"; its attachments are saved right away), and joins a day's small files into one the day after. Other
+The logger writes what it recorded to the drive within half a minute (until then a message is marked
+"text not on the drive yet"), and joins a day's small files into one the day after. Attachments are
+uploaded right away and are not kept on the computer; for pictures and videos the dashboard shows a
+small preview and only fetches the file itself when you open it. Other
 devices read these files, so Messages works on all of them. Deleting a file removes its messages
 from the lists. `/Discord` can be [password-locked](#password-locked-folders): recording carries on,
 and the messages are hidden in the dashboard until you unlock it.
@@ -802,7 +804,7 @@ File contents live in Discord. Locally, DiscordDrive only uses:
 | Files being edited | `staging/` | An existing file is downloaded completely while it is open for writing, then removed after it is re-uploaded |
 | Viewed files (read cache) | `cache/` | **Disk mode (default):** kept up to `cache_max_bytes` (5 GiB) so re-opening is instant. **Memory mode:** never written to disk |
 | Offline-pinned files | `cache/` | Until you unpin them (`free-space`) |
-| Discord messages (search list) | `chat.db` | Only if you use [Discord messages](#discord-messages). A copy of the files in `/Discord`, rebuilt from them when needed |
+| Discord messages (search list) | `chat.db` | Only if you use [Discord messages](#discord-messages). The text of the messages (no attachments), for searching: a copy of the files in `/Discord`, rebuilt from them when needed |
 
 **Memory-only cache.** To keep viewed files off the disk entirely, set `"cache_mode": "memory"`
 in the config, or start with `mount --cache memory`. Chunks you view are held only in RAM

@@ -13,8 +13,11 @@ are written once and never changed; the logger's many small files of a day are j
 day after.
 
 Next to that, each device keeps a small database (chat.db in its data folder) to search and page
-through the messages quickly. It is only a copy: it is filled from the files on the drive, and what
-is in it but not on the drive yet (file_id 0) is written there by the next flush.
+through the messages quickly. It holds text only and is only a copy: it is filled from the files on
+the drive, and what is in it but not on the drive yet (file_id 0) is written there by the next flush,
+within half a minute. Attachments are never kept on the computer: they go through the drive's upload
+folder and are gone from it once uploaded, and what the dashboard shows of them is a small preview
+that Discord makes (stored with the drive's other thumbnails).
 """
 
 import contextlib
@@ -37,6 +40,7 @@ LIVE = FOLDER + "/Live"
 SERVERS = FOLDER + "/Servers"
 DMS = FOLDER + "/Direct messages"
 PIECE = 1024 * 1024
+PREVIEW_MAX = 400 * 1024
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
@@ -270,12 +274,37 @@ class ChatStore:
                         with contextlib.closing(api.download(a["url"])) as src:
                             self.d.fs.put_file(path, src, stop=stop.is_set if stop is not None else None)
                         saved += 1
+                        self._save_preview(api, a, self.d.index.resolve(path))
                 a["path"] = path
             except InterruptedError:
                 raise
             except Exception as e:
                 log.debug("attachment %s of message %s: %s", a.get("filename"), m.get("id"), e)
         return saved
+
+    def _save_preview(self, api, a, node):
+        """Keep a small picture of an image or video attachment (Discord makes it), so the dashboard can
+        show what it is without fetching the file itself. Stored like the thumbnails the dashboard makes."""
+        url, uid = a.get("proxy_url"), str(node["uid"]) if node is not None else ""
+        if (a.get("content_type") or "").split("/")[0] not in ("image", "video") or not url \
+                or not re.fullmatch(r"[0-9A-Za-z_-]{4,64}", uid):
+            return
+        try:
+            with contextlib.closing(api.download(url + ("&" if "?" in url else "?") + "format=webp&width=400&height=400")) as src:
+                data = src.read(PREVIEW_MAX + 1)
+            if len(data) > PREVIEW_MAX or not (data[:3] == b"\xff\xd8\xff" or data[:4] == b"\x89PNG"
+                                               or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+                return
+            blob = f"{node['size']}:{int(node['mtime'])}".encode() + b"\n" + data
+            if self.d.crypto is not None:
+                blob = self.d.crypto.encrypt(blob, b"thumb")
+            target = os.path.join(self.d.cfg.resolved_data_dir, "thumbs", uid[:2], uid + ".bin")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target + ".tmp", "wb") as f:
+                f.write(blob)
+            os.replace(target + ".tmp", target)
+        except Exception as e:
+            log.debug("preview of %s: %s", a.get("filename"), e)
 
     # ------------------------------------------------------------ onto the drive
     def _makedirs(self, path):
@@ -400,12 +429,26 @@ class ChatStore:
                     if node is None:
                         if len(parts) < 2:
                             continue
-                        data = b"".join(fs.read_file(p["id"], 0, p["size"]) for p in sorted(parts, key=lambda p: p["name"]))
+                        data = b"".join(self._part(p) for p in sorted(parts, key=lambda p: p["name"]))
                         self._ingest(self._write(joined, data), joined)
                     elif node["state"] == "synced":
                         for p in parts:
                             fs.unlink(f"{folder}/{p['name']}")
                             self._forget(p["uid"])
+
+    def _part(self, node):
+        """What one of the logger's small files holds. For a file this device wrote, that is taken from
+        the database, so that joining a day's files doesn't download each of them again."""
+        row = self._one("SELECT id FROM files WHERE uid=?", (node["uid"],))
+        if row is None:
+            return self.d.fs.read_file(node["id"], 0, node["size"]) if node["size"] else b""
+        fid = row["id"]
+        records = [self._record(r) for r in self._all("SELECT * FROM messages WHERE file_id=? ORDER BY ts, id", (fid,))]
+        records += [{"kind": "edit", "id": e["message_id"], "channel_id": e["channel_id"], "ts": e["ts"], "old": e["old_content"],
+                     "new": e["new_content"]} for e in self._all("SELECT * FROM edits WHERE file_id=? ORDER BY ts", (fid,))]
+        records += [{"kind": "delete", "id": d["message_id"], "channel_id": d["channel_id"], "ts": d["ts"]}
+                    for d in self._all("SELECT * FROM deletes WHERE file_id=? ORDER BY ts", (fid,))]
+        return self._lines(records)
 
     # ------------------------------------------------------------ from the drive
     def _forget(self, uid):

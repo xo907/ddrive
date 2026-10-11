@@ -9,6 +9,7 @@ import socket
 import struct
 import threading
 import time
+import urllib.parse
 
 import helpers
 from discorddrive import chat, chatlog, chatstore, ws
@@ -22,7 +23,8 @@ def msg(mid, channel, author, content, day=1, guild=None, files=(), edited=None)
     m = {"id": str(mid), "channel_id": str(channel), "author": author, "content": content, "type": 0,
          "timestamp": f"2024-03-{day:02d}T10:00:00.000000+00:00", "edited_timestamp": edited, "embeds": [],
          "attachments": [{"id": f"9{mid}{i}", "filename": name, "url": f"https://cdn.example/{name}?sig={time.time()}",
-                          "size": 5, "content_type": "text/plain"} for i, name in enumerate(files)]}
+                          "proxy_url": f"https://media.example/{name}?sig=1", "size": 5,
+                          "content_type": "image/png" if name.endswith(".png") else "text/plain"} for i, name in enumerate(files)]}
     if guild:
         m["guild_id"] = str(guild)
     return m
@@ -74,6 +76,8 @@ class FakeAccount:
 
     def download(self, url):
         type(self).downloads += 1
+        if "format=webp&width=400" in url:                            # the small preview Discord makes
+            return io.BytesIO(b"\x89PNG small")
         return io.BytesIO(b"hello")
 
 
@@ -437,6 +441,14 @@ class ChatWebTest(helpers.DriveTest):
         self.assertEqual(self.get("/api/chat/places")["items"][0]["count"], 4)
         self.assertEqual(self.get("/api/chat")["totals"]["waiting"], 2)
         self.assertEqual(self.post("/api/chat/flush", {})[1]["written"], 2)
+        self.post("/api/chat/logger/rules", {"downloadAttachments": True})
+        FakeGateway.last.emit("MESSAGE_CREATE", msg(82, 500, ANNA, "look", 10, files=["pic.png", "doc.txt"]))
+        files = self.get("/api/chat/messages?files=1&source=live")["messages"][0]["attachments"]
+        self.assertEqual([(a["filename"], a["thumb"]) for a in files], [("pic.png", True), ("doc.txt", False)])
+        status, headers, body = self.req("GET", "/api/thumb?path=" + urllib.parse.quote(files[0]["path"]))
+        self.assertEqual((status, body), (200, b"\x89PNG small"))     # shown instead of fetching the picture itself
+        self.d.chat.store.save_delete("82")
+        self.d.chat.flush()
         self.assertEqual(self.post("/api/chat/logger", {"on": False})[1]["logger"]["status"], "stopped")
 
         status, headers, body = self.req("GET", "/api/chat/export?format=html&source=live")
@@ -449,15 +461,15 @@ class ChatWebTest(helpers.DriveTest):
         csv = self.req("GET", "/api/chat/export?format=csv&source=live")[2].decode("utf-8-sig")
         self.assertIn('"<b>pizza</b>, ""now"""', csv)
         self.assertIn(b"hi there", self.req("GET", "/api/chat/export?format=txt")[2])
-        self.assertEqual(self.post("/api/chat/rebuild", {})[1]["files"], 2)
-        self.assertEqual(self.get("/api/chat/messages")["total"], 4)
+        self.assertEqual(self.post("/api/chat/rebuild", {})[1]["files"], 3)
+        self.assertEqual(self.get("/api/chat/messages")["total"], 5)
 
         # Recent is not filled with message files.
         self.assertEqual([i for i in self.get("/api/recent")["items"] if i["path"].startswith("/Discord")], [])
 
         status, state = self.post("/api/chat/disconnect", {})
         self.assertEqual((state["connected"], self.d.cfg.discord_user_token), (False, ""))
-        self.assertEqual(self.get("/api/chat/messages")["total"], 4)   # what was kept stays readable
+        self.assertEqual(self.get("/api/chat/messages")["total"], 5)   # what was kept stays readable
 
     def test_locked_folder_hides_the_messages(self):
         self.post("/api/chat/connect", {"token": "good-token"})

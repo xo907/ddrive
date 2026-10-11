@@ -3,6 +3,16 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.2 (2026-10-10)
+
+- Messages are written to the drive within half a minute of being recorded, instead of every ten
+  minutes.
+- Pictures and videos in Messages are shown as a small preview (made by Discord when the attachment
+  is saved) instead of loading the whole file, which would have put it in the read cache on this
+  computer. The file itself is only fetched when you open it. Attachments saved before this version
+  show as a file name.
+- Joining a day's small log files into one no longer downloads each of them again.
+
 ## 1.3.1 (2026-10-10)
 
 - Messages: the mark "not on the drive yet" now reads "text not on the drive yet" and says why. It
