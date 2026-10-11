@@ -6,12 +6,12 @@ import unittest
 
 import helpers
 from helpers import PIECE
-from discorddrive.actions import snapshot_restore_ops
+from ddrive.actions import snapshot_restore_ops
 
 
 def data_of(n_pieces, compressible=False):
     if compressible:
-        return (b"DiscordDrive " * (n_pieces * PIECE // 13 + 1))[:n_pieces * PIECE - 123]
+        return (b"DDrive " * (n_pieces * PIECE // 13 + 1))[:n_pieces * PIECE - 123]
     return os.urandom(n_pieces * PIECE - 123)
 
 

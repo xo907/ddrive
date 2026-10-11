@@ -1,17 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="700" height="539" viewBox="0 0 700 539" role="img" aria-label="The DiscordDrive menu">
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="539" viewBox="0 0 700 539" role="img" aria-label="The DDrive menu">
   <rect width="700" height="539" rx="12" fill="#0d1117" stroke="#30363d"/>
   <path d="M12 0 h676 a12 12 0 0 1 12 12 v24 h-700 v-24 a12 12 0 0 1 12 -12 z" fill="#161b22"/>
   <circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
   <text x="350" y="23" fill="#8b949e" font-size="13" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">run.bat</text>
   <g font-family="Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace" font-size="14" fill="#c9d1d9">
-    <text x="22" y="64"><tspan fill="#ffffff" font-weight="700">X </tspan><tspan fill="#f85149" font-weight="700">O</tspan><tspan x="74" fill="#ffffff" font-weight="700">DiscordDrive</tspan><tspan x="190" fill="#8b949e">encrypted drive in your Discord channel</tspan></text>
-    <text x="74" y="84" fill="#8b949e">Made by XO.ST  |  v1.5.0</text>
+    <text x="22" y="64"><tspan fill="#ffffff" font-weight="700">X </tspan><tspan fill="#f85149" font-weight="700">O</tspan><tspan x="74" fill="#ffffff" font-weight="700">DDrive</tspan><tspan x="190" fill="#8b949e">encrypted drive in your Discord channel</tspan></text>
+    <text x="74" y="84" fill="#8b949e">Made by XO.ST  |  v2.0.0</text>
     <text x="22" y="118">Drive <tspan fill="#ffffff" font-weight="700">Z:</tspan> <tspan fill="#3fb950">RUNNING</tspan><tspan fill="#8b949e">  |  </tspan>1,284 files, 38.4 GB in Discord</text>
     <text x="22" y="152" fill="#ffffff" font-weight="700">Main menu</text>
     <text x="42" y="173"><tspan fill="#f85149">1</tspan><tspan x="66">Start the drive</tspan></text>
     <text x="42" y="194"><tspan fill="#f85149">2</tspan><tspan x="66">Stop the drive</tspan></text>
     <text x="42" y="215"><tspan fill="#f85149">3</tspan><tspan x="66">Status (everything in detail)</tspan></text>
-    <text x="42" y="236"><tspan fill="#f85149">4</tspan><tspan x="66">Update DiscordDrive</tspan></text>
+    <text x="42" y="236"><tspan fill="#f85149">4</tspan><tspan x="66">Update DDrive</tspan></text>
     <text x="42" y="267"><tspan fill="#f85149">5</tspan><tspan x="66">Setup (bot token, channel, recovery phrase)</tspan></text>
     <text x="42" y="288"><tspan fill="#f85149">6</tspan><tspan x="66">Settings (cache, limits, drive letter...)</tspan></text>
     <text x="42" y="309"><tspan fill="#f85149">7</tspan><tspan x="66">Files: old versions, deleted files, offline</tspan></text>
@@ -22,7 +22,7 @@
     <text x="42" y="414"><tspan fill="#f85149">12</tspan><tspan x="66">Sync and back up folders (e.g. Downloads -&gt; the drive)</tspan></text>
     <text x="42" y="435"><tspan fill="#f85149">0</tspan><tspan x="66">Exit</tspan></text>
     <text x="22" y="469">Choose an option: <tspan fill="#ffffff">1</tspan></text>
-    <text x="22" y="493"><tspan fill="#f85149">==&gt;</tspan> Starting DiscordDrive on Z:</text>
+    <text x="22" y="493"><tspan fill="#f85149">==&gt;</tspan> Starting DDrive on Z:</text>
     <text x="58" y="513" fill="#3fb950">Running. Open File Explorer: your drive is Z:</text>
   </g>
 </svg>

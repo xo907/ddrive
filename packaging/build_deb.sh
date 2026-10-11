@@ -1,41 +1,41 @@
 #!/usr/bin/env bash
-# Builds dist/discorddrive_<version>_all.deb (Debian, Ubuntu, Raspberry Pi OS).
+# Builds dist/ddrive_<version>_all.deb (Debian, Ubuntu, Raspberry Pi OS).
 # Usage: packaging/build_deb.sh        (needs dpkg-deb; run on Linux or in CI)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' discorddrive/__init__.py)"
-PKG="build/deb/discorddrive_${VERSION}_all"
+VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' ddrive/__init__.py)"
+PKG="build/deb/ddrive_${VERSION}_all"
 rm -rf "$PKG"
-mkdir -p "$PKG/DEBIAN" "$PKG/opt/discorddrive" "$PKG/usr/bin" "$PKG/usr/lib/systemd/user"
+mkdir -p "$PKG/DEBIAN" "$PKG/opt/ddrive" "$PKG/usr/bin" "$PKG/usr/lib/systemd/user"
 
-cp -r discorddrive run.sh README.md CHANGELOG.md LICENSE "$PKG/opt/discorddrive/"
-find "$PKG/opt/discorddrive" -name "__pycache__" -prune -exec rm -rf {} +
-find "$PKG/opt/discorddrive" -type d -exec chmod 755 {} +
-find "$PKG/opt/discorddrive" -type f -exec chmod 644 {} +
-chmod 755 "$PKG/opt/discorddrive/run.sh" "$PKG/opt/discorddrive/discorddrive/scripts/linux/install.sh"
+cp -r ddrive run.sh README.md CHANGELOG.md LICENSE "$PKG/opt/ddrive/"
+find "$PKG/opt/ddrive" -name "__pycache__" -prune -exec rm -rf {} +
+find "$PKG/opt/ddrive" -type d -exec chmod 755 {} +
+find "$PKG/opt/ddrive" -type f -exec chmod 644 {} +
+chmod 755 "$PKG/opt/ddrive/run.sh" "$PKG/opt/ddrive/ddrive/scripts/linux/install.sh"
 
-cat > "$PKG/usr/bin/discorddrive" <<'EOF'
+cat > "$PKG/usr/bin/ddrive" <<'EOF'
 #!/bin/sh
-# DiscordDrive - Made by XO.ST. With no arguments: the menu.
-exec /opt/discorddrive/run.sh "$@"
+# DDrive - Made by XO.ST. With no arguments: the menu.
+exec /opt/ddrive/run.sh "$@"
 EOF
-chmod 755 "$PKG/usr/bin/discorddrive"
+chmod 755 "$PKG/usr/bin/ddrive"
 
-cat > "$PKG/usr/lib/systemd/user/discorddrive.service" <<'EOF'
-# Start the drive when you log in:  systemctl --user enable --now discorddrive
+cat > "$PKG/usr/lib/systemd/user/ddrive.service" <<'EOF'
+# Start the drive when you log in:  systemctl --user enable --now ddrive
 # Keep it running without a login:  sudo loginctl enable-linger "$USER"
 [Unit]
-Description=DiscordDrive encrypted Discord-backed drive
+Description=DDrive encrypted Discord-backed drive
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/discorddrive mount
-ExecStop=/usr/bin/discorddrive stop
+ExecStart=/usr/bin/ddrive mount
+ExecStop=/usr/bin/ddrive stop
 KillSignal=SIGTERM
 TimeoutStopSec=60
 Restart=on-failure
@@ -47,19 +47,19 @@ EOF
 
 SIZE="$(du -sk "$PKG" | cut -f1)"
 cat > "$PKG/DEBIAN/control" <<EOF
-Package: discorddrive
+Package: ddrive
 Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: all
 Depends: python3 (>= 3.9), python3-cryptography, libfuse2t64 | libfuse2, fuse3 | fuse, curl
 Installed-Size: ${SIZE}
-Maintainer: XO.ST <https://github.com/xo907/discord-drive>
-Homepage: https://github.com/xo907/discord-drive
+Maintainer: XO.ST <https://github.com/xo907/ddrive>
+Homepage: https://github.com/xo907/ddrive
 Description: Encrypted drive backed by a private Discord channel
- DiscordDrive mounts a private Discord channel as an encrypted folder, keeps
+ DDrive mounts a private Discord channel as an encrypted folder, keeps
  several devices in sync, rebuilds pieces Discord loses from spare pieces,
- and has a web dashboard. Run "discorddrive" for the menu.
+ and has a web dashboard. Run "ddrive" for the menu.
 EOF
 
 cat > "$PKG/DEBIAN/postinst" <<'EOF'
@@ -74,51 +74,51 @@ EOF
 chmod 755 "$PKG/DEBIAN/postinst"
 
 mkdir -p dist
-dpkg-deb --build --root-owner-group "$PKG" "dist/discorddrive_${VERSION}_all.deb"
-echo "Built dist/discorddrive_${VERSION}_all.deb"
+dpkg-deb --build --root-owner-group "$PKG" "dist/ddrive_${VERSION}_all.deb"
+echo "Built dist/ddrive_${VERSION}_all.deb"
 
 # The lite-only package: a computer that uses a drive running on another computer.
-LITE="build/deb/discorddrive-lite_${VERSION}_all"
+LITE="build/deb/ddrive-lite_${VERSION}_all"
 rm -rf "$LITE"
-mkdir -p "$LITE/DEBIAN" "$LITE/opt/discorddrive-lite/discorddrive/_vendor" "$LITE/usr/bin"
+mkdir -p "$LITE/DEBIAN" "$LITE/opt/ddrive-lite/ddrive/_vendor" "$LITE/usr/bin"
 for f in __init__.py lite.py config.py secretbox.py crypto.py fuse_loader.py runtime.py; do
-    cp "discorddrive/$f" "$LITE/opt/discorddrive-lite/discorddrive/"
+    cp "ddrive/$f" "$LITE/opt/ddrive-lite/ddrive/"
 done
-cp discorddrive/_vendor/*.py "$LITE/opt/discorddrive-lite/discorddrive/_vendor/"
-cp LICENSE "$LITE/opt/discorddrive-lite/"
-find "$LITE/opt/discorddrive-lite" -type d -exec chmod 755 {} +
-find "$LITE/opt/discorddrive-lite" -type f -exec chmod 644 {} +
+cp ddrive/_vendor/*.py "$LITE/opt/ddrive-lite/ddrive/_vendor/"
+cp LICENSE "$LITE/opt/ddrive-lite/"
+find "$LITE/opt/ddrive-lite" -type d -exec chmod 755 {} +
+find "$LITE/opt/ddrive-lite" -type f -exec chmod 644 {} +
 
-cat > "$LITE/opt/discorddrive-lite/run.sh" <<'EOF'
+cat > "$LITE/opt/ddrive-lite/run.sh" <<'EOF'
 #!/bin/sh
-# DiscordDrive Lite - Made by XO.ST. "run.sh lite <command>", as the autostart entry calls it.
+# DDrive Lite - Made by XO.ST. "run.sh lite <command>", as the autostart entry calls it.
 [ "$1" = "lite" ] && shift
-exec /usr/bin/discorddrive-lite "$@"
+exec /usr/bin/ddrive-lite "$@"
 EOF
-cat > "$LITE/usr/bin/discorddrive-lite" <<'EOF'
+cat > "$LITE/usr/bin/ddrive-lite" <<'EOF'
 #!/bin/sh
-# DiscordDrive Lite - Made by XO.ST. With no arguments: the menu.
-export PYTHONPATH="/opt/discorddrive-lite${PYTHONPATH:+:$PYTHONPATH}" DISCORDDRIVE_LITE_ONLY=1
+# DDrive Lite - Made by XO.ST. With no arguments: the menu.
+export PYTHONPATH="/opt/ddrive-lite${PYTHONPATH:+:$PYTHONPATH}" DDRIVE_LITE_ONLY=1
 [ $# -eq 0 ] && set -- menu
-exec python3 -c 'import sys; from discorddrive.lite import main; sys.exit(main(sys.argv[1:]) or 0)' "$@"
+exec python3 -c 'import sys; from ddrive.lite import main; sys.exit(main(sys.argv[1:]) or 0)' "$@"
 EOF
-chmod 755 "$LITE/usr/bin/discorddrive-lite" "$LITE/opt/discorddrive-lite/run.sh"
+chmod 755 "$LITE/usr/bin/ddrive-lite" "$LITE/opt/ddrive-lite/run.sh"
 
 SIZE="$(du -sk "$LITE" | cut -f1)"
 cat > "$LITE/DEBIAN/control" <<EOF
-Package: discorddrive-lite
+Package: ddrive-lite
 Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: all
 Depends: python3 (>= 3.9), python3-cryptography, libfuse2t64 | libfuse2, fuse3 | fuse
 Installed-Size: ${SIZE}
-Maintainer: XO.ST <https://github.com/xo907/discord-drive>
-Homepage: https://github.com/xo907/discord-drive
-Description: Use a DiscordDrive that runs on another computer
- DiscordDrive Lite shows the drive of a computer that runs DiscordDrive (the
+Maintainer: XO.ST <https://github.com/xo907/ddrive>
+Homepage: https://github.com/xo907/ddrive
+Description: Use a DDrive that runs on another computer
+ DDrive Lite shows the drive of a computer that runs DDrive (the
  host) as a folder here, and streams, downloads and uploads through it. It
- keeps no bot, key or copy of the drive. Run "discorddrive-lite" for the menu.
+ keeps no bot, key or copy of the drive. Run "ddrive-lite" for the menu.
 EOF
-dpkg-deb --build --root-owner-group "$LITE" "dist/discorddrive-lite_${VERSION}_all.deb"
-echo "Built dist/discorddrive-lite_${VERSION}_all.deb"
+dpkg-deb --build --root-owner-group "$LITE" "dist/ddrive-lite_${VERSION}_all.deb"
+echo "Built dist/ddrive-lite_${VERSION}_all.deb"

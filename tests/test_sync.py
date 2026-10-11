@@ -5,7 +5,7 @@ import sys
 import time
 
 import helpers
-from discorddrive.sync import SyncError, normalize_job
+from ddrive.sync import SyncError, normalize_job
 
 
 class SyncTest(helpers.DriveTest):

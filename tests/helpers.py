@@ -12,9 +12,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from discorddrive.config import Config  # noqa: E402
-from discorddrive.crypto import generate_key  # noqa: E402
-from discorddrive.drive import DiscordDrive  # noqa: E402
+from ddrive.config import Config  # noqa: E402
+from ddrive.crypto import generate_key  # noqa: E402
+from ddrive.drive import DDrive  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING if not os.environ.get("DD_TEST_LOG") else logging.DEBUG,
                     format="%(levelname)s %(name)s: %(message)s")
@@ -44,7 +44,7 @@ class DriveTest(unittest.TestCase):
                     device_id=device, upload_delay=0, web_enabled=False, parity_group=4, parity_pieces=2,
                     poll_interval=0.5)
         opts.update(settings)
-        d = DiscordDrive(Config(**opts), local_test_dir=self.channel)
+        d = DDrive(Config(**opts), local_test_dir=self.channel)
         d.initialize()
         self.drives.append(d)
         return d

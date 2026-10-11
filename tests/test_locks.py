@@ -4,7 +4,7 @@ import errno
 import os
 
 import helpers
-from discorddrive.locks import ALL
+from ddrive.locks import ALL
 
 
 class LockTest(helpers.DriveTest):
@@ -82,7 +82,7 @@ class LockTest(helpers.DriveTest):
         self.assertIsNotNone(b.fs.getattr("/Private/diary.txt"))
 
     def test_folder_sync_still_copies_into_a_locked_folder(self):
-        from discorddrive.sync import normalize_job
+        from ddrive.sync import normalize_job
         here = os.path.join(self.tmp, "here")
         os.makedirs(here)
         with open(os.path.join(here, "new.txt"), "wb") as f:

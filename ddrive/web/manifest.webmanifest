@@ -1,0 +1,14 @@
+{
+  "name": "DDrive",
+  "short_name": "DDrive",
+  "description": "Your encrypted drive",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f0f10",
+  "theme_color": "#0f0f10",
+  "icons": [
+    { "src": "/icon.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

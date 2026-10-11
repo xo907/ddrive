@@ -1,4 +1,4 @@
-"""DiscordDrive Lite: a computer that uses another computer's drive through its dashboard. Here the
+"""DDrive Lite: a computer that uses another computer's drive through its dashboard. Here the
 host is a whole drive with its web dashboard on a free local port; the lite side is driven the way
 the operating system would drive it (the calls a drive letter turns into), without mounting anything."""
 
@@ -8,7 +8,7 @@ import io
 import os
 
 import helpers
-from discorddrive import lite, words
+from ddrive import lite, words
 
 
 class LiteTest(helpers.DriveTest):
@@ -129,8 +129,8 @@ class LiteTest(helpers.DriveTest):
             lite.LIST_SECONDS = keep
 
     def test_commands(self):
-        os.environ["DISCORDDRIVE_LITE_CONFIG"] = os.path.join(self.tmp, "lite.json")
-        self.addCleanup(os.environ.pop, "DISCORDDRIVE_LITE_CONFIG")
+        os.environ["DDRIVE_LITE_CONFIG"] = os.path.join(self.tmp, "lite.json")
+        self.addCleanup(os.environ.pop, "DDRIVE_LITE_CONFIG")
 
         def run(*argv):
             out = io.StringIO()
@@ -142,7 +142,7 @@ class LiteTest(helpers.DriveTest):
         code, text = run("connect", self.address, "-p", self.phrase)
         self.assertEqual(code, 0, text)
         self.assertIn("as the owner", text)
-        with open(os.environ["DISCORDDRIVE_LITE_CONFIG"]) as f:
+        with open(os.environ["DDRIVE_LITE_CONFIG"]) as f:
             self.assertNotIn(self.phrase.split()[0] + " " + self.phrase.split()[1], f.read())   # the words are not stored readable
         src = os.path.join(self.tmp, "Album")
         os.makedirs(os.path.join(src, "sub"))

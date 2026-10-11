@@ -19,19 +19,19 @@ jobs:
           python-version: "3.12"
       - name: Test
         run: python -m unittest discover -s tests
-      - name: Build DiscordDrive.exe
+      - name: Build DDrive.exe
         shell: pwsh
         run: packaging\build_exe.ps1
       - name: Check it starts
         run: |
-          dist\DiscordDrive.exe --help
-          dist\DiscordDriveLite.exe --help
+          dist\DDrive.exe --help
+          dist\DDriveLite.exe --help
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            dist/DiscordDrive.exe
-            dist/DiscordDriveLite.exe
+            dist/DDrive.exe
+            dist/DDriveLite.exe
 
   deb:
     runs-on: ubuntu-latest
@@ -47,8 +47,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ./dist/*.deb
-          discorddrive --help
-          discorddrive-lite --help
+          ddrive --help
+          ddrive-lite --help
       - uses: actions/upload-artifact@v4
         with:
           name: deb
@@ -67,5 +67,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "DiscordDrive $GITHUB_REF_NAME" \
-            --notes "Windows: DiscordDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./discorddrive_*.deb. Lite (uses a drive that runs on another computer): DiscordDriveLite.exe, or sudo apt install ./discorddrive-lite_*.deb"
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "DDrive $GITHUB_REF_NAME" \
+            --notes "Windows: DDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./ddrive_*.deb. Lite (uses a drive that runs on another computer): DDriveLite.exe, or sudo apt install ./ddrive-lite_*.deb"

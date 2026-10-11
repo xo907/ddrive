@@ -5,8 +5,8 @@ import unittest
 from unittest import mock
 
 import helpers  # noqa: F401
-from discorddrive import discord_api
-from discorddrive.discord_api import API_BASE, DiscordAPI, _curl_failure
+from ddrive import discord_api
+from ddrive.discord_api import API_BASE, DiscordAPI, _curl_failure
 
 
 def result(returncode, status, body=b"", stderr=b""):

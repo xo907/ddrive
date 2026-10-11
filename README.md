@@ -1,6 +1,6 @@
 <h1 align="center">
     <img src="docs/images/logo-128.png" height="72" width="72" alt=""><br>
-    DiscordDrive
+    DDrive
 </h1>
 <p align="center">
   <b>Your own private cloud drive.</b><br>
@@ -17,17 +17,20 @@
   <a href="#what-you-get">What you get</a> ·
   <a href="#screenshots">Screenshots</a> ·
   <a href="#how-it-compares">How it compares</a> ·
+  <a href="#accounts">Accounts</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center"><img src="docs/images/screens/home.png" alt="The DiscordDrive dashboard: what is on the drive, starred files with thumbnails, recent files and activity from several devices" width="100%"></p>
+<p align="center"><img src="docs/images/screens/home.png" alt="The DDrive dashboard: what is on the drive, starred files with thumbnails, recent files and activity from several devices" width="100%"></p>
 
-DiscordDrive turns a private Discord channel into a drive of your own: a drive letter on Windows
+DDrive turns a private Discord channel into a drive of your own: a drive letter on Windows
 (`Z:\`), a folder on Linux, and a web app in your browser and on your phone. Everything is encrypted
 on your computer before it leaves, so Discord only ever stores random-looking pieces. There is no
 subscription, no storage plan and no account with anyone but Discord, and the whole thing is one small
-open-source program in plain Python that runs on your own PC, server or Raspberry Pi.
+open-source program in plain Python that runs on your own PC, server or Raspberry Pi. If you want to,
+you can let other people in: each gets [an account](#accounts) with storage of their own, encrypted
+with their own key.
 
 <table>
 <tr>
@@ -58,9 +61,11 @@ snapshots can be brought back. A background check finds problems before you do.
 </tr>
 </table>
 
-> **Heads-up:** using Discord as general-purpose file storage may violate Discord's Terms of
-> Service, and Discord can delete messages, attachments, or your bot/account at any time. Treat
-> DiscordDrive as an experiment, **not** as your only copy of anything important.
+> **Heads-up:** DDrive is an independent project. It is not affiliated with, endorsed by or
+> sponsored by Discord Inc.; "Discord" is their trademark and is used here only to say where the data
+> is stored. Using Discord as general-purpose file storage may violate Discord's Terms of Service, and
+> Discord can delete messages, attachments, or your bot/account at any time. Treat DDrive as an
+> experiment, **not** as your only copy of anything important. See [Legal](#legal).
 
 ## What you get
 
@@ -97,6 +102,13 @@ All of it is described further down: [Web dashboard](#web-dashboard) ·
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="62%"><img src="docs/images/screens/accounts.png" alt="Settings, Accounts: who can make an account, storage per account, terms, and invite codes"><br><sub><b>Accounts.</b> Let others in: closed, by invite or public, with a limit per account.</sub></td>
+<td width="38%"><img src="docs/images/screens/signup.png" alt="The sign-up page showing a new account's 24 words"><br><sub><b>24 words.</b> An account has no name and no password.</sub></td>
+</tr>
+</table>
+
 <p align="center">
   <img src="docs/images/screens/phone.png" alt="The dashboard on a phone: home" width="270">
   &nbsp;&nbsp;
@@ -104,11 +116,11 @@ All of it is described further down: [Web dashboard](#web-dashboard) ·
   <br><sub><b>On your phone.</b> The same dashboard, installable to the home screen.</sub>
 </p>
 
-<sub>Screenshots show a demo drive with generated pictures.</sub>
+<sub>Screenshots show a demo drive with generated pictures and made-up sites and names.</sub>
 
 ## How it compares
 
-| | DiscordDrive | Typical cloud drive |
+| | DDrive | Typical cloud drive |
 |---|---|---|
 | Price | Free and open source | Free for a few GB, then a subscription |
 | Storage limit | None of its own (Discord's rules apply) | 2 to 15 GB free |
@@ -122,16 +134,16 @@ All of it is described further down: [Web dashboard](#web-dashboard) ·
 | Guarantee that your data stays | **None.** Discord can remove it; keep another copy | Service agreement |
 | Runs on | Your own PC, server or Raspberry Pi | The provider's servers |
 
-DiscordDrive gives you the features and the privacy; it cannot give you a provider's promise. That is
+DDrive gives you the features and the privacy; it cannot give you a provider's promise. That is
 what the heads-up above is about.
 
-<p align="center"><img src="docs/images/overview.svg" alt="Your devices sync through DiscordDrive, which stores encrypted pieces in a private Discord channel" width="100%"></p>
+<p align="center"><img src="docs/images/overview.svg" alt="Your devices sync through DDrive, which stores encrypted pieces in a private Discord channel" width="100%"></p>
 
 Files you save are staged locally, split into pieces, compressed when that helps, encrypted, and
 uploaded as attachments to your channel together with a few spare pieces. Reading downloads only the
 pieces that cover what is being read. More in [How it works](#how-it-works).
 
-<p align="center">Made by <b>XO.ST</b> · <a href="https://github.com/xo907/discord-drive">github.com/xo907/discord-drive</a></p>
+<p align="center">Made by <b>XO.ST</b> · <a href="https://github.com/xo907/ddrive">github.com/xo907/ddrive</a></p>
 
 ---
 
@@ -155,10 +167,10 @@ in Discord, click **+** in the server list → **Create My Own**).
 5. In Discord, go to **User Settings → Advanced** and turn on **Developer Mode**. Then right-click
    the channel → **Copy Channel ID**. You need this in Step 2 as well.
 
-> **Prefer an installer?** Each [release](https://github.com/xo907/discord-drive/releases) has
-> `DiscordDrive.exe` for Windows (no Python or git needed; WinFsp is still required) and a `.deb`
-> for Debian, Ubuntu and Raspberry Pi OS (`sudo apt install ./discorddrive_*.deb`, then run
-> `discorddrive`). The steps below install from source, which the menu can update by itself.
+> **Prefer an installer?** Each [release](https://github.com/xo907/ddrive/releases) has
+> `DDrive.exe` for Windows (no Python or git needed; WinFsp is still required) and a `.deb`
+> for Debian, Ubuntu and Raspberry Pi OS (`sudo apt install ./ddrive_*.deb`, then run
+> `ddrive`). The steps below install from source, which the menu can update by itself.
 
 ### Step 2a: Windows 10 / 11
 
@@ -174,10 +186,10 @@ you already have that program, which is fine. When it is done, **close PowerShel
 (so it finds the programs you just installed), then paste:
 
 ```powershell
-git clone https://github.com/xo907/discord-drive.git "$HOME\DiscordDrive"; cd "$HOME\DiscordDrive"; .\run.bat
+git clone https://github.com/xo907/ddrive.git "$HOME\DDrive"; cd "$HOME\DDrive"; .\run.bat
 ```
 
-The DiscordDrive menu opens. Choose **5 (Setup)** and answer the questions:
+The DDrive menu opens. Choose **5 (Setup)** and answer the questions:
 
 | Question | What to type |
 |---|---|
@@ -190,34 +202,34 @@ The DiscordDrive menu opens. Choose **5 (Setup)** and answer the questions:
 When setup asks "Start the drive now?", press **Enter**. Open **File Explorer**: your new drive is
 **Z:**. Anything you put there is stored in Discord.
 
-From now on, just double-click **`run.bat`** in the `DiscordDrive` folder (your user folder) to get the menu.
+From now on, just double-click **`run.bat`** in the `DDrive` folder (your user folder) to get the menu.
 
 ### Step 2b: Linux (Debian, Ubuntu, Raspberry Pi OS)
 
 Open a terminal and paste. It works both as a normal user with `sudo` and as `root`, installs what
-DiscordDrive needs, and opens the menu:
+DDrive needs, and opens the menu:
 
 ```bash
-S=$(command -v sudo); $S apt update && $S apt install -y git && git clone https://github.com/xo907/discord-drive.git ~/DiscordDrive && cd ~/DiscordDrive && bash discorddrive/scripts/linux/install.sh && ./run.sh
+S=$(command -v sudo); $S apt update && $S apt install -y git && git clone https://github.com/xo907/ddrive.git ~/DDrive && cd ~/DDrive && bash ddrive/scripts/linux/install.sh && ./run.sh
 ```
 
-In the menu choose **5 (Setup)**. Paste the bot token and channel ID, type **`/mnt/discord`** as the
+In the menu choose **5 (Setup)**. Paste the bot token and channel ID, type **`/mnt/ddrive`** as the
 mount directory and press **Enter** at "Enable encryption?". Setup then shows your **recovery phrase**:
 write the 24 words down. Answer **Enter** to "Start the drive now?".
 
-Your files are in **`/mnt/discord`**. From now on, run **`~/DiscordDrive/run.sh`** to get the menu.
+Your files are in **`/mnt/ddrive`**. From now on, run **`~/DDrive/run.sh`** to get the menu.
 
 ### Everyday use
 
 Everything is in the menu: **`run.bat`** on Windows (double-click it), **`./run.sh`** on Linux.
 
-<p align="center"><img src="docs/images/menu.svg" alt="The DiscordDrive menu" width="640"></p>
+<p align="center"><img src="docs/images/menu.svg" alt="The DDrive menu" width="640"></p>
 
 | Menu option | What it does |
 |---|---|
 | 1 / 2 | Start or stop the drive |
 | 3 | Status: what is stored in Discord, what is uploading, cache and disk space |
-| 4 | Update DiscordDrive to the latest version (stops and restarts the drive for you) |
+| 4 | Update DDrive to the latest version (stops and restarts the drive for you) |
 | 5 | Setup: bot token, channel, recovery phrase |
 | 6 | Settings: memory-only cache, cache size, disk-space limits, max file size, drive letter |
 | 7 | Old versions, deleted files, offline files |
@@ -303,7 +315,7 @@ other devices**:
   that let others send files into a folder without seeing it.
 - **Save from a link**: the drive downloads a web address straight into a folder.
 - **Lite**: other computers can use the drive through one that runs it, with nothing stored on them
-  ([more](#discorddrive-lite)).
+  ([more](#ddrive-lite)).
 - **Discord messages**: archive your own conversations and log new messages as they arrive, including
   ones later edited or deleted; kept on the drive ([more](#discord-messages)).
 - **Other apps (WebDAV)**: open the drive from phone file managers, "Map network drive", Finder, rclone.
@@ -340,7 +352,7 @@ other devices**:
 | HTTP | `curl` (ships with Windows) | `curl` (or Python's urllib fallback) |
 
 There are no other dependencies. A copy of [fusepy](https://github.com/fusepy/fusepy) is
-vendored in `discorddrive/_vendor/` (ISC license).
+vendored in `ddrive/_vendor/` (ISC license).
 
 ---
 
@@ -354,8 +366,8 @@ The config is stored outside the repository:
 
 | | Config (token + key) | Data (index, cache, staging, log) |
 |---|---|---|
-| Windows | `%APPDATA%\DiscordDrive\config.json` | `%LOCALAPPDATA%\DiscordDrive\` |
-| Linux | `~/.config/DiscordDrive/config.json` (mode 600) | `~/.local/share/DiscordDrive/` |
+| Windows | `%APPDATA%\DDrive\config.json` | `%LOCALAPPDATA%\DDrive\` |
+| Linux | `~/.config/DDrive/config.json` (mode 600) | `~/.local/share/DDrive/` |
 
 Change settings in the menu (**6 Settings**), with `config <name> <value>` (run `config` alone to
 list them), or by editing the file.
@@ -379,7 +391,7 @@ Useful limits:
 | `signup_mode` | `closed` | Who can make an [account](#accounts) on the dashboard: `closed`, `invite` or `public` |
 | `account_quota_bytes` / `accounts_max` | 5 GiB / `100` | What one account may store, and how many accounts there can be (`0` = no limit) |
 
-`DISCORDDRIVE_CONFIG`, `DISCORDDRIVE_TOKEN` and `DISCORDDRIVE_CHANNEL` environment variables
+`DDRIVE_CONFIG`, `DDRIVE_TOKEN` and `DDRIVE_CHANNEL` environment variables
 override the config file location, token, and channel. See [`docs/config.example.json`](docs/config.example.json)
 for every option.
 
@@ -431,19 +443,19 @@ sync [list|add|edit|remove|run|stop|pause|resume|status|modes]
                                      Folders kept in sync with the drive (see "Sync and back up folders")
 ```
 
-Paths can be given as `Z:\Folder\file.mp4`, `/mnt/discord/Folder/file.mp4`, or `/Folder/file.mp4`.
+Paths can be given as `Z:\Folder\file.mp4`, `/mnt/ddrive/Folder/file.mp4`, or `/Folder/file.mp4`.
 
 ### Project layout
 
 ```text
 run.bat / run.sh       start here: the menu, or a command
-discorddrive/          the program (Python)
+ddrive/          the program (Python)
   scripts/windows/     helpers used by run.bat (hidden start, Explorer menu)
   scripts/linux/       install.sh (requirements) and the systemd service
   web/                 the web dashboard (plain HTML, CSS and JavaScript)
 docs/                  images and config.example.json
 tests/                 tests (python -m unittest discover -s tests), run for every change on GitHub
-packaging/             builds DiscordDrive.exe and the .deb (see .github/workflows/release.yml)
+packaging/             builds DDrive.exe and the .deb (see .github/workflows/release.yml)
 ```
 
 ### Start automatically on Linux (systemd)
@@ -453,8 +465,8 @@ boot"**. In short:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-sed "s|%h/DiscordDrive|$HOME/DiscordDrive|g" ~/DiscordDrive/discorddrive/scripts/linux/discorddrive.service > ~/.config/systemd/user/discorddrive.service
-systemctl --user daemon-reload && systemctl --user enable --now discorddrive
+sed "s|%h/DDrive|$HOME/DDrive|g" ~/DDrive/ddrive/scripts/linux/ddrive.service > ~/.config/systemd/user/ddrive.service
+systemctl --user daemon-reload && systemctl --user enable --now ddrive
 sudo loginctl enable-linger "$USER"                 # keep running when you are logged out
 ```
 
@@ -467,7 +479,7 @@ Set `"allow_other": true` in the config, or pass `mount --allow-other`. This req
 
 ## Self-healing
 
-Discord can delete messages or attachments at any time. DiscordDrive plans for that:
+Discord can delete messages or attachments at any time. DDrive plans for that:
 
 - **Spare pieces.** Each group of `parity_group` (10) pieces of a file gets `parity_pieces` (2)
   spare pieces, computed with Reed-Solomon coding. Any 2 pieces of a group can go missing and the
@@ -566,7 +578,7 @@ devices).
   internet, e.g. through your reverse proxy, and no password on the link).
 - **Behind a reverse proxy** (e.g. Nginx Proxy Manager): add your domain under Settings → Domain
   names (or `config web_hosts drive.example.com`); share links then use that domain. Settings is in
-  the account menu (top right) and in the DiscordDrive menu.
+  the account menu (top right) and in the DDrive menu.
 - **Deleted** files can be selected (or all at once) and restored, or deleted forever, which
   removes them from Discord on every device straight away (`purge <path>` on the command line).
 - **Phone.** `config web_lan true` (menu 6 → Web dashboard on your network), restart the drive,
@@ -603,7 +615,7 @@ Settings) decides who may make one:
 - **What an account has**: files and folders (upload, preview, download, ZIP, move, rename), the
   gallery, stars, notes, bookmarks, contacts, messages (their own Discord account), share links and
   file requests, password-locked folders, earlier versions, deleted files, snapshots, the activity
-  list and the storage page. DiscordDrive Lite works with an account's words too.
+  list and the storage page. DDrive Lite works with an account's words too.
 - **What it doesn't have**: Settings, Sync, Log, Health, Resources, checking and repairing, "available
   offline", WebDAV, passkeys, and anything else that manages the drive or the computer. Those pages
   aren't shown, and the drive refuses the requests behind them.
@@ -614,6 +626,16 @@ Settings) decides who may make one:
   and when it last signed in. **Switch off** signs it out and stops its share links without deleting
   anything; **Delete** removes it from this computer and from Discord. An account can delete itself
   under *Your account*.
+
+**Terms and privacy policy.** A dashboard that has accounts needs to say what it does with people's
+data. DDrive serves two pages for that, linked from the sign-in and sign-up pages: `/terms` and
+`/privacy`. They are written around what the program really does (what is kept about an account, what
+goes to Discord and in what form, cookies, the log, how deleting works) and they name you, the person
+running it, with what you fill in under Settings → Accounts: who runs this, a contact address, and the
+governing law (`operator_name`, `operator_contact`, `legal_region`). Making an account requires
+ticking that one agrees to them. They are a starting point written by the program's authors, not
+legal advice: read them, and have them checked for where you live before you open sign-up to the
+public. What an account does is kept out of your Log page and log file, except error messages.
 
 What this is and isn't: the data is unreadable for Discord and for other accounts. The computer that
 runs the drive handles it while it is uploaded and shown, and keeps each account's key (encrypted for
@@ -640,7 +662,7 @@ Each device can use its own set of extra bots; any bot in the channel can read e
 
 ## The config file
 
-The config file (`%APPDATA%\DiscordDrive\config.json`, or `~/.config/DiscordDrive/config.json`) holds
+The config file (`%APPDATA%\DDrive\config.json`, or `~/.config/DDrive/config.json`) holds
 your settings and the secrets the drive needs: bot tokens, encryption keys, the dashboard sign-in, and
 your Discord account's token if you logged in for [Discord messages](#discord-messages). The
 secrets are not stored readable. They sit in one entry, `protected`, encrypted for the computer and
@@ -649,7 +671,7 @@ account they belong to:
 - **Windows**: with the account's own protection (DPAPI). Only your Windows account on that computer
   can decrypt them.
 - **Linux / Raspberry Pi**: with a key made from a key file kept apart from the config
-  (`~/.local/share/DiscordDrive/machine.key`, readable by you only), the machine's id and your user id.
+  (`~/.local/share/DDrive/machine.key`, readable by you only), the machine's id and your user id.
 
 So a copy of the file, in a backup, a synced folder, a screenshot or a message asking for help, gives
 nothing away. It is automatic: nothing to type, the drive still starts by itself, and a config from an
@@ -661,7 +683,7 @@ token or key you type into the file by hand is picked up and encrypted at the ne
   machine, the secrets can't be read and `setup` asks for the bot token and your recovery phrase
   again (or lets another of your devices approve it).
 - **What it doesn't do**: a program running as you on that computer can ask for the secrets the same
-  way DiscordDrive does, and while the drive runs the key is in memory. It protects the file, not a
+  way DDrive does, and while the drive runs the key is in memory. It protects the file, not a
   computer someone else already controls.
 - `config` shows how the secrets are kept; `config protect_config false` stores them readable again.
 
@@ -713,7 +735,7 @@ and the messages are hidden in the dashboard until you unlock it.
 > keeps what other people wrote, including what they later delete; treat it as you would any private
 > conversation.
 
-## DiscordDrive Lite
+## DDrive Lite
 
 Use a drive that runs on another computer (the **host**) without running one yourself. A lite
 computer has no bot, no encryption key and no copy of the drive: it shows the host's drive as a drive
@@ -729,10 +751,10 @@ run.bat lite menu                                 all of this as a menu (also op
 ```
 
 (`./run.sh lite ...` on Linux.) A lite computer doesn't need the whole program: each release also has
-**DiscordDriveLite.exe** for Windows (open it for the menu) and **discorddrive-lite_*.deb** for Debian,
-Ubuntu and Raspberry Pi OS (`discorddrive-lite`), which contain only this.
+**DDriveLite.exe** for Windows (open it for the menu) and **ddrive-lite_*.deb** for Debian,
+Ubuntu and Raspberry Pi OS (`ddrive-lite`), which contain only this.
 
-- **On the host**: the full DiscordDrive, running, with its dashboard reachable from the lite computer
+- **On the host**: the full DDrive, running, with its dashboard reachable from the lite computer
   (Settings → *On your network*, or your https domain). Lite signs in with 24 words, kept encrypted
   on the lite computer: the drive's recovery phrase shows the whole drive, the words of an
   [account](#accounts) show that account's own storage.
@@ -867,13 +889,13 @@ Devices stay in sync while they are running:
     `name (conflict xxxxxx).ext`.
   - Folders with the same name are merged.
   - If the same file is edited on two devices, the edit that reaches Discord last wins. The other
-    edit is kept as a version (`discorddrive versions <file>`).
+    edit is kept as a version (`ddrive versions <file>`).
   - **Deletes are final.** A deleted file or folder (with everything in it) disappears on every
     device and can't come back through another device's late upload or checkpoint. To get
     something back on purpose, use `deleted` / `undelete` or `versions` / `restore-version`.
 - Windows Explorer does not refresh open folders by itself; press F5 to see changes made elsewhere.
 
-**Upgrading from an older DiscordDrive:** update and start **one** device first. It converts its
+**Upgrading from an older DDrive:** update and start **one** device first. It converts its
 index and publishes it. Then update the others: they adopt the published index automatically. Any of
 their files that were still waiting to upload are kept and uploaded afterwards.
 
@@ -881,12 +903,12 @@ their files that were still waiting to upload are kept and uploaded afterwards.
 
 ## What is stored on your computer
 
-File contents live in Discord. Locally, DiscordDrive only uses:
+File contents live in Discord. Locally, DDrive only uses:
 
 | What | Location (data dir) | How long |
 |---|---|---|
 | Index (file list, versions) | `index.db` | Always; usually a few MB |
-| Files being written | `staging/` | Until the upload finishes, then deleted. Writing pauses when more than `staging_max_bytes` (10 GiB) is waiting to upload, and resumes as uploads finish. DiscordDrive **never takes the disk below `min_free_disk_bytes`** (2 GiB): if its own uploads can't free space, it refuses the write instead, so other programs on the machine keep running. A file must be complete before it can be split and encrypted, so this cannot be avoided. |
+| Files being written | `staging/` | Until the upload finishes, then deleted. Writing pauses when more than `staging_max_bytes` (10 GiB) is waiting to upload, and resumes as uploads finish. DDrive **never takes the disk below `min_free_disk_bytes`** (2 GiB): if its own uploads can't free space, it refuses the write instead, so other programs on the machine keep running. A file must be complete before it can be split and encrypted, so this cannot be avoided. |
 | Files being edited | `staging/` | An existing file is downloaded completely while it is open for writing, then removed after it is re-uploaded |
 | Viewed files (read cache) | `cache/` | **Disk mode (default):** kept up to `cache_max_bytes` (5 GiB) so re-opening is instant. **Memory mode:** never written to disk |
 | Offline-pinned files | `cache/` | Until you unpin them (`free-space`) |
@@ -904,7 +926,7 @@ so it is slower.
 ## How it works
 
 ```
- application ──► WinFsp / libfuse ──► DiscordDriveFS (fs.py)
+ application ──► WinFsp / libfuse ──► DDriveFS (fs.py)
                                          │
               ┌──────────────────────────┼─────────────────────────┐
               ▼                          ▼                         ▼
@@ -957,18 +979,30 @@ so it is slower.
 | `heal.py` | Rebuilding and repairing pieces, the background check, protecting old files, snapshots |
 | `web.py`, `web/` | The web dashboard (server and app) |
 | `accounts.py` | Accounts: sign-up, invites, and each account's own drive on the shared channel |
+| `legal.py` | The terms and the privacy policy the dashboard serves |
+| `legacy.py` | Keeps a computer working that was set up before the program was renamed |
 | `actions.py` | Restoring versions and snapshots (shared by the command line and the dashboard) |
-| `runtime.py` | Starting DiscordDrive again as a process (from source or as DiscordDrive.exe) |
+| `runtime.py` | Starting DDrive again as a process (from source or as DDrive.exe) |
 | `fuse_loader.py` | Finds WinFsp / libfuse and loads the vendored fusepy |
 
-You can try it without Discord: `python -m discorddrive mount --mock <folder>` stores "messages"
+You can try it without Discord: `python -m ddrive mount --mock <folder>` stores "messages"
 as files in `<folder>`.
 
 ---
 
 ## Updating
 
-In the menu choose **4 (Update DiscordDrive)**. It stops the drive, downloads the latest version,
+**Coming from a version before 2.0?** The program had another name then. Nothing has to be moved: a
+computer that was set up under the old name keeps using its config and data folders where they are,
+and the start-with-the-computer entry and the Explorer menu are renewed by themselves the next time
+the drive or the menu starts. What changed is what you type and what things are called: the folder
+inside the program is `ddrive` (`python -m ddrive`), the programs are `DDrive.exe`, `DDriveLite.exe`,
+`ddrive` and `ddrive-lite`, and the environment variables start with `DDRIVE_` (the old ones still
+work). If you wrote a systemd unit or a script of your own that names the old module, change it there.
+The repository moved too: point your clone at the new address with
+`git remote set-url origin https://github.com/xo907/ddrive.git`.
+
+In the menu choose **4 (Update DDrive)**. It stops the drive, downloads the latest version,
 starts the drive again and reopens the menu. Your settings, key and data are stored outside the
 program folder, so updating never touches them. (`git pull` alone isn't enough: a running drive
 keeps using the old version until it is restarted.)
@@ -977,7 +1011,7 @@ Copying the files over yourself instead of using `git` (e.g. from Windows with `
 Windows drops Linux's "executable" permission, so restore it, then restart the drive:
 
 ```bash
-chmod +x ~/DiscordDrive/run.sh ~/DiscordDrive/discorddrive/scripts/linux/*.sh
+chmod +x ~/DDrive/run.sh ~/DDrive/ddrive/scripts/linux/*.sh
 ```
 
 ---
@@ -986,7 +1020,7 @@ chmod +x ~/DiscordDrive/run.sh ~/DiscordDrive/discorddrive/scripts/linux/*.sh
 
 If the drive doesn't start, the start script now prints the reason. Otherwise the log is the first
 place to look; `log --errors` shows recent problems without hunting for the file:
-`%LOCALAPPDATA%\DiscordDrive\discorddrive.log` on Windows, `~/.local/share/DiscordDrive/discorddrive.log`
+`%LOCALAPPDATA%\DDrive\ddrive.log` on Windows, `~/.local/share/DDrive/ddrive.log`
 on Linux (background starts also write `mount.log` next to it).
 
 ### Windows
@@ -1022,7 +1056,7 @@ on Linux (background starts also write `mount.log` next to it).
   apt-get install -y -t "$(. /etc/os-release; echo $VERSION_CODENAME)" python3-cryptography
   ```
 - **`apt` wants to remove `fuse3`.** Don't let it: other software (Docker volumes, rclone, sshfs…)
-  may need it. DiscordDrive only needs the FUSE 2 *library* (`libfuse2`) and works with either
+  may need it. DDrive only needs the FUSE 2 *library* (`libfuse2`) and works with either
   `fuse` or `fuse3` tools. The installer keeps whichever one is installed.
 - **`E: Unable to locate package libfuse2t64`** (or `libfuse2`). The library was renamed:
   `libfuse2` on Debian 11/12 and Ubuntu up to 22.04, `libfuse2t64` on Debian 13+ and Ubuntu 24.04+.
@@ -1037,24 +1071,24 @@ on Linux (background starts also write `mount.log` next to it).
   and refuse writes (instead of filling the disk) when something else used the space. Update, then
   re-run the copy (rsync skips what is already there). On a small disk you can also lower the backlog: `config staging_max_bytes 2147483648`.
   If it still happens, check what is using the disk (`df -h /`, `du -sh ~/.cache`): when copying
-  *from* another cloud mount such as rclone, that mount's own cache can fill the disk. DiscordDrive's
+  *from* another cloud mount such as rclone, that mount's own cache can fill the disk. DDrive's
   log says so. Limit it, e.g. remount with `rclone mount ... --vfs-cache-mode minimal --vfs-cache-max-size 1G`.
   If you set `max_file_size`, give rsync the same limit with `--max-size=2G` so it *skips* larger
   files; otherwise rsync stops at the first one with "File too large".
   To make a long copy resume by itself after any error:
   ```bash
-  until rsync -rt --info=progress2 /source/ /mnt/discord/target/; do sleep 60; done
+  until rsync -rt --info=progress2 /source/ /mnt/ddrive/target/; do sleep 60; done
   ```
-- **`/mnt/discord` looks empty although the drive is running.** If your terminal was already
+- **`/mnt/ddrive` looks empty although the drive is running.** If your terminal was already
   *inside* that folder when the drive started, it keeps showing the plain folder underneath. Leave
-  and come back: `cd ~ && ls /mnt/discord`.
+  and come back: `cd ~ && ls /mnt/ddrive`.
 - **"already mounted" after an update.** The old version is still running. Update from the menu
   (option 4), which restarts it; see [Updating](#updating).
-- **Files appeared in `/mnt/discord` while the drive was stopped** (a program or container kept
+- **Files appeared in `/mnt/ddrive` while the drive was stopped** (a program or container kept
   writing there). They're handled automatically on the next start: moved aside, the drive mounts,
   and they're copied onto the drive. The log says how many.
 - **"Transport endpoint is not connected".** An earlier instance crashed. Starting again cleans
-  this up automatically, or run `fusermount -uz /mnt/discord` (`fusermount3 -uz` on FUSE 3 systems).
+  this up automatically, or run `fusermount -uz /mnt/ddrive` (`fusermount3 -uz` on FUSE 3 systems).
 
 ### All platforms
 
@@ -1090,7 +1124,7 @@ on Linux (background starts also write `mount.log` next to it).
 
   From Windows to a Linux machine in one step, without the key appearing on screen:
   ```powershell
-  (Get-Content "$env:APPDATA\DiscordDrive\config.json" | ConvertFrom-Json).encryption_key | ssh user@host 'read k; ~/DiscordDrive/run.sh setup -m /mnt/discord -k "$k"'
+  (Get-Content "$env:APPDATA\DDrive\config.json" | ConvertFrom-Json).encryption_key | ssh user@host 'read k; ~/DDrive/run.sh setup -m /mnt/ddrive -k "$k"'
   ```
 - **A file won't open ("I/O error", "invalid argument", or the player just stops).** Run
   `verify <path>` (or `verify` for the whole drive; it downloads everything once). It lists every
@@ -1118,6 +1152,21 @@ on Linux (background starts also write `mount.log` next to it).
   fingerprint …`, and the log says `Zero-knowledge AES-256-GCM encryption ACTIVE` at every start.
   In the Discord channel, attachments are named `chk_<random>.bin` with no message text.
 
+## Legal
+
+- **Not affiliated with Discord.** DDrive is an independent open-source project. It is not affiliated
+  with, endorsed by or sponsored by Discord Inc. "Discord" is a trademark of Discord Inc. and is used
+  in this document only to describe where the data is stored and what has to be set up there.
+- **Discord's terms apply to you.** You use your own bot and your own channel. Using Discord as file
+  storage, and the [Discord messages](#discord-messages) tool (which signs in with your own Discord
+  account), may be against Discord's Terms of Service. Whether to use them is your decision and your
+  risk; Discord can remove the data or the account at any time.
+- **If you give other people accounts, you are the one providing a service to them**, with whatever
+  duties that brings where you live (terms, privacy, handling reports about shared content). The
+  [terms and privacy policy](#accounts) the dashboard serves are there to help with that; they are not
+  legal advice. The authors of DDrive publish software and run none of the dashboards that use it.
+- **No warranty.** The software is provided as it is, under the MIT license below.
+
 ## License
 
-[MIT](LICENSE). The vendored `discorddrive/_vendor/fuse.py` keeps its original ISC license.
+[MIT](LICENSE). The vendored `ddrive/_vendor/fuse.py` keeps its original ISC license.

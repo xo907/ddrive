@@ -4,8 +4,8 @@ import time
 import unittest
 
 import helpers
-from discorddrive import codec
-from discorddrive.crypto import AuthenticationError, KeyRing, generate_key, password_keys
+from ddrive import codec
+from ddrive.crypto import AuthenticationError, KeyRing, generate_key, password_keys
 
 
 class CodecTest(unittest.TestCase):

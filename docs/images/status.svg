@@ -1,14 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="528" viewBox="0 0 800 528" role="img" aria-label="Example output of the DiscordDrive status command">
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="528" viewBox="0 0 800 528" role="img" aria-label="Example output of the DDrive status command">
   <rect width="800" height="528" rx="12" fill="#0d1117" stroke="#30363d"/>
   <path d="M12 0 h776 a12 12 0 0 1 12 12 v24 h-800 v-24 a12 12 0 0 1 12 -12 z" fill="#161b22"/>
   <circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
-  <text x="400" y="23" fill="#8b949e" font-size="13" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">user@server: ~/DiscordDrive</text>
+  <text x="400" y="23" fill="#8b949e" font-size="13" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">user@server: ~/DDrive</text>
   <g font-family="Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace" font-size="13.5" fill="#c9d1d9">
-    <text x="20" y="62"><tspan fill="#3fb950">user@server</tspan><tspan fill="#8b949e">:</tspan><tspan fill="#79c0ff">~/DiscordDrive</tspan><tspan fill="#8b949e">$ </tspan><tspan>./discorddrive.sh status</tspan></text>
+    <text x="20" y="62"><tspan fill="#3fb950">user@server</tspan><tspan fill="#8b949e">:</tspan><tspan fill="#79c0ff">~/DDrive</tspan><tspan fill="#8b949e">$ </tspan><tspan>./ddrive.sh status</tspan></text>
     <text x="20" y="84" fill="#8b949e">============================================================</text>
-    <text x="242" y="102" fill="#e6edf3" font-weight="700" text-anchor="middle">DiscordDrive Status</text>
+    <text x="242" y="102" fill="#e6edf3" font-weight="700" text-anchor="middle">DDrive Status</text>
     <text x="20" y="120" fill="#8b949e">============================================================</text>
-    <text x="20" y="140" fill="#8b949e" xml:space="preserve">Drive:</text><text x="168" y="140">/mnt/discord  <tspan fill="#3fb950">RUNNING (mounted)</tspan></text>
+    <text x="20" y="140" fill="#8b949e" xml:space="preserve">Drive:</text><text x="168" y="140">/mnt/ddrive  <tspan fill="#3fb950">RUNNING (mounted)</tspan></text>
     <text x="20" y="158" fill="#8b949e" xml:space="preserve">Encryption:</text><text x="168" y="158"><tspan fill="#3fb950">ON</tspan> (AES-256-GCM) | key fingerprint 4e1a9c07d2b3</text>
     <text x="20" y="176" fill="#8b949e" xml:space="preserve">Discord:</text><text x="168" y="176">connected as MyDriveBot, channel #drive</text>
     <text x="20" y="202" fill="#79c0ff">--- Your files (stored in Discord) ---</text>
@@ -25,7 +25,7 @@
     <text x="20" y="416" fill="#8b949e" xml:space="preserve">Read cache:</text><text x="168" y="416">memory only (up to 256.0 MB RAM), nothing stored on disk</text>
     <text x="20" y="434" fill="#8b949e" xml:space="preserve">Offline files:</text><text x="168" y="434">none</text>
     <text x="20" y="452" fill="#8b949e" xml:space="preserve">Upload queue:</text><text x="168" y="452">58.2 MB waiting to upload (limit 2.0 GB)</text>
-    <text x="20" y="470" fill="#8b949e" xml:space="preserve">Free disk space:</text><text x="168" y="470">6.1 GB (DiscordDrive always leaves 2.0 GB free)</text>
+    <text x="20" y="470" fill="#8b949e" xml:space="preserve">Free disk space:</text><text x="168" y="470">6.1 GB (DDrive always leaves 2.0 GB free)</text>
     <text x="20" y="488" fill="#8b949e" xml:space="preserve">Drive software:</text><text x="168" y="488">libfuse (libfuse.so.2)</text>
     <text x="20" y="508" fill="#8b949e">============================================================</text>
   </g>

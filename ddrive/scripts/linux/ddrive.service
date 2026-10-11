@@ -1,0 +1,24 @@
+# systemd *user* unit. Assumes the repository is at ~/DDrive;
+# ./run.sh -> Tools -> "start at boot" prints a command that rewrites the path for you.
+#   systemctl --user enable --now ddrive
+#   sudo loginctl enable-linger $USER     # keep it running without a login session
+[Unit]
+Description=DDrive encrypted Discord-backed drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/DDrive
+Environment=PYTHONPATH=%h/DDrive
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m ddrive mount
+# Unmounting makes the daemon flush uploads and back up the index before exiting.
+ExecStop=/usr/bin/python3 -m ddrive stop
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -6,12 +6,13 @@ import json
 import os
 import re
 import shutil
+import time
 import unittest
 import urllib.parse
 
 import helpers
-from discorddrive import accounts, codec, lite, words
-from discorddrive.crypto import AuthenticationError
+from ddrive import accounts, codec, lite, words
+from ddrive.crypto import AuthenticationError
 
 
 class AccountsTest(helpers.DriveTest):
@@ -167,6 +168,53 @@ class AccountsTest(helpers.DriveTest):
         self.assertEqual(self.req("POST", "/api/signin/phrase", {}, cookie=self.owner, headers={"Host": f"127.0.0.1:{self.web.port}"})[0], 200)
         self.assertEqual(self.req("POST", "/api/signin/phrase", {}, cookie=self.owner,
                                   headers={"Host": f"127.0.0.1:{self.web.port}", "X-Forwarded-For": "203.0.113.9"})[0], 403)
+
+    def test_terms_and_privacy_policy(self):
+        for path, title in (("/terms", b"Terms and conditions"), ("/privacy", b"Privacy policy")):
+            status, _, page = self.req("GET", path)                    # for anybody, signed in or not
+            self.assertEqual(status, 200)
+            self.assertIn(title, page)
+            self.assertIn(b"the operator of this site", page)          # until the owner says who that is
+        changes = {"operator_name": "Example Hosting Ltd", "operator_contact": "hello@example.com", "legal_region": "England and Wales"}
+        self.assertEqual(self.post("/api/settings", changes, self.owner)[0], 200)
+        terms, privacy = self.req("GET", "/terms")[2], self.req("GET", "/privacy")[2]
+        for text in (b"Example Hosting Ltd", b"hello@example.com"):
+            self.assertIn(text, terms)
+            self.assertIn(text, privacy)
+        self.assertIn(b"governed by the law of England and Wales", terms)
+        self.assertIn(b"up to 5 GB", terms)                            # what an account may store, from the settings
+        self.d.cfg.operator_name = "<script>alert(1)</script>"
+        self.assertNotIn(b"<script>alert", self.req("GET", "/terms")[2])
+        self.assertEqual(self.get("/api/accounts", self.owner)[1]["legal"]["operator_contact"], "hello@example.com")
+        # they are linked where people sign in and where they make an account
+        self.d.cfg.signup_mode = "public"
+        self.assertIn(b'href="/privacy"', self.req("GET", "/")[2])
+        self.assertIn(b'href="/terms"', self.req("GET", "/signup")[2])
+        self.assertIn(b'name="agreed"', self.req("POST", "/signup", "step=new")[2])
+        cookie, _ = self.sign_up()
+        self.assertEqual(self.post("/api/settings", {"operator_name": "Mallory"}, cookie)[0], 403)
+
+    def test_what_an_account_does_is_not_in_the_owners_log(self):
+        from ddrive import logbuf
+        logbuf.install(None)
+        self.d.cfg.signup_mode = "public"
+        self.acc.background = True                                     # as in a running drive: an account's own threads
+        self.addCleanup(setattr, self.acc, "background", False)
+        self.web.accounts.start()
+        cookie, _ = self.sign_up()
+        self.assertEqual(self.put(cookie, "/secret plans.txt", b"x" * 3000), 200)
+        acct = self.opened(cookie)
+        self.assertTrue(acct.uploader.wait_idle(20))
+        for _ in range(100):
+            if not acct.index.unsynced_ids():
+                break
+            time.sleep(0.1)
+        self.assertEqual(acct.index.unsynced_ids(), [])                # uploaded, by the account's uploader
+        self.write(self.d, "/owner file.txt", b"y" * 3000)
+        self.upload(self.d)
+        lines = " ".join(r["m"] for r in logbuf.BUFFER.since(0, 5000))
+        self.assertIn("owner file.txt", lines)
+        self.assertNotIn("secret plans", lines)
 
     # ------------------------------------------------------------ what an account has, and hasn't
     def test_storage_of_its_own(self):

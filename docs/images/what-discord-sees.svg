@@ -11,7 +11,7 @@
   <!-- left: your drive -->
   <rect x="30" y="30" width="400" height="340" rx="12" fill="#161b22" stroke="#30363d"/>
   <text x="50" y="62" fill="#e6edf3" font-size="16" font-weight="700">What you see</text>
-  <text x="168" y="62" fill="#8b949e" font-size="13">Z:\ or /mnt/discord</text>
+  <text x="168" y="62" fill="#8b949e" font-size="13">Z:\ or /mnt/ddrive</text>
   <line x1="30" y1="76" x2="430" y2="76" stroke="#30363d"/>
   <g font-size="13.5" fill="#c9d1d9">
     <use href="#folder" x="50" y="92"/><text x="76" y="105">Music</text>
@@ -59,7 +59,7 @@
 
     <rect x="548" y="300" width="364" height="52" rx="6" fill="#1c2129" stroke="#d29922" stroke-opacity="0.6"/>
     <text x="560" y="320" fill="#d29922" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">PINNED</text>
-    <text x="612" y="320" fill="#c9d1d9" font-size="11.5">DISCORDDRIVE_INDEX ENC_V3 …</text>
+    <text x="612" y="320" fill="#c9d1d9" font-size="11.5">DDRIVE_INDEX ENC_V3 …</text>
     <use href="#file" x="560" y="327"/><text x="582" y="340" fill="#9ea8ff">idx_51c2e8a90f3b77d4.bin</text>
   </g>
 

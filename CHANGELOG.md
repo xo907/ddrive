@@ -1,7 +1,27 @@
 # Changelog
 
-Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
+Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
+
+## 2.0.0 (2026-10-11)
+
+- **The program is now called DDrive.** The name, the programs (`DDrive.exe`, `DDriveLite.exe`,
+  `ddrive`, `ddrive-lite`), the module (`python -m ddrive`), the service file, the environment
+  variables (`DDRIVE_...`) and the repository (github.com/xo907/ddrive) changed. DDrive is not
+  affiliated with Discord Inc.; the README says so, and what using Discord for storage means.
+- Nothing has to be moved after updating. A computer set up under the earlier name keeps its config
+  and data folders where they are, its drive and everything on it stay readable, the old environment
+  variables still work, and the start-with-the-computer entry and Explorer menu are renewed the next
+  time the drive or the menu starts. Only a systemd unit or script of your own that names the old
+  module needs changing by hand. The drive's label becomes "DDrive" unless you chose another.
+- **Terms and privacy policy.** The dashboard serves `/terms` and `/privacy`, linked from the sign-in
+  and sign-up pages, and making an account requires agreeing to them. They describe what the program
+  really does with an account's data and name whoever runs the dashboard: fill in who that is, a
+  contact address and the governing law under Settings, Accounts. They are a starting point, not
+  legal advice.
+- What an account does is no longer written to the owner's log (file names showed up there). Error
+  messages are still logged.
+- README: new screenshots, an Accounts section with the above, and a Legal section.
 
 ## 1.5.0 (2026-10-11)
 
@@ -23,7 +43,7 @@ list under the account menu, "What's new".
 - The password that remains is for other apps over WebDAV only (Settings, Sign-in, "Password for
   other apps", or `webdav-password`; `web-password` still works as a name for it). It never opens the
   dashboard, and changing it no longer signs browsers out.
-- DiscordDrive Lite signs in with 24 words too: `lite connect` asks for them. Run it once more on
+- DDrive Lite signs in with 24 words too: `lite connect` asks for them. Run it once more on
   computers that were connected with a name and password. With an account's words it shows that
   account's storage.
 - `unprotect --forgot` asks for the recovery phrase (it used to take the dashboard password as well).
@@ -75,11 +95,11 @@ list under the account menu, "What's new".
   drive for this to take effect.
 - Lite: `lite autostart on|off` shows the host's drive by itself when the computer starts; `lite menu`
   (and option 13 of the main menu) offers everything as a menu; and releases now also carry
-  lite-only downloads, DiscordDriveLite.exe and discorddrive-lite_*.deb.
+  lite-only downloads, DDriveLite.exe and ddrive-lite_*.deb.
 
 ## 1.4.0 (2026-10-10)
 
-- DiscordDrive Lite: use a drive that runs on another computer, on Windows and Linux. `lite connect
+- DDrive Lite: use a drive that runs on another computer, on Windows and Linux. `lite connect
   <address>` signs in to the host's dashboard (its user name and password), `lite mount` shows the
   host's drive as a drive letter or folder, `lite stop` takes it away; `lite ls`, `get` and `put` list,
   download and upload without mounting. The lite computer holds no bot, key, index or copy of the

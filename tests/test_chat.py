@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 
 import helpers
-from discorddrive import chat, chatlog, chatstore, ws
+from ddrive import chat, chatlog, chatstore, ws
 import test_web
 
 ME = {"id": "100", "username": "dennis", "global_name": "Dennis"}

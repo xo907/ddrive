@@ -10,9 +10,9 @@ import unittest
 import urllib.parse
 
 import helpers
-from discorddrive import passkeys as pk
-from discorddrive import words
-from discorddrive.crypto import parse_key
+from ddrive import passkeys as pk
+from ddrive import words
+from ddrive.crypto import parse_key
 
 
 # ------------------------------------------------------------------ a pretend authenticator

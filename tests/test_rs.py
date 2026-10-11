@@ -4,7 +4,7 @@ import random
 import unittest
 
 import helpers  # noqa: F401  (puts the project on sys.path)
-from discorddrive import rs
+from ddrive import rs
 
 
 class ReedSolomonTest(unittest.TestCase):

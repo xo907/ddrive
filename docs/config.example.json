@@ -2,7 +2,7 @@
   "bot_token": "",
   "channel_id": "",
   "mount_point": "Z:",
-  "volume_name": "DiscordDrive",
+  "volume_name": "DDrive",
   "chunk_size": 9437184,
   "data_dir": "",
   "cache_max_bytes": 5368709120,
@@ -45,5 +45,8 @@
   "web_token": "",
   "signup_mode": "closed",
   "account_quota_bytes": 5368709120,
-  "accounts_max": 100
+  "accounts_max": 100,
+  "operator_name": "",
+  "operator_contact": "",
+  "legal_region": ""
 }

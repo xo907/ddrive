@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DiscordDrive - Made by XO.ST - https://github.com/xo907/discord-drive
+# DDrive - Made by XO.ST - https://github.com/xo907/ddrive
 #   ./run.sh              opens the menu
 #   ./run.sh <command>    runs a command directly, e.g.  ./run.sh status
 # Everything is inside { } so bash reads the whole file before an update can replace it.
@@ -12,10 +12,10 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 if [ $# -gt 0 ]; then
-    exec python3 -m discorddrive "$@"
+    exec python3 -m ddrive "$@"
 fi
 while true; do
-    python3 -m discorddrive menu
+    python3 -m ddrive menu
     code=$?
     [ "$code" -eq 75 ] || exit "$code"
 done

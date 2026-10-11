@@ -10,7 +10,7 @@ import urllib.parse
 import zipfile
 
 import helpers
-from discorddrive import locks, words
+from ddrive import locks, words
 
 STRANGER = words.key_to_phrase(os.urandom(32))       # 24 valid words that belong to nobody
 
@@ -334,7 +334,7 @@ class WebTest(helpers.DriveTest):
     def test_activity_log_and_changelog(self):
         import logging
         self.login()
-        logging.getLogger("discorddrive.test").warning("a line for the log tab")
+        logging.getLogger("ddrive.test").warning("a line for the log tab")
         lines = json.loads(self.req("GET", "/api/log")[2])["lines"]
         self.assertTrue(any(l["m"] == "a line for the log tab" and l["l"] == "WARNING" for l in lines))
         after = lines[-1]["i"]
@@ -469,7 +469,7 @@ class WebTest(helpers.DriveTest):
             pi_web.stop()
 
     def test_old_links_are_published(self):
-        from discorddrive.shares import Shares
+        from ddrive.shares import Shares
         self.d.index.kv_set("shares", json.dumps({"oldlink": {"u": "x", "d": False, "c": 1, "e": None, "pw": "",
                                                                "dl": True, "v": 3}}))
         sh = Shares(self.d.index, "aaaa")
@@ -525,7 +525,7 @@ class WebTest(helpers.DriveTest):
 
     def test_clear_the_log(self):
         self.login()
-        logging.getLogger("discorddrive.test").warning("something worth clearing")
+        logging.getLogger("ddrive.test").warning("something worth clearing")
         first = json.loads(self.req("GET", "/api/log")[2])
         self.assertIn("something worth clearing", " ".join(r["m"] for r in first["lines"]))
         self.assertEqual(self.req("POST", "/api/log/clear", {})[0], 200)
@@ -533,10 +533,10 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(after["gen"], first["gen"] + 1)
         self.assertEqual([r["m"] for r in after["lines"]], ["The log was cleared."])
         # the file being emptied from the terminal is noticed too
-        from discorddrive.logbuf import BUFFER, clear_file
+        from ddrive.logbuf import BUFFER, clear_file
         path = os.path.join(self.tmp, "drive.log")
         with open(path, "w") as f:
-            f.write("12:00:00 [INFO] discorddrive.x: a line\n" * 50)
+            f.write("12:00:00 [INFO] ddrive.x: a line\n" * 50)
         BUFFER._file_size = None
         BUFFER.follow_file(path)
         self.assertEqual(BUFFER.gen, after["gen"])
@@ -660,8 +660,8 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("POST", "/api/upload?path=%2FPrivate%2Fx.txt", body=b"x")[0], 404)
         status = json.loads(self.req("GET", "/api/status")[2])
         self.assertEqual(status["locks"], {"count": 1, "open": 0})
-        logging.getLogger("discorddrive.test").warning("Successfully uploaded /Private/diary.txt")
-        logging.getLogger("discorddrive.test").warning("Successfully uploaded /Public/readme.txt")
+        logging.getLogger("ddrive.test").warning("Successfully uploaded /Private/diary.txt")
+        logging.getLogger("ddrive.test").warning("Successfully uploaded /Public/readme.txt")
         lines = " ".join(r["m"] for r in json.loads(self.req("GET", "/api/log")[2])["lines"])
         self.assertNotIn("diary", lines)
         self.assertIn("/Public/readme.txt", lines)

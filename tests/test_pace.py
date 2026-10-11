@@ -4,8 +4,8 @@ import unittest
 from unittest import mock
 
 import helpers  # noqa: F401
-from discorddrive import discord_api
-from discorddrive.discord_api import API_BASE, DiscordAPI, Pacer
+from ddrive import discord_api
+from ddrive.discord_api import API_BASE, DiscordAPI, Pacer
 
 
 class FakeTime:

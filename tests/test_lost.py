@@ -19,7 +19,7 @@ class LostPiecesTest(helpers.DriveTest):
         self.assertEqual(d.healer.lost_files(), [])
         d.backend.delete(new[0])                                          # Discord loses a piece of the file...
         d.backend.delete(old[0])                                          # ...and one of its earlier version
-        with self.assertLogs("discorddrive.heal", "WARNING") as logs:
+        with self.assertLogs("ddrive.heal", "WARNING") as logs:
             self.assertIsNone(d.healer.recover(new[0]))
             self.assertIsNone(d.healer.recover(old[0]))
             self.assertIsNone(d.healer.recover(new[0]))                   # said once, not on every read

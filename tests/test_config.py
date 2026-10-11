@@ -7,8 +7,8 @@ import tempfile
 import unittest
 
 import helpers  # noqa: F401  (puts the project on the path)
-from discorddrive import secretbox
-from discorddrive.config import SECRET_FIELDS, Config
+from ddrive import secretbox
+from ddrive.config import SECRET_FIELDS, Config
 
 TOKEN = "MTIzNDU2.bot-token.secret"
 KEY = "ab" * 32
@@ -18,8 +18,8 @@ class ConfigProtectionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="dd-cfg-")
         self.path = os.path.join(self.tmp, "config.json")
-        self.env = {k: os.environ.get(k) for k in ("DISCORDDRIVE_CONFIG", "XDG_DATA_HOME")}
-        os.environ["DISCORDDRIVE_CONFIG"] = self.path
+        self.env = {k: os.environ.get(k) for k in ("DDRIVE_CONFIG", "XDG_DATA_HOME")}
+        os.environ["DDRIVE_CONFIG"] = self.path
         os.environ["XDG_DATA_HOME"] = os.path.join(self.tmp, "data")      # where Linux keeps machine.key
 
     def tearDown(self):
@@ -121,6 +121,37 @@ class ConfigProtectionTest(unittest.TestCase):
 
     def test_all_secret_fields_exist(self):
         self.assertTrue(all(hasattr(Config(), k) for k in SECRET_FIELDS))
+
+    def test_a_computer_set_up_before_the_rename_keeps_working(self):
+        from ddrive import config, legacy
+        base = os.path.join(self.tmp, "appdata")
+        self.assertEqual(legacy.app_dir(base, "DDrive"), os.path.join(base, "DDrive"))          # a new installation
+        os.makedirs(os.path.join(base, legacy.OLD))
+        self.assertEqual(legacy.app_dir(base, "DDrive"), os.path.join(base, legacy.OLD))        # its folder is used where it is
+        os.makedirs(os.path.join(base, "DDrive"))
+        self.assertEqual(legacy.app_dir(base, "DDrive"), os.path.join(base, "DDrive"))
+        # the old environment variables still say where the config is and which bot to use
+        del os.environ["DDRIVE_CONFIG"]
+        old = legacy.OLD_ENV + "CONFIG"
+        os.environ[old] = self.path
+        self.addCleanup(os.environ.pop, old, None)
+        self.assertEqual(config.config_path(), self.path)
+        os.environ[legacy.OLD_ENV + "TOKEN"] = "old-way"
+        self.addCleanup(os.environ.pop, legacy.OLD_ENV + "TOKEN", None)
+        Config(channel_id="1", volume_name=legacy.OLD, protect_config=False).save(self.path)
+        cfg = Config.load()
+        self.assertEqual((cfg.bot_token, cfg.volume_name), ("old-way", "DDrive"))               # and the drive gets its new label
+        os.environ["DDRIVE_TOKEN"] = "new-way"
+        self.addCleanup(os.environ.pop, "DDRIVE_TOKEN", None)
+        self.assertEqual(Config.load().bot_token, "new-way")
+        Config(channel_id="1", volume_name="Holiday", protect_config=False).save(self.path)
+        self.assertEqual(Config.load().volume_name, "Holiday")                                  # a label somebody chose stays
+        # the running drive of the old version is still found, to stop it
+        data = os.path.join(self.tmp, "d")
+        os.makedirs(data)
+        self.assertTrue(legacy.pid_file(data, "ddrive.pid").endswith("ddrive.pid"))
+        open(os.path.join(data, legacy.OLD_PID), "w").close()
+        self.assertTrue(legacy.pid_file(data, "ddrive.pid").endswith(legacy.OLD_PID))
 
 
 if __name__ == "__main__":

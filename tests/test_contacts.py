@@ -3,7 +3,7 @@
 import unittest
 
 import helpers  # noqa: F401
-from discorddrive import contacts
+from ddrive import contacts
 
 IPHONE = (
     "BEGIN:VCARD\r\nVERSION:3.0\r\nPRODID:-//Apple Inc.//iPhone OS 17.0//EN\r\n"
