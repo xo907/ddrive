@@ -6,7 +6,7 @@ import re
 found = False
 for path in glob.glob("android/*/build/test-results/**/*.xml", recursive=True):
     text = open(path, encoding="utf-8").read()
-    for name, body in re.findall(r'<testcase name="([^"]+)"[^>]*>(.*?)</testcase>', text, re.S):
+    for name, body in re.findall(r'<testcase name="([^"]+)"[^>]*[^/]>(.*?)</testcase>', text, re.S):       # (not the ones that passed: <testcase ... />)
         m = re.search(r'<(?:failure|error) message="([^"]*)"', body)
         if m:
             found = True

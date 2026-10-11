@@ -233,7 +233,7 @@ class AgentTest {
         assertTrue(passes <= 2, "passes: $passes")
         put("two.jpg", "2".toByteArray())        // a new photo: it goes by itself
         until("the new file going up") { remote("/Live/two.jpg") }
-        assertTrue(history(id)!!.length() > passes)
+        until("that pass being over") { history(id)!!.length() > passes }       // (the file is on the host before the pass ends)
     }
 
     @Test
