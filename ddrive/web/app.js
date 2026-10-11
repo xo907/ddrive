@@ -1387,6 +1387,25 @@ async function repairFromCopies(paths, all) {
   await refreshStatus();
 }
 
+async function recheckLost(btn) {
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  const r = await attempt(() => api("/api/repair/recheck", {}));
+  if (r) {
+    const fixed = r.readable + r.repaired;
+    toast(fixed ? `${r.readable ? plural(r.readable, "part") + " can be read after all" : ""}${r.readable && r.repaired ? ", " : ""}${r.repaired ? plural(r.repaired, "part") + " uploaded again from this computer" : ""}${r.left ? `; ${r.left} still listed` : ": nothing is damaged"}`
+                : "Checked again: these parts are still missing");
+  }
+  await refreshStatus();
+  if (route.name === "health") renderHealth(true);
+}
+
+async function forgetLost() {
+  if (!await ask({ title: "Clear this list?", ok: "Clear the list", danger: true,
+                   text: "Nothing is repaired by this. A part that is still missing is listed again the next time its file is opened or the background check comes by. Use Check again first." })) return;
+  if (await attempt(() => api("/api/repair/recheck", { forget: true }), "List cleared")) { await refreshStatus(); if (route.name === "health") renderHealth(true); }
+}
+
 function renderHealth(quiet) {
   if (!status) { if (!quiet) page(h("h1", {}, "Health"), h("p", { class: "lede" }, "Connecting to the drive…")); return; }
   const st = status.stats, hl = status.health, sc = hl.scrub || {}, sv = status.saved || {};
@@ -1419,6 +1438,10 @@ function renderHealth(quiet) {
     (hl.lost || []).length ? [
       h("h2", { class: "warn-text" }, "Parts that can't be repaired"),
       h("p", { class: "muted", style: "margin:0 0 12px;max-width:680px" }, "A part of these is gone from Discord (or unreadable) and there were not enough spare pieces to rebuild it. A damaged file can be replaced by an earlier version or a snapshot copy if one is intact, or by putting it on the drive again from another copy."),
+      h("div", { class: "heal-fix" },
+        h("span", {}, h("b", {}, "Check again. "), "Asks Discord for each of these parts once more. A part that can be read after all comes off the list, and one this computer still has a copy of is uploaded again."),
+        h("button", { class: "btn small", type: "button", onclick: (e) => recheckLost(e.currentTarget) }, "Check again"),
+        h("button", { class: "btn ghost small", type: "button", onclick: forgetLost }, "Clear the list")),
       // Always said, also when nothing can be done, so it is clear where the option is and why it isn't offered.
       damagedFiles.length ? h("div", { class: "heal-fix" },
         h("span", {}, h("b", {}, "Bring back from a snapshot or an earlier version. "),

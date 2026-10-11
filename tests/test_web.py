@@ -128,6 +128,37 @@ class WebTest(helpers.DriveTest):
                          ([("/Docs/c.txt", "snapshot")], ["/Docs/b.txt", "/Docs/new.txt"]))
         self.assertEqual(self.read(d, "/Docs/c.txt"), b"c as it was in the snapshot" * 300)
 
+    def test_checking_lost_parts_again(self):
+        self.login()
+        d = self.d
+        post = lambda body: json.loads(self.req("POST", "/api/repair/recheck", body)[2])
+        lost = lambda: [e["path"] for e in json.loads(self.req("GET", "/api/status")[2])["health"]["lost"]]
+        d.cfg.parity_enabled, d.cfg.dedup = False, False
+        for name in ("there", "cached", "gone"):
+            self.write(d, f"/{name}.bin", name.encode() * 4000)
+        self.upload(d)
+        d.cache.free_space(force=True)
+        self.read(d, "/cached.bin", cold=False)                        # this computer has a copy of this one
+        mid = lambda name: d.index.get_chunks(d.index.resolve(f"/{name}.bin")["id"])[0]["message_id"]
+        path = d.backend._p(mid("there"), "bin")
+        with open(path, "rb") as f:
+            stored = f.read()
+        for name in ("there", "gone", "cached"):
+            d.backend.delete(mid(name))
+            d.healer._note_lost(mid(name))
+        with open(path, "wb") as f:                                    # Discord has this one after all
+            f.write(stored)
+        d.healer._lost_list = (0.0, [])
+        self.assertEqual(sorted(lost()), ["/cached.bin", "/gone.bin", "/there.bin"])
+        r = post({})                                                   # no waiting for the background's turn
+        self.assertEqual((r["readable"], r["repaired"], r["left"]), (1, 1, 1))
+        self.assertEqual(lost(), ["/gone.bin"])
+        self.assertEqual(self.read(d, "/cached.bin"), b"cached" * 4000)     # stored again, readable from Discord
+        self.assertEqual(self.read(d, "/there.bin"), b"there" * 4000)
+        self.assertEqual(post({})["left"], 1)
+        self.assertEqual(post({"forget": True})["forgotten"], 1)       # the list can be emptied by hand
+        self.assertEqual(lost(), [])
+
     def test_tidying_up(self):
         self.login()
         post = lambda what: json.loads(self.req("POST", "/api/resources/clean", {"what": what})[2])

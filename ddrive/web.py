@@ -898,6 +898,31 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             d.healer._lost_list = (0.0, [])
         self._json({"ok": True, "repaired": done, "without": without})
 
+    def _post_api_repair_recheck(self):
+        """Health, "Check again": ask Discord once more for every part listed as lost. What can be read after
+        all comes off the list, what this computer still holds is uploaded again. With `forget`, the list is
+        emptied instead (what is still missing is listed again when it is next read or checked)."""
+        d = self.drive
+        if d.healer is None:
+            raise ApiError(503, "Not available")
+        if self._body_json().get("forget"):
+            n = d.healer.forget_lost()
+            log.info("Web dashboard: the list of parts that can't be repaired was cleared (%d).", n)
+            return self._json({"ok": True, "forgotten": n})
+        report = {}
+        d.healer.recheck_lost(limit=500, force=True, report=report)
+        d.healer.drain()
+        try:
+            d.journal.sync_once()                # a part that was uploaded again takes its place right away
+        except Exception as e:
+            log.debug("after re-checking: %s", e)
+        d.healer._lost_list = (0.0, [])
+        left = d.healer.lost_files()
+        log.info("Web dashboard: parts listed as lost were checked again: %d readable after all, %d uploaded again from "
+                 "this computer, %d still missing.", report["readable"], report["repaired"],
+                 len({(e["kind"], e["path"], e["at"]) for e in left}))
+        self._json({"ok": True, "readable": report["readable"], "repaired": report["repaired"], "left": len(left)})
+
     def _post_api_resources_clean(self):
         """The buttons on the Resources page."""
         what = self._body_json().get("what")

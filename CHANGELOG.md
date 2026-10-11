@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.0.2 (2026-10-11)
+
+- Health, "Parts that can't be repaired", has a **Check again** button: it asks Discord for every
+  listed part right away instead of waiting for the background's turn. A part that can be read after
+  all comes off the list, one this computer still holds is uploaded again, and it says how many of
+  each and how many are still missing. **Clear the list** empties it by hand; a part that is still
+  missing is listed again the next time its file is opened or checked.
+
 ## 2.0.1 (2026-10-11)
 
 - Health no longer calls a file damaged that plays fine. A piece was listed as lost the first time

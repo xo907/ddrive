@@ -206,18 +206,22 @@ class Healer:
         self.schedule_repair(mid, data)
         return data
 
-    def recheck_lost(self, limit=20, now=None):
+    def recheck_lost(self, limit=20, now=None, force=False, report=None):
         """Look again at pieces noted as lost: one that can be read after all (the request that failed was a
         passing problem) is taken off the list, one this computer still holds is uploaded again. Each piece
-        is looked at after 5 minutes, then less and less often. Returns how many were cleared or repaired."""
+        is looked at after 5 minutes, then less and less often; `force` looks at all of them now (the
+        dashboard's "Check again"). Returns how many were cleared or repaired; `report`, a dict, gets
+        "readable" and "repaired" counted separately."""
         now = time.time() if now is None else now
         lost = self._lost()
         done = 0
+        report = {} if report is None else report
+        report.update(readable=0, repaired=0)
         for mid in list(lost)[:max(1, limit) * 10]:
             if done >= limit:
                 break
             times, due = self._rechecked.get(mid, (0, lost[mid] + 300))
-            if now < due or not self.index.is_referenced(mid):
+            if (now < due and not force) or not self.index.is_referenced(mid):
                 continue
             self._rechecked[mid] = (times + 1, now + min(6 * 3600, 300 * 2 ** (times + 1)))
             try:
@@ -234,9 +238,11 @@ class Healer:
                     log.info("Piece %s can be read after all%s: it is no longer listed as damaged.", mid,
                              f" ({', '.join(names)})" if names else "")
                     done += 1
+                    report["readable"] += 1
                 elif self._from_this_computer(mid) is not None:
                     self._lost_list = (0.0, [])
                     done += 1
+                    report["repaired"] += 1
             except DiscordError as e:
                 log.debug("re-checking lost pieces: %s", e)
                 break
@@ -288,6 +294,17 @@ class Healer:
                         "than before.", names(use["protects"]), "file is" if len(use["protects"]) == 1 else "files are")
         if not any(use.values()):
             log.error("Piece %s can't be read and can't be rebuilt (%s).", mid, why)
+
+    def forget_lost(self):
+        """Empty the list of lost pieces. Nothing is repaired by this: a piece that is still missing is
+        listed again the next time it is read or checked. Returns how many were listed."""
+        n = len(self._lost())
+        self.index.kv_set("lost_pieces", "{}")
+        with self._lock:
+            self._lost_logged.clear()
+        self._rechecked.clear()
+        self._lost_list = (0.0, [])
+        return n
 
     def lost_files(self, max_age=0.0):
         """Files (and earlier versions, and snapshot copies) with a part that can't be repaired, as they are now:

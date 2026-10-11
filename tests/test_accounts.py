@@ -285,7 +285,7 @@ class AccountsTest(helpers.DriveTest):
                      "/api/accounts", "/api/check", "/api/nonsense"):
             self.assertEqual(self.get(path, cookie)[0], 403, path)
         for path, body in (("/api/settings", {"signup_mode": "public"}), ("/api/settings", {"web_lan": True}),
-                           ("/api/log/clear", {}), ("/api/resources/clean", {"what": "cache"}), ("/api/repair", {"all": True}),
+                           ("/api/log/clear", {}), ("/api/resources/clean", {"what": "cache"}), ("/api/repair", {"all": True}), ("/api/repair/recheck", {}),
                            ("/api/pin", {"path": "/", "on": True}), ("/api/check/start", {"path": "/"}),
                            ("/api/sync/save", {"job": {}}), ("/api/sync/remote-edit", {"on": True}),
                            ("/api/signin/phrase", {}), ("/api/signin/passkey/options", {}), ("/api/webdav/password", {"password": "12345678"}),
