@@ -3,6 +3,14 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.3 (2026-10-11)
+
+- Resources is its own page in the menu, under Health (Drive): processor, memory, disk, the drive's
+  own files against their limits, and what it is doing right now. It was a section at the bottom of
+  Health, where it was easy to miss.
+- When the running drive is older than the page (the files were updated but the drive wasn't
+  restarted), the page now says so instead of showing nothing.
+
 ## 1.4.2 (2026-10-11)
 
 - Health shows what the drive uses on the computer it runs on, under "This computer": processor
