@@ -3,6 +3,13 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.6 (2026-10-10)
+
+- Messages: a new option, **Attachments only**, for the live logger and for an archive (each has its
+  own switch). Only messages that have files are taken, the files are saved to the drive, and the
+  text is not kept: no conversation, just the media. Messages without a file are left out. Text that
+  was already saved before stays as it is.
+
 ## 1.3.5 (2026-10-10)
 
 - Messages → Saved updates by itself: new, edited and deleted messages appear within a few seconds,

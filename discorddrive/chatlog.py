@@ -40,14 +40,22 @@ DEFAULT_RULES = {
     "captureOthers": True,
     "keywords": [],
     "downloadAttachments": False,
+    "attachmentsOnly": False,    # only messages with files, saved without their text
 }
+
+
+def without_text(store, m):
+    """A message as it is kept in "attachments only" mode: its files, not what was written. Text that
+    was kept earlier (before the mode was switched on) is left as it is."""
+    kept = store.get(m["id"])
+    return dict(m, content=kept["content"] if kept is not None else "", embeds=[])
 
 
 def clean_rules(raw):
     raw = raw if isinstance(raw, dict) else {}
     rules = dict(DEFAULT_RULES)
     rules["scope"] = "custom" if raw.get("scope") == "custom" else "all"
-    for key in ("allDms", "captureMine", "captureOthers", "downloadAttachments"):
+    for key in ("allDms", "captureMine", "captureOthers", "downloadAttachments", "attachmentsOnly"):
         if key in raw:
             rules[key] = bool(raw[key])
     sel = raw.get("selection") if isinstance(raw.get("selection"), dict) else {}
@@ -160,7 +168,12 @@ class Logger:
         if not m.get("author") or not m.get("id") or not self._matches(m):
             return
         chat = self.chat
-        if self.rules["downloadAttachments"] and m.get("attachments"):
+        media_only = self.rules["attachmentsOnly"]
+        if media_only:
+            if not m.get("attachments"):
+                return
+            m = without_text(chat.store, m)
+        if (media_only or self.rules["downloadAttachments"]) and m.get("attachments"):
             chat.store.save_attachments(chat.api, m)
         gid = m.get("guild_id")
         if gid and chat.store.channel(m["channel_id"]) is None and gid not in self._looked_up:
@@ -179,6 +192,8 @@ class Logger:
         stored = store.get(m["id"])
         if stored is None:
             return self._create(m)
+        if self.rules["attachmentsOnly"]:            # the text isn't being kept, so neither are changes to it
+            return
         store.save_edit(m["id"], parse_ts(m.get("edited_timestamp")) or now_ms(), stored["content"], m["content"])
 
     def _dispatch(self, kind, data):
@@ -263,7 +278,8 @@ class Archiver:
                 "id": secrets.token_hex(4), "status": "running", "started": time.time(), "finished": None, "error": None,
                 "config": {"targets": targets, "scope": config.get("scope") if config.get("scope") in ("mine", "others") else "both",
                            "userIds": [str(p) for p in people][:200], "after": when(config.get("after")),
-                           "before": when(config.get("before")), "downloadAttachments": bool(config.get("downloadAttachments"))},
+                           "before": when(config.get("before")), "downloadAttachments": bool(config.get("downloadAttachments")),
+                           "attachmentsOnly": bool(config.get("attachmentsOnly"))},
                 "channels": None, "index": 0, "cursor": None, "log": [],
                 "stats": {"channelsTotal": 0, "channelsDone": 0, "scanned": 0, "saved": 0, "files": 0, "current": None},
             }
@@ -372,7 +388,11 @@ class Archiver:
                             continue
                         if only and author not in only:
                             continue
-                        if cfg["downloadAttachments"] and m.get("attachments"):
+                        if cfg.get("attachmentsOnly"):
+                            if not m.get("attachments"):
+                                continue
+                            m = without_text(store, m)
+                        if (cfg["downloadAttachments"] or cfg.get("attachmentsOnly")) and m.get("attachments"):
                             stats["files"] += store.save_attachments(api, m, ch["guildId"], self._stop)
                         if store.save_message(m, "archive", me, guild_id=ch["guildId"]):
                             saved_here += 1

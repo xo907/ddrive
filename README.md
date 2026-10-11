@@ -623,11 +623,11 @@ place where everything is stored, so it is encrypted, on all your devices, and c
 
 - **Archive** reads conversations back through their history: whole servers, chosen channels, direct
   messages and group chats; everyone's messages or only yours or theirs, a date range, with or without
-  the attachments. It can be stopped and carried on, carries on by itself after a restart, and
+  the attachments, or the attachments only (the files without the conversation). It can be stopped and carried on, carries on by itself after a restart, and
   archiving the same conversation again only adds what is new.
 - **Live logger** records messages as they arrive and keeps the original text of ones that are later
   edited or deleted. Record everything you can see or only what you pick; set keyword alerts; save
-  attachments as they are posted. It listens invisibly (your status doesn't change), reconnects by
+  attachments as they are posted, or only the attachments. It listens invisibly (your status doesn't change), reconnects by
   itself, and starts again with the drive.
 - **Saved** is where you read it: search, filter (deleted, edited, keyword hits, with files, yours, one
   conversation) and export as a web page, JSON, CSV or text.

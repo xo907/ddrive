@@ -299,6 +299,30 @@ class ChatTest(helpers.DriveTest):
         FakeGateway.last.on_fatal("Discord rejected the token")
         self.assertEqual((c.logger.status, c.logger.error), ("stopped", "Discord rejected the token"))
 
+    def test_attachments_only(self):
+        d = self.drive()
+        c = self.account(d)
+        state = self.archive(c, attachmentsOnly=True)                  # the files, not the conversation
+        self.assertEqual((state["stats"]["saved"], state["stats"]["files"], state["stats"]["scanned"]), (1, 1, 3))
+        m = c.store.messages({})["messages"]
+        self.assertEqual([(x["content"], x["author_name"], x["attachments"][0]["path"]) for x in m],
+                         [("", "Dennis", "/Discord/Direct messages/Anna [500]/files/920-notes.txt")])
+        self.assertNotIn(b"hello Anna", self.read(d, self.files(d)[0], cold=False))
+        self.archive(c)                                                # everything, later: now the text is kept...
+        self.assertEqual(self.texts(d), ["see you 100% soon", "hello Anna", "hi there"])
+        self.archive(c, attachmentsOnly=True)                          # ...and stays
+        self.assertEqual(self.texts(d), ["see you 100% soon", "hello Anna", "hi there"])
+
+        c.logger.set_rules({"attachmentsOnly": True})
+        c.logger.start()
+        gw = FakeGateway.last
+        gw.emit("MESSAGE_CREATE", msg(91, 500, ANNA, "just talk", 11))
+        gw.emit("MESSAGE_CREATE", msg(92, 500, ANNA, "a caption", 11, files=["clip.png"]))
+        gw.emit("MESSAGE_UPDATE", {"id": "92", "channel_id": "500", "content": "a new caption"})
+        got = c.store.messages({"source": "live"})["messages"]
+        self.assertEqual([(x["id"], x["content"], x["edits"], x["attachments"][0]["path"]) for x in got],
+                         [("92", "", [], "/Discord/Direct messages/Anna [500]/files/9920-clip.png")])
+
     def test_logger_saves_attachments(self):
         d = self.drive()
         c = self.account(d)

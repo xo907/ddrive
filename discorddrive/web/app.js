@@ -3248,7 +3248,7 @@ let chatDir = null;                   // {guilds, dms} of the account
 const chatChannels = new Map();       // server id -> its channels (loaded when the server is opened)
 const chatOpen = new Set();           // servers opened in the picker
 const chatView = { q: "", channel: "", kind: "all", shown: 60, live: "all" };
-const archiveForm = { selection: { dms: {}, guilds: {} }, scope: "both", userIds: "", after: "", before: "", downloadAttachments: false };
+const archiveForm = { selection: { dms: {}, guilds: {} }, scope: "both", userIds: "", after: "", before: "", downloadAttachments: false, attachmentsOnly: false };
 const MSG_KINDS = [["all", "All"], ["deleted", "Deleted"], ["edited", "Edited"], ["flagged", "Keyword hits"], ["files", "With files"], ["mine", "Mine"]];
 
 function leaveMessages() { if (route.name !== "messages") { clearInterval(chatTimer); chatTimer = null; } }
@@ -3565,7 +3565,8 @@ function drawLive(body) {
           h("div", { class: "ch-opts" },
             opt("My messages", "", "captureMine"), opt("Other people's messages", "", "captureOthers"),
             rules.scope === "custom" && opt("All direct messages", "Also conversations that start later.", "allDms"),
-            opt("Save attachments", "Download files as they are posted, before they can be removed.", "downloadAttachments")),
+            opt("Save attachments", "Download files as they are posted, before they can be removed.", "downloadAttachments"),
+            opt("Attachments only", "Record only messages that have files, and save the files without the text. Other messages are left out.", "attachmentsOnly")),
           h("div", { class: "fl ch-fl" }, "Keyword alerts"), words,
           h("div", { class: "hint" }, "Messages containing one of these words are marked. Changes apply right away, also while recording.")),
         rules.scope === "custom" && targetPicker(rules.selection, () => save({ selection: rules.selection }))),
@@ -3618,7 +3619,7 @@ function drawArchive(body) {
   const start = h("button", { class: "btn ch-start", type: "button", onclick: async () => {
     const ms = (v) => v ? new Date(v).getTime() : "";
     const r = await attempt(() => api("/api/chat/archive/start", { targets: toTargets(f.selection), scope: f.scope, userIds: f.userIds,
-                                                                   after: ms(f.after), before: ms(f.before), downloadAttachments: f.downloadAttachments }));
+                                                                   after: ms(f.after), before: ms(f.before), downloadAttachments: f.downloadAttachments, attachmentsOnly: f.attachmentsOnly }));
     if (r) { chat = r; redraw(); }
   } }, icon("download"), "Start archive");
   function sync() {
@@ -3642,7 +3643,9 @@ function drawArchive(body) {
         h("div", { class: "ch-card" }, h("h3", {}, "What to save"),
           h("div", { class: "ch-dates" }, h("label", {}, h("div", { class: "fl" }, "From"), date("after")), h("label", {}, h("div", { class: "fl" }, "Until"), date("before"))),
           h("div", { class: "ch-opt" }, h("div", { class: "t" }, "Download attachments", h("div", { class: "s" }, "Store pictures, videos and files on the drive too, so they survive when the originals are deleted.")),
-            switchEl(f.downloadAttachments, (on) => { f.downloadAttachments = on; }, "Download attachments"))),
+            switchEl(f.downloadAttachments, (on) => { f.downloadAttachments = on; }, "Download attachments")),
+          h("div", { class: "ch-opt" }, h("div", { class: "t" }, "Attachments only", h("div", { class: "s" }, "Save only the files, without the conversation: messages without a file are left out, and no text is kept.")),
+            switchEl(f.attachmentsOnly, (on) => { f.attachmentsOnly = on; }, "Attachments only"))),
         start,
         h("div", { class: "hint" }, `Messages are read at a calm pace and saved in ${chat.folder} on your drive. Archiving a conversation again only adds what is new.`))));
   redraw();
