@@ -23,4 +23,25 @@ jobs:
       - name: Compile
         run: python -m compileall -q discorddrive tests
       - name: Run the tests
-        run: python -m unittest discover -s tests -v
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee test-output.txt
+      - name: Say which tests failed (shown on the run's summary page)
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import re
+          text = open("test-output.txt", encoding="utf-8", errors="replace").read()
+          esc = lambda t: t.replace("%", "%25").replace("", "").replace("
+", "%0A")
+          blocks = re.split(r"
+={70}
+", text)[1:]
+          for b in blocks[:9]:
+              print("::error title=" + b.split("
+", 1)[0][:120] + "::" + esc(b[-1800:]))
+          if not blocks:
+              print("::error title=The tests stopped::" + esc(text[-1800:]))
+          EOF
