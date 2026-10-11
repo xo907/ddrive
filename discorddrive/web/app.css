@@ -1184,3 +1184,10 @@ main::-webkit-scrollbar-thumb { background: var(--line); }
 .ch-cols.solo { grid-template-columns: minmax(0, 1fr); }
 .ch-cols.solo .ch-side { display: none; }
 #ch-actions { align-items: center; }
+.ch-fold { display: inline-flex; align-items: center; gap: 4px; height: 26px; margin: 0 0 8px -6px; padding: 0 8px 0 4px; border: 0;
+           border-radius: 6px; background: none; color: var(--muted); font-size: 12.5px; }
+.ch-fold:hover { background: var(--hover); color: var(--ink); }
+.ch-fold svg { width: 14px; height: 14px; }
+.ch-fold.show { flex: none; align-self: center; margin: 0 4px 12px -6px; padding: 0 4px 0 8px; border: 1px solid var(--line); }
+.ch-fold.show svg { transform: rotate(180deg); }
+.ch-fold[hidden] { display: none; }

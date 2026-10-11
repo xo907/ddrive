@@ -3,6 +3,12 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.7 (2026-10-10)
+
+- Live logger: hiding the options is now done on the panel itself ("‹ Hide options" above "What to
+  record"; "Options ›" next to "Live feed" brings it back), instead of a button at the top of the
+  page with an icon that looked like a sun.
+
 ## 1.3.6 (2026-10-10)
 
 - Messages: a new option, **Attachments only**, for the live logger and for an archive (each has its

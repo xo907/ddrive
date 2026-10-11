@@ -3524,20 +3524,20 @@ function drawLive(body) {
     const waiting = chat.totals ? chat.totals.waiting : 0;
     captured.textContent = `${plural(lg.captured, "message")} recorded since the drive started${waiting ? ` · ${waiting.toLocaleString()} waiting to be written to the drive` : ""}`;
   }
+  // The options panel folds away (from a button on the panel itself), leaving the whole width to the messages.
   const optionsShown = () => { try { return localStorage.getItem("dd-live-options") !== "hidden"; } catch { return true; } };
-  const options = h("button", { class: "icon-btn", type: "button", onclick: () => {
-    try { localStorage.setItem("dd-live-options", optionsShown() ? "hidden" : "shown"); } catch { /* private mode */ }
-    fold();
-  } }, icon("settings"));
+  const setOptions = (on) => { try { localStorage.setItem("dd-live-options", on ? "shown" : "hidden"); } catch { /* private mode */ } fold(); };
+  const hide = h("button", { class: "ch-fold", type: "button", title: "Hide this panel: more room for the messages", onclick: () => setOptions(false) },
+                 icon("back"), "Hide options");
+  const show = h("button", { class: "ch-fold show", type: "button", title: "Show what is recorded", onclick: () => setOptions(true) },
+                 "Options", icon("back"));
   function fold() {
     const on = optionsShown();
-    options.title = on ? "Hide the options: more room for the messages" : "Show what is recorded";
-    options.setAttribute("aria-label", options.title);
-    options.setAttribute("aria-expanded", String(on));
+    show.hidden = on;
     const cols = body.querySelector(".ch-cols");
     if (cols) cols.classList.toggle("solo", !on);
   }
-  if (act) act.replaceChildren(pill, toggle, options);
+  if (act) act.replaceChildren(pill, toggle);
   const opt = (label, hint, key) => h("div", { class: "ch-opt" }, h("div", { class: "t" }, label, hint && h("div", { class: "s" }, hint)),
     switchEl(rules[key], (on) => save({ [key]: on }), label));
   const words = h("input", { class: "ch-input", value: rules.keywords.join(", "), placeholder: "e.g. my name, project x", spellcheck: "false",
@@ -3559,7 +3559,7 @@ function drawLive(body) {
   }
   body.replaceChildren(problem,
     h("div", { class: "ch-cols" },
-      h("div", { class: "ch-side" },
+      h("div", { class: "ch-side" }, hide,
         h("div", { class: "ch-card" }, h("h3", {}, "What to record"),
           segmented([["all", "Everything I can see"], ["custom", "Only what I pick"]], rules.scope, async (scope) => { await save({ scope }); drawLive(body); }),
           h("div", { class: "ch-opts" },
@@ -3571,7 +3571,7 @@ function drawLive(body) {
           h("div", { class: "hint" }, "Messages containing one of these words are marked. Changes apply right away, also while recording.")),
         rules.scope === "custom" && targetPicker(rules.selection, () => save({ selection: rules.selection }))),
       h("div", {},
-        h("div", { class: "ch-feed-top" }, h("h3", {}, "Live feed"), captured),
+        h("div", { class: "ch-feed-top" }, show, h("h3", {}, "Live feed"), captured),
         chipRow(MSG_KINDS.slice(0, 4), chatView.live, (k) => { chatView.live = k; feed(); }), list, none)));
   fold();
   state();
