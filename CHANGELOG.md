@@ -3,6 +3,28 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.0 (2026-10-10)
+
+- Discord messages: a logger and an archiver for your own Discord account (brought over from Pretty
+  Suite), in the dashboard under **Messages**. What they collect is kept in `/Discord` on the drive, so
+  it is encrypted, on all your devices, and costs nothing.
+  - **Log in with Discord** in Settings → Discord account, with your account's token (Discord's own
+    login button can't give an app your messages). The token is kept with the other secrets, encrypted
+    for this computer; it is never shown again and never leaves for anywhere but Discord.
+  - **Archive**: pick servers, channels and conversations; everyone's messages or only yours or
+    theirs, a date range, attachments or not. It shows its progress, can be stopped and carried on,
+    carries on by itself after a restart, and archiving a conversation again only adds what is new.
+  - **Live logger**: records messages as they arrive and keeps the original text of ones later edited
+    or deleted. Everything you can see or only what you pick, keyword alerts, attachments saved as
+    they are posted. It stays invisible, reconnects by itself, and starts again with the drive.
+  - **Saved**: search and filter (deleted, edited, keyword hits, with files, yours, one conversation)
+    and export what is shown as a web page, JSON, CSV or text.
+  - On the drive the messages are plain `.jsonl` files (one record per line) next to the saved
+    attachments. Every device reads them, so the Messages page works everywhere; logging and archiving
+    run on the device you logged in on. `/Discord` can be password-locked: recording carries on, and
+    the messages are hidden until you unlock it.
+- These files stay out of Recent, Activity and the Gallery.
+
 ## 1.2.6 (2026-10-10)
 
 - Fixed uploads of large files failing over and over with "Discord HTTP 100". When a piece was cut

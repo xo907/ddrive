@@ -74,7 +74,7 @@ def config_path() -> str:
 
 MiB = 1024 * 1024
 SECRET_FIELDS = ("bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens",
-                 "web_token", "web_password")
+                 "web_token", "web_password", "discord_user_token")
 _warned = set()
 
 
@@ -150,6 +150,7 @@ class Config:
     lock_timeout_minutes: float = 15.0  # password-locked folders lock again after this long (0 = until the drive restarts)
     sync_jobs: list = field(default_factory=list)  # folders kept in sync with the drive ('sync add', dashboard Sync)
     sync_remote_edit: bool = False     # let the dashboard on other devices add or change sync folders
+    discord_user_token: str = ""       # your own Discord account, for the message logger and archiver (dashboard: Settings)
     protect_config: bool = True        # keep the secrets in this file encrypted for this computer and account
 
     protect_error = None               # why the protected secrets could not be read (not saved)

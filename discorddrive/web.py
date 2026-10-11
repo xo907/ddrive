@@ -37,6 +37,7 @@ from .index import ROOT_ID, new_uid
 from . import passkeys
 from .shares import Shares
 from .bookmarks import BookmarkHandlers
+from .chatlog import ChatHandlers
 from .webplus import ApiErrorProxy, Fetches, PlusHandlers, housekeeping
 
 log = logging.getLogger("discorddrive.web")
@@ -48,7 +49,8 @@ SESSION_DAYS = 30
 MAX_FAILURES = 5          # wrong passwords from one address before it has to wait
 LOCKOUT = 60.0            # seconds, doubled for every further wrong password (up to an hour)
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
-_BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes")
+_BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
+                      "/api/chat")
 _MEDIA_EXT = ("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "mp4", "m4v", "webm", "mov", "mkv", "avi")
 NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave ("Save" uploads right away)
 
@@ -300,7 +302,7 @@ class _Counted:
         return getattr(self._raw, name)
 
 
-class _Handler(PlusHandlers, BookmarkHandlers, BaseHTTPRequestHandler):
+class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHandler):
     server_version = "DiscordDrive"
     protocol_version = "HTTP/1.1"
 

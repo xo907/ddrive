@@ -32,9 +32,9 @@ DAV_METHODS = ("OPTIONS", "PROPFIND", "PROPPATCH", "MKCOL", "PUT", "DELETE", "MO
 
 
 def housekeeping(path):
-    """True for files the dashboard keeps for itself (bookmark previews): they stay out of Recent, Activity
-    and the Gallery, where they would only be noise. They are ordinary files in Files."""
-    return (path or "").lower().startswith("/bookmarks/")
+    """True for files the dashboard keeps for itself (bookmark previews, logged Discord messages): they stay
+    out of Recent, Activity and the Gallery, where they would only be noise. They are ordinary files in Files."""
+    return (path or "").lower().startswith(("/bookmarks/", "/discord/"))
 
 
 def clean_name(name, fallback="file"):

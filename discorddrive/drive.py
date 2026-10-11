@@ -42,6 +42,7 @@ class DiscordDrive:
         self.maintenance = None
         self.web = None
         self.sync = None
+        self.chat = None
         self._stop_event = threading.Event()
         self._stop_lock = threading.Lock()
         self._stopped = False
@@ -141,6 +142,8 @@ class DiscordDrive:
 
         from .sync import SyncManager
         self.sync = SyncManager(self)
+        from .chatlog import Chat
+        self.chat = Chat(self)             # Discord message logger and archiver (does nothing until you log in)
 
         # Recover any pending staging files from previous runs
         self.fs.recover()
@@ -185,6 +188,8 @@ class DiscordDrive:
             self.maintenance.start()
         if self.sync:
             self.sync.start()
+        if self.chat and not self.local_test_dir:
+            self.chat.start()
         if getattr(self.cfg, "web_enabled", False) and not self.local_test_dir:
             self.start_web()
 
@@ -217,6 +222,8 @@ class DiscordDrive:
         self._stop_event.set()
         if self.web:
             self.web.stop()
+        if self.chat:
+            self.chat.stop()               # writes what the logger still holds to the drive
         if self.sync:
             self.sync.stop()
         if self.maintenance:

@@ -67,7 +67,7 @@ snapshots can be brought back. A background check finds problems before you do.
 | | |
 |---|---|
 | **Drive** | A drive letter or mount folder that every app can use · streaming and seeking · files on demand · offline pinning · live sync between Windows, Linux and Raspberry Pi |
-| **Dashboard** | Home overview · files with a grid view · **photo and video gallery** with thumbnails and a full-screen viewer · notes · contacts · **bookmarks with link previews** · starred and recent · find anything with Ctrl+K · installable as an app on your phone |
+| **Dashboard** | Home overview · files with a grid view · **photo and video gallery** with thumbnails and a full-screen viewer · notes · contacts · **bookmarks with link previews** · **Discord message logger and archiver** · starred and recent · find anything with Ctrl+K · installable as an app on your phone |
 | **Sharing** | Links with an expiry, a password and view-only mode · direct links that embed in Discord · **file requests**: let others upload into a folder they can't see |
 | **Backup and sync** | Keep folders on your computer backed up, mirrored or two-way synced, live or on a schedule · save a file straight from a web link · WebDAV for other apps |
 | **Safety net** | Self-healing with spare pieces (Reed-Solomon) · versions of every file · undelete · daily snapshots of the whole drive · an activity list of what changed, when, on which device |
@@ -301,6 +301,8 @@ other devices**:
 - **Sharing both ways**: expiring, password-protected links to give files out, and **file requests**
   that let others send files into a folder without seeing it.
 - **Save from a link**: the drive downloads a web address straight into a folder.
+- **Discord messages**: archive your own conversations and log new messages as they arrive, including
+  ones later edited or deleted; kept on the drive ([more](#discord-messages)).
 - **Other apps (WebDAV)**: open the drive from phone file managers, "Map network drive", Finder, rclone.
 - **Snapshots** of the whole drive, restorable folder by folder.
 - **Password-locked folders**: gone from the drive letter and the dashboard until unlocked
@@ -527,6 +529,8 @@ devices).
   banner picture (the same tags link previews use). Tags, notes, a filter, pinned favourites at the top,
   and Ctrl+V anywhere on the page. Kept in `/Bookmarks` on the drive with their pictures: encrypted, synced, versioned, and
   nothing is loaded from the sites when you look at them.
+- **Messages**: a logger and an archiver for your own Discord account, saved in `/Discord` on the
+  drive ([more](#discord-messages)).
 - **Storage**: space by kind, the biggest folders and files, and identical files (keep the oldest and
   delete the copies in one click). Folders show their size in Files.
 - **File requests**: right-click a folder → **Request files…**. Whoever has the link can send files into
@@ -587,7 +591,8 @@ Each device can use its own set of extra bots; any bot in the channel can read e
 ## The config file
 
 The config file (`%APPDATA%\DiscordDrive\config.json`, or `~/.config/DiscordDrive/config.json`) holds
-your settings and the secrets the drive needs: bot tokens, encryption keys, the dashboard sign-in. The
+your settings and the secrets the drive needs: bot tokens, encryption keys, the dashboard sign-in, and
+your Discord account's token if you logged in for [Discord messages](#discord-messages). The
 secrets are not stored readable. They sit in one entry, `protected`, encrypted for the computer and
 account they belong to:
 
@@ -609,6 +614,51 @@ token or key you type into the file by hand is picked up and encrypted at the ne
   way DiscordDrive does, and while the drive runs the key is in memory. It protects the file, not a
   computer someone else already controls.
 - `config` shows how the secrets are kept; `config protect_config false` stores them readable again.
+
+## Discord messages
+
+The dashboard can keep your Discord conversations on the drive: **Messages** in the menu. It is the
+logger and archiver from [Pretty Suite](https://github.com/xo907/pretty-suite), with the drive as the
+place where everything is stored, so it is encrypted, on all your devices, and costs nothing.
+
+- **Archive** reads conversations back through their history: whole servers, chosen channels, direct
+  messages and group chats; everyone's messages or only yours or theirs, a date range, with or without
+  the attachments. It can be stopped and carried on, carries on by itself after a restart, and
+  archiving the same conversation again only adds what is new.
+- **Live logger** records messages as they arrive and keeps the original text of ones that are later
+  edited or deleted. Record everything you can see or only what you pick; set keyword alerts; save
+  attachments as they are posted. It listens invisibly (your status doesn't change), reconnects by
+  itself, and starts again with the drive.
+- **Saved** is where you read it: search, filter (deleted, edited, keyword hits, with files, yours, one
+  conversation) and export as a web page, JSON, CSV or text.
+
+**Logging in.** Settings → Discord account → **Log in with Discord**, and paste your account's token
+(the dialog says where to find it). Discord's own "Log in with Discord" button only tells an app who
+you are; it cannot give it your messages, and the drive's bot only sees the drive's channel. The token
+is kept with the other secrets in the [config file](#the-config-file), encrypted for that computer,
+and is only ever sent to Discord. Logging and archiving run on the device you logged in on; log in on
+one device only.
+
+**Where it goes.** Plain text files, one record per line, that you can also open yourself:
+
+```text
+/Discord/Servers/<server> [id]/<channel> [id]/2024-01-03 to 2024-03-09.jsonl   an archived stretch
+/Discord/Direct messages/<name> [id]/...                                        the same for DMs
+/Discord/.../files/                                                             saved attachments
+/Discord/Live/2026-10/2026-10-10 14.05.33 <device>.jsonl                        what the logger recorded
+```
+
+The logger writes what it recorded to the drive every ten minutes and when it stops (until then a
+message is marked "not on the drive yet"), and joins a day's small files into one the day after. Other
+devices read these files, so Messages works on all of them. Deleting a file removes its messages
+from the lists. `/Discord` can be [password-locked](#password-locked-folders): recording carries on,
+and the messages are hidden in the dashboard until you unlock it.
+
+> **Know the risk.** This acts with your own Discord login. Automating a personal account is against
+> Discord's Terms of Service and can lead to action against the account. Requests are paced, but the
+> risk is yours to weigh. The token is full access to your account: never share it. Logging also
+> keeps what other people wrote, including what they later delete; treat it as you would any private
+> conversation.
 
 ## Password-locked folders
 
@@ -752,6 +802,7 @@ File contents live in Discord. Locally, DiscordDrive only uses:
 | Files being edited | `staging/` | An existing file is downloaded completely while it is open for writing, then removed after it is re-uploaded |
 | Viewed files (read cache) | `cache/` | **Disk mode (default):** kept up to `cache_max_bytes` (5 GiB) so re-opening is instant. **Memory mode:** never written to disk |
 | Offline-pinned files | `cache/` | Until you unpin them (`free-space`) |
+| Discord messages (search list) | `chat.db` | Only if you use [Discord messages](#discord-messages). A copy of the files in `/Discord`, rebuilt from them when needed |
 
 **Memory-only cache.** To keep viewed files off the disk entirely, set `"cache_mode": "memory"`
 in the config, or start with `mount --cache memory`. Chunks you view are held only in RAM

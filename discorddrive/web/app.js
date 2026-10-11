@@ -373,12 +373,13 @@ function render() {
   }
   closeSheet();
   leaveNotes();
+  leaveMessages();
   if (route.name !== "files" || route.path !== currentDir) sel.clear();
   const views = { files: renderFiles, search: renderSearch, deleted: renderDeleted, snapshots: renderSnapshots,
                   snapshot: renderSnapshot, health: renderHealth, notes: renderNotes, shared: renderShared,
                   settings: renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
-                  history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks };
+                  history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages };
   (views[route.name] || renderFiles)();
 }
 window.addEventListener("hashchange", render);
@@ -1422,7 +1423,9 @@ async function renderSettings() {
          h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hint),
            data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
            h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))]).flat(),
+       h("div", { id: "discord-settings" }),
        h("div", { id: "signin-settings" }));
+  discordSection($("#discord-settings"));
   signInSection($("#signin-settings"));
 }
 
@@ -3118,7 +3121,7 @@ async function connectApps() {
 function openPalette() {
   if (document.querySelector("dialog.palette")) return;
   const pages = [["Home", "#/home"], ["Files", "#/files/"], ["Gallery", "#/gallery/"], ["Starred", "#/starred"], ["Recent", "#/recent"],
-                 ["Activity", "#/history"], ["Storage", "#/storage"], ["Notes", "#/notes"], ["Bookmarks", "#/bookmarks"], ["Contacts", "#/contacts"], ["Shared links", "#/shared"],
+                 ["Activity", "#/history"], ["Storage", "#/storage"], ["Notes", "#/notes"], ["Bookmarks", "#/bookmarks"], ["Messages", "#/messages"], ["Contacts", "#/contacts"], ["Shared links", "#/shared"],
                  ["Folder sync", "#/sync"], ["Deleted files", "#/deleted"], ["Snapshots", "#/snapshots"], ["Log", "#/log"], ["Health", "#/health"],
                  ["Settings", "#/settings"]].map(([label, href]) => ({ label, hint: "Go to", icon: "enter", run: () => go(href) }));
   const actions = [
@@ -3209,6 +3212,420 @@ async function whatsNew() {
     else { list = null; body.append(h("p", { class: "muted" }, t)); }
   }
   modal(`What's new · version ${data.version}`, body);
+}
+
+// ------------------------------------------------------------------ Discord messages
+// The logger and archiver: conversations of your own Discord account, kept as files in /Discord on
+// the drive (encrypted, synced, free). Logging in is in Settings; the account's token never comes back here.
+let chat = null;                      // the answer of /api/chat
+let chatTimer = null;
+let chatDir = null;                   // {guilds, dms} of the account
+const chatChannels = new Map();       // server id -> its channels (loaded when the server is opened)
+const chatOpen = new Set();           // servers opened in the picker
+const chatView = { q: "", channel: "", kind: "all", shown: 60, live: "all" };
+const archiveForm = { selection: { dms: {}, guilds: {} }, scope: "both", userIds: "", after: "", before: "", downloadAttachments: false };
+const MSG_KINDS = [["all", "All"], ["deleted", "Deleted"], ["edited", "Edited"], ["flagged", "Keyword hits"], ["files", "With files"], ["mine", "Mine"]];
+
+function leaveMessages() { if (route.name !== "messages") { clearInterval(chatTimer); chatTimer = null; } }
+
+function segmented(options, value, change) {
+  const seg = h("div", { class: "seg", role: "radiogroup" }, options.map(([k, label]) =>
+    h("button", { type: "button", role: "radio", "aria-checked": String(k === value),
+                  onclick: (e) => { for (const b of seg.children) b.setAttribute("aria-checked", String(b === e.currentTarget)); change(k); } }, label)));
+  return seg;
+}
+
+function discordLogin(done) {
+  const token = h("input", { type: "password", placeholder: "Paste your token", autocomplete: "off", spellcheck: "false",
+                             onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } } });
+  const ok = h("button", { class: "btn", type: "button", onclick: async () => {
+    if (!token.value.trim()) return token.focus();
+    ok.disabled = true;
+    ok.textContent = "Logging in…";
+    const r = await attempt(() => api("/api/chat/connect", { token: token.value }));
+    ok.disabled = false;
+    ok.textContent = "Log in";
+    if (r) { chat = r; chatDir = null; chatChannels.clear(); m.close(); toast(`Logged in as ${r.user.name}`); if (route.name === "messages") render(); else if (done) done(); }
+  } }, "Log in");
+  const m = modal("Log in with Discord",
+    h("p", { class: "muted ch-p" }, "Discord's own “Log in with Discord” button only tells an app who you are; it can't read your messages. "
+      + "So the drive logs in the way your browser does, with your account's token. It is kept encrypted on this computer and is only ever sent to Discord."),
+    field("Account token", token),
+    h("details", { class: "ch-help" }, h("summary", {}, "Where do I find my token?"),
+      h("ol", {}, h("li", {}, "Open Discord in your browser and sign in."), h("li", {}, "Press F12 and open the Network tab."),
+        h("li", {}, "Click any channel, then pick a request to ", h("code", {}, "discord.com/api"), "."),
+        h("li", {}, "Under Request Headers, copy the value of ", h("code", {}, "authorization"), "."))),
+    h("div", { class: "notice ch-risk" }, "The token is full access to your account: never share it. Automating a personal account is against "
+      + "Discord's Terms of Service and can lead to action against the account. Requests are paced, but the risk is yours to weigh."),
+    h("div", { class: "modal-actions" }, ok));
+  token.focus();
+}
+
+async function discordLogout(done) {
+  if (!await ask({ title: "Log out of Discord?", ok: "Log out", danger: true,
+                   text: "Logging and archiving stop and the token is removed from this computer. The messages already on your drive stay." })) return;
+  const r = await attempt(() => api("/api/chat/disconnect", {}), "Logged out of Discord");
+  if (r) { chat = r; chatDir = null; if (done) done(); }
+}
+
+async function discordSection(into) {
+  const s = await api("/api/chat").catch(() => null);
+  if (!s || !into.isConnected) return;
+  const redraw = () => discordSection(into);
+  const row = (t, text, ctl) => h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" }, ctl));
+  into.replaceChildren(
+    h("h2", {}, "Discord account"),
+    h("div", { class: "settings" },
+      s.connected
+        ? row(`Logged in as ${s.user.name}`, `@${s.user.username} · ${plural(s.counts.guilds, "server")}, ${plural(s.counts.dms, "conversation")}. Logging and archiving run on this computer (${s.device}).`,
+              h("button", { class: "btn ghost small", onclick: () => discordLogout(redraw) }, "Log out"))
+        : row("Log in with Discord", s.error || "Connect your own Discord account to record messages as they arrive and to archive whole conversations onto your drive.",
+              h("button", { class: "btn small", disabled: !!s.locked, onclick: () => discordLogin(redraw) }, "Log in")),
+      (s.connected || (s.totals && s.totals.messages)) && row("Messages", s.locked ? `${s.folder} is locked in this browser. Unlock it with the padlock at the top.`
+          : `${s.totals ? plural(s.totals.messages, "message") : "Nothing"} kept in ${s.folder} on your drive: encrypted, on every device, at no cost.`,
+          h("a", { class: "btn ghost small", href: "#/messages" }, "Open"))));
+}
+
+function msgRow(m) {
+  const name = m.author_name || m.author_username || "Unknown";
+  const where = m.guild_name ? `${m.guild_name} › #${m.channel_name || m.channel_id}` : (m.channel_name || m.channel_id);
+  return h("div", { class: "ch-msg" + (m.deleted_ts ? " gone" : "") },
+    h("span", { class: "avatar-c ch-av", style: `background:hsl(${hue(String(m.author_id || name))} 45% 42%)` }, name.slice(0, 1).toUpperCase()),
+    h("div", { class: "ch-main" },
+      h("div", { class: "ch-head" }, h("b", {}, name), h("span", {}, where), h("span", { title: fmtFull.format(m.ts) }, when(m.ts / 1000)),
+        m.deleted_ts && h("span", { class: "tag busy", title: fmtFull.format(m.deleted_ts) }, "deleted"),
+        m.edits.length ? h("span", { class: "tag" }, "edited") : null,
+        m.flagged ? h("span", { class: "tag" }, "keyword") : null,
+        !m.on_drive && h("span", { class: "tag", title: "Recorded on this computer. It is written to the drive within ten minutes." }, "not on the drive yet")),
+      m.content && h("div", { class: "ch-text" }, m.content),
+      m.edits.map((e) => h("div", { class: "ch-old" }, h("span", {}, `Before the edit${e.ts ? " of " + fmtFull.format(e.ts) : ""}`), e.old_content)),
+      m.attachments.map((a) => !a.path ? h("span", { class: "ch-file off", title: "Not saved to the drive" }, icon("file"), a.filename || "file")
+        : (a.content_type || "").startsWith("image/") ? h("a", { href: fileUrl(a.path), target: "_blank", rel: "noopener" }, h("img", { class: "ch-img", src: fileUrl(a.path), alt: a.filename || "", loading: "lazy" }))
+        : h("a", { class: "ch-file", href: fileUrl(a.path), target: "_blank", rel: "noopener" }, icon("file"), a.filename || "file", a.size ? h("span", { class: "muted" }, size(a.size)) : null)),
+      !m.content && !m.attachments.length ? h("div", { class: "ch-text muted" }, m.embeds.length ? "(a link preview)" : "(no text)") : null));
+}
+
+const msgFilter = (kindKey) => kindKey === "all" ? {} : { [kindKey]: 1 };
+
+function chipRow(options, value, change) {
+  const row = h("div", { class: "bm-chips" }, options.map(([k, label]) =>
+    h("button", { class: "bm-chip" + (k === value ? " on" : ""), type: "button",
+                  onclick: (e) => { for (const b of row.children) b.classList.toggle("on", b === e.currentTarget); change(k); } }, label)));
+  return row;
+}
+
+// ---- choosing servers and conversations (the same shape the logger's rules use)
+const countChosen = (sel) => Object.keys(sel.dms).length + Object.keys(sel.guilds).length;
+function toTargets(sel) {
+  return [...Object.keys(sel.dms).map((id) => ({ kind: "dm", id })),
+          ...Object.entries(sel.guilds).map(([id, v]) => v === true ? { kind: "guild", id } : { kind: "guild", id, channelIds: Object.keys(v) })];
+}
+
+function targetPicker(sel, change) {
+  const list = h("div", { class: "ch-pick-list" });
+  const filter = h("input", { class: "ch-input", type: "search", placeholder: "Filter", spellcheck: "false", oninput: () => draw() });
+  const count = h("span", { class: "muted" });
+  const changed = () => { change(); draw(); };
+  const box = (state, toggle, label) => { const b = checkbox(state === true, toggle, label); setBox(b, state); return b; };
+  async function open(g) {
+    if (chatOpen.has(g.id)) chatOpen.delete(g.id);
+    else {
+      chatOpen.add(g.id);
+      if (!chatChannels.has(g.id)) {
+        const r = await api("/api/chat/channels" + q({ guild: g.id })).catch((e) => { toast(e.message); return null; });
+        if (r) chatChannels.set(g.id, r.channels); else chatOpen.delete(g.id);
+      }
+    }
+    draw();
+  }
+  function draw() {
+    count.textContent = countChosen(sel) ? `${countChosen(sel)} chosen` : "Nothing chosen";
+    if (!chatDir) return list.replaceChildren(h("div", { class: "ch-pick-none" }, "Loading…"));
+    const f = filter.value.trim().toLowerCase();
+    const dms = chatDir.dms.filter((c) => !f || c.name.toLowerCase().includes(f));
+    const guilds = chatDir.guilds.filter((g) => !f || g.name.toLowerCase().includes(f));
+    const rows = [];
+    if (guilds.length) rows.push(h("div", { class: "ch-pick-head" }, "Servers"));
+    for (const g of guilds) {
+      const cur = sel.guilds[g.id];
+      const isOpen = chatOpen.has(g.id) && chatChannels.has(g.id);
+      rows.push(h("div", { class: "ch-pick-row" },
+        box(cur === true ? true : cur ? "mixed" : false, () => { if (cur) delete sel.guilds[g.id]; else sel.guilds[g.id] = true; changed(); }, g.name),
+        h("button", { class: "ch-pick-name", type: "button", "aria-expanded": String(isOpen), title: "Show the channels", onclick: () => open(g) },
+          h("span", {}, g.name), icon("back", "ch-chev" + (isOpen ? " open" : "")))));
+      for (const c of isOpen ? chatChannels.get(g.id) : []) {
+        rows.push(h("div", { class: "ch-pick-row sub" },
+          box(cur === true || !!(cur && cur[c.id]), (on) => {
+            let next = cur === true ? Object.fromEntries(chatChannels.get(g.id).map((x) => [x.id, true])) : { ...(cur || {}) };
+            if (on) next[c.id] = true; else delete next[c.id];
+            if (Object.keys(next).length) sel.guilds[g.id] = next; else delete sel.guilds[g.id];
+            changed();
+          }, c.name),
+          h("span", { class: "ch-pick-label" }, "#" + c.name), c.category && h("span", { class: "muted" }, c.category)));
+      }
+    }
+    if (dms.length) rows.push(h("div", { class: "ch-pick-head" }, "Direct messages"));
+    for (const c of dms) {
+      rows.push(h("div", { class: "ch-pick-row" },
+        box(!!sel.dms[c.id], (on) => { if (on) sel.dms[c.id] = true; else delete sel.dms[c.id]; changed(); }, c.name),
+        h("span", { class: "ch-pick-label" }, c.name), c.group && h("span", { class: "tag" }, "group")));
+    }
+    list.replaceChildren(...(rows.length ? rows : [h("div", { class: "ch-pick-none" }, f ? "Nothing matches" : "No servers or conversations")]));
+  }
+  async function load(refresh) {
+    const d = await api("/api/chat/directory" + (refresh ? "?refresh=1" : "")).catch((e) => { toast(e.message); return null; });
+    if (d) { chatDir = d; if (refresh) chatChannels.clear(); }
+    draw();
+  }
+  draw();
+  if (!chatDir) load(false);
+  return h("div", { class: "ch-pick" },
+    h("div", { class: "ch-pick-top" }, filter,
+      h("button", { class: "icon-btn", type: "button", "aria-label": "Read the list again", title: "Read the list again from Discord", onclick: () => load(true) }, icon("refresh"))),
+    list, h("div", { class: "ch-pick-foot" }, count));
+}
+
+// ---- saved messages
+function drawSaved(body) {
+  const list = h("div", { class: "ch-list" });
+  const none = h("div", { class: "empty", hidden: true });
+  const more = h("button", { class: "btn ghost", type: "button", hidden: true, onclick: () => { chatView.shown += 100; load(); } }, "Show more");
+  const place = h("select", { class: "ch-input ch-place", "aria-label": "Conversation", onchange: (e) => { chatView.channel = e.target.value; chatView.shown = 60; load(); } },
+                  h("option", { value: "" }, "All conversations"));
+  let typing;
+  const search = h("input", { class: "ch-input ch-search", type: "search", placeholder: "Search the text", value: chatView.q, spellcheck: "false",
+                              oninput: (e) => { clearTimeout(typing); typing = setTimeout(() => { chatView.q = e.target.value.trim(); chatView.shown = 60; load(); }, 250); } });
+  const filters = () => ({ ...(chatView.q ? { q: chatView.q } : {}), ...(chatView.channel ? { channel: chatView.channel } : {}), ...msgFilter(chatView.kind) });
+  async function load() {
+    const r = await api("/api/chat/messages" + q({ ...filters(), limit: chatView.shown })).catch((e) => { toast(e.message); return null; });
+    if (!r || !list.isConnected) return;
+    list.replaceChildren(...r.messages.map(msgRow));
+    more.hidden = r.messages.length >= r.total;
+    none.hidden = r.total > 0;
+    const any = chat.totals && chat.totals.messages;
+    none.replaceChildren(...(any ? [h("b", {}, "Nothing matches"), "Try another word, conversation or filter."]
+      : [h("b", {}, "No messages yet"), "Start the live logger, or archive a conversation: what they collect shows up here."]));
+    const c = $("#ch-count");
+    if (c) c.textContent = r.total ? plural(r.total, "message") : "";
+  }
+  api("/api/chat/places").then((r) => {
+    for (const p of r.items) {
+      place.append(h("option", { value: p.id, selected: p.id === chatView.channel },
+        `${p.guild_name ? p.guild_name + " › #" : ""}${p.name || p.id} (${p.count.toLocaleString()})`));
+    }
+  }).catch(() => null);
+  const act = $("#ch-actions");
+  if (act) act.replaceChildren(
+    h("button", { class: "btn ghost small", type: "button", onclick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      openMenu([["html", "A web page"], ["json", "JSON"], ["csv", "A spreadsheet (CSV)"], ["txt", "Plain text"]].map(([fmt, label]) =>
+        ({ label, icon: "download", run: () => download("/api/chat/export" + q({ ...filters(), format: fmt }), `discord-messages.${fmt}`) })),
+        r.right - 220, r.bottom + 4, "Export what is shown");
+    } }, icon("download"), "Export"),
+    h("button", { class: "icon-btn", type: "button", "aria-label": "More", title: "More", onclick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      openMenu([
+        { label: "Open the folder on the drive", icon: "folder", run: () => go("#/files" + enc(chat.folder)) },
+        { label: "Write to the drive now", icon: "upload", run: async () => {
+          const w = await attempt(() => api("/api/chat/flush", {}));
+          if (w) { toast(w.written ? `${plural(w.written, "record")} written to the drive` : "Everything is on the drive already"); load(); }
+        } },
+        { label: "Read everything again from the drive", icon: "refresh", run: async () => {
+          toast("Reading the files…");
+          const w = await attempt(() => api("/api/chat/rebuild", {}));
+          if (w) { toast(`Read ${plural(w.files, "file")}`); load(); }
+        } },
+      ], r.right - 220, r.bottom + 4, "Messages");
+    } }, icon("more")));
+  body.replaceChildren(h("div", { class: "ch-filters" }, search, place),
+    chipRow(MSG_KINDS, chatView.kind, (k) => { chatView.kind = k; chatView.shown = 60; load(); }),
+    list, none, h("div", { class: "ch-more" }, more));
+  load();
+}
+
+// ---- live logger
+const LOG_STATUS = { connected: "Recording", connecting: "Connecting", reconnecting: "Reconnecting", stopped: "Stopped" };
+
+function drawLive(body) {
+  clearInterval(chatTimer);
+  chatTimer = null;
+  const act = $("#ch-actions");
+  if (!chat.connected) {
+    if (act) act.replaceChildren();
+    return body.replaceChildren(h("div", { class: "empty" }, h("b", {}, "Log in to record messages"), "The live logger listens with your Discord account.",
+      h("div", { class: "ch-cta" }, h("button", { class: "btn", onclick: () => discordLogin(render) }, "Log in with Discord"))));
+  }
+  const rules = chat.logger.rules;
+  const save = async (patch) => {
+    Object.assign(rules, patch);
+    const r = await attempt(() => api("/api/chat/logger/rules", rules));
+    if (r) Object.assign(rules, r.rules);
+  };
+  const pill = h("span", { class: "ch-status" });
+  const toggle = h("button", { class: "btn small", type: "button", onclick: async () => {
+    toggle.disabled = true;
+    const r = await attempt(() => api("/api/chat/logger", { on: chat.logger.status === "stopped" }));
+    toggle.disabled = false;
+    if (r) { chat = r; state(); }
+  } });
+  const problem = h("div", { class: "notice", hidden: true });
+  const captured = h("span", { class: "muted" });
+  function state() {
+    const lg = chat.logger, on = lg.status !== "stopped";
+    pill.className = "ch-status " + lg.status;
+    pill.replaceChildren(h("i"), LOG_STATUS[lg.status] || lg.status);
+    toggle.className = on ? "btn ghost small" : "btn small";
+    toggle.textContent = on ? "Stop" : "Start logging";
+    problem.hidden = !lg.error;
+    problem.textContent = lg.error || "";
+    const waiting = chat.totals ? chat.totals.waiting : 0;
+    captured.textContent = `${plural(lg.captured, "message")} recorded since the drive started${waiting ? ` · ${waiting.toLocaleString()} not on the drive yet` : ""}`;
+  }
+  if (act) act.replaceChildren(pill, toggle);
+  const opt = (label, hint, key) => h("div", { class: "ch-opt" }, h("div", { class: "t" }, label, hint && h("div", { class: "s" }, hint)),
+    switchEl(rules[key], (on) => save({ [key]: on }), label));
+  const words = h("input", { class: "ch-input", value: rules.keywords.join(", "), placeholder: "e.g. my name, project x", spellcheck: "false",
+                             onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+                             onchange: (e) => save({ keywords: e.target.value.split(",").map((k) => k.trim()).filter(Boolean) }) });
+  const list = h("div", { class: "ch-list" });
+  const none = h("div", { class: "empty", hidden: true });
+  let shown = null;
+  async function feed() {
+    const r = await api("/api/chat/messages" + q({ source: "live", order: "touched", limit: 80, ...msgFilter(chatView.live) })).catch(() => null);
+    if (!r || !list.isConnected) return;
+    const now = r.messages.map((m) => `${m.id}:${m.touched}:${m.on_drive}`).join() + chat.logger.status;
+    if (now === shown) return;               // nothing new: leave the list (and what is selected in it) alone
+    shown = now;
+    list.replaceChildren(...r.messages.map(msgRow));
+    none.hidden = r.messages.length > 0;
+    none.replaceChildren(...(chat.logger.status === "stopped" ? [h("b", {}, "The logger is off"), "Start logging to record messages as they arrive."]
+      : [h("b", {}, "Listening…"), "New messages appear here as they happen."]));
+  }
+  body.replaceChildren(problem,
+    h("div", { class: "ch-cols" },
+      h("div", {},
+        h("div", { class: "ch-card" }, h("h3", {}, "What to record"),
+          segmented([["all", "Everything I can see"], ["custom", "Only what I pick"]], rules.scope, async (scope) => { await save({ scope }); drawLive(body); }),
+          h("div", { class: "ch-opts" },
+            opt("My messages", "", "captureMine"), opt("Other people's messages", "", "captureOthers"),
+            rules.scope === "custom" && opt("All direct messages", "Also conversations that start later.", "allDms"),
+            opt("Save attachments", "Download files as they are posted, before they can be removed.", "downloadAttachments")),
+          h("div", { class: "fl ch-fl" }, "Keyword alerts"), words,
+          h("div", { class: "hint" }, "Messages containing one of these words are marked. Changes apply right away, also while recording.")),
+        rules.scope === "custom" && targetPicker(rules.selection, () => save({ selection: rules.selection }))),
+      h("div", {},
+        h("div", { class: "ch-feed-top" }, h("h3", {}, "Live feed"), captured),
+        chipRow(MSG_KINDS.slice(0, 4), chatView.live, (k) => { chatView.live = k; feed(); }), list, none)));
+  state();
+  feed();
+  chatTimer = setInterval(async () => {
+    if (document.hidden) return;
+    const s = await api("/api/chat").catch(() => null);
+    if (!s || route.name !== "messages" || !list.isConnected) return;
+    chat = Object.assign(s, { logger: Object.assign(s.logger || chat.logger, { rules }) });
+    state();
+    feed();
+  }, 3000);
+}
+
+// ---- archive
+const JOB_LABEL = { running: "Archiving", stopped: "Paused", done: "Finished", error: "Stopped by a problem" };
+
+function jobPanel(job, redraw) {
+  if (!job) return null;
+  const st = job.stats;
+  const active = job.status === "running" && job.running;
+  const label = job.status === "running" && !job.running ? "Interrupted" : JOB_LABEL[job.status] || job.status;
+  const pct = job.status === "done" ? 100 : st.channelsTotal ? 100 * st.channelsDone / st.channelsTotal : 0;
+  const act = async (what, ok) => { const r = await attempt(() => api("/api/chat/archive/" + what, {}), ok); if (r) { chat = r; redraw(); } };
+  return h("div", { class: "ch-card ch-job" },
+    h("div", { class: "ch-job-top" }, h("b", {}, label), h("span", { class: "muted ch-job-now" }, active && st.current ? st.current : ""),
+      active ? h("button", { class: "btn ghost small", onclick: () => act("stop") }, "Stop")
+             : [job.status !== "done" && h("button", { class: "btn small", disabled: !chat.connected, onclick: () => act("resume") }, "Carry on"),
+                h("button", { class: "btn ghost small", onclick: () => act("clear") }, "Clear")]),
+    h("div", { class: "meter" }, h("i", { style: `width:${pct}%` })),
+    h("div", { class: "ch-job-stats muted" }, `${st.channelsDone} of ${plural(st.channelsTotal, "channel")} · ${plural(st.scanned, "message")} read · ${st.saved.toLocaleString()} new`
+      + (st.files ? ` · ${plural(st.files, "file")}` : "")),
+    h("div", { class: "ch-job-log" }, job.log.slice(-40).map((l) =>
+      h("div", { class: "lvl-" + l.level }, h("span", {}, fmtTime.format(l.t * 1000)), l.text))));
+}
+
+function drawArchive(body) {
+  clearInterval(chatTimer);
+  chatTimer = null;
+  const act = $("#ch-actions");
+  if (act) act.replaceChildren(h("a", { class: "btn ghost small", href: "#/files" + enc(chat.folder) }, icon("folder"), "Open the folder"));
+  const job = h("div", { class: "ch-job-box" });
+  const redraw = () => { job.replaceChildren(...[jobPanel(chat.archive, redraw)].filter(Boolean)); sync(); };
+  const f = archiveForm;
+  const start = h("button", { class: "btn ch-start", type: "button", onclick: async () => {
+    const ms = (v) => v ? new Date(v).getTime() : "";
+    const r = await attempt(() => api("/api/chat/archive/start", { targets: toTargets(f.selection), scope: f.scope, userIds: f.userIds,
+                                                                   after: ms(f.after), before: ms(f.before), downloadAttachments: f.downloadAttachments }));
+    if (r) { chat = r; redraw(); }
+  } }, icon("download"), "Start archive");
+  function sync() {
+    const busy = chat.archive && chat.archive.status === "running" && chat.archive.running;
+    start.disabled = busy || !countChosen(f.selection);
+  }
+  if (!chat.connected) {
+    body.replaceChildren(job, h("div", { class: "empty" }, h("b", {}, "Log in to archive conversations"), "The archiver reads your conversations with your Discord account.",
+      h("div", { class: "ch-cta" }, h("button", { class: "btn", onclick: () => discordLogin(render) }, "Log in with Discord"))));
+    return redraw();
+  }
+  const date = (key) => h("input", { class: "ch-input", type: "datetime-local", value: f[key], onchange: (e) => { f[key] = e.target.value; } });
+  body.replaceChildren(job,
+    h("div", { class: "ch-cols wide" },
+      targetPicker(f.selection, sync),
+      h("div", {},
+        h("div", { class: "ch-card" }, h("h3", {}, "Whose messages"),
+          segmented([["both", "Everyone"], ["mine", "Only mine"], ["others", "Only other people's"]], f.scope, (v) => { f.scope = v; }),
+          h("div", { class: "fl ch-fl" }, "Only these people (optional)"),
+          h("input", { class: "ch-input", value: f.userIds, placeholder: "User IDs, separated by commas", spellcheck: "false", oninput: (e) => { f.userIds = e.target.value; } })),
+        h("div", { class: "ch-card" }, h("h3", {}, "What to save"),
+          h("div", { class: "ch-dates" }, h("label", {}, h("div", { class: "fl" }, "From"), date("after")), h("label", {}, h("div", { class: "fl" }, "Until"), date("before"))),
+          h("div", { class: "ch-opt" }, h("div", { class: "t" }, "Download attachments", h("div", { class: "s" }, "Store pictures, videos and files on the drive too, so they survive when the originals are deleted.")),
+            switchEl(f.downloadAttachments, (on) => { f.downloadAttachments = on; }, "Download attachments"))),
+        start,
+        h("div", { class: "hint" }, `Messages are read at a calm pace and saved in ${chat.folder} on your drive. Archiving a conversation again only adds what is new.`))));
+  redraw();
+  chatTimer = setInterval(async () => {
+    if (document.hidden || !(chat.archive && chat.archive.running)) return;
+    const s = await api("/api/chat").catch(() => null);
+    if (!s || route.name !== "messages" || !job.isConnected) return;
+    chat = s;
+    redraw();
+  }, 1500);
+}
+
+async function renderMessages() {
+  clearInterval(chatTimer);
+  chatTimer = null;
+  const s = await attempt(() => api("/api/chat"));
+  if (!s || route.name !== "messages") return;
+  chat = s;
+  const tab = ["live", "archive"].includes(route.rest[0]) ? route.rest[0] : "saved";
+  const head = h("div", { class: "bar" }, h("h1", { style: "margin:0" }, "Messages"), h("span", { class: "muted g-count", id: "ch-count" }),
+                 h("div", { class: "actions", id: "ch-actions" }));
+  if (s.locked) {
+    return page(head, h("div", { class: "empty" }, h("b", {}, "Messages are locked"), `${s.folder} is hidden or password-locked here. Unlock it with the padlock at the top.`));
+  }
+  if (!s.connected && !(s.totals && s.totals.messages) && !s.archive) {
+    return page(head, h("div", { class: "empty" }, h("b", {}, "Keep your Discord conversations on your drive"),
+      s.error || "Record messages as they arrive, with the original text of ones later edited or deleted, and archive whole conversations. "
+        + `Everything is saved in ${s.folder}: encrypted, on all your devices, at no cost.`,
+      h("div", { class: "ch-cta" }, h("button", { class: "btn", onclick: () => discordLogin(render) }, "Log in with Discord"))));
+  }
+  const body = h("div", {});
+  page(head,
+    !s.connected && h("div", { class: "notice ch-note" }, s.error || "Not logged in to Discord: what is saved can be read, but nothing new is recorded. ",
+      h("button", { class: "btn ghost small", onclick: () => discordLogin(render) }, "Log in")),
+    h("div", { class: "seg ch-tabs", role: "tablist" }, [["saved", "Saved"], ["live", "Live logger"], ["archive", "Archive"]].map(([k, label]) =>
+      h("a", { href: "#/messages" + (k === "saved" ? "" : "/" + k), role: "tab", "aria-selected": String(k === tab) }, label,
+        k === "live" && s.logger && s.logger.status !== "stopped" && h("i", { class: "ch-dot " + s.logger.status }),
+        k === "archive" && s.archive && s.archive.running && h("i", { class: "ch-dot connected" })))),
+    body);
+  ({ saved: drawSaved, live: drawLive, archive: drawArchive })[tab](body);
 }
 
 // ------------------------------------------------------------------ account

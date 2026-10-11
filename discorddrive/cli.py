@@ -403,7 +403,7 @@ def cmd_approve_keys(args):
 
 
 _SECRET_FIELDS = {"bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens",
-                  "web_token", "web_password"}
+                  "web_token", "web_password", "discord_user_token"}
 _LIST_COMMANDS = {"extra_bot_tokens": "bots add <token>", "hidden_folders": "hide <folder>", "sync_jobs": "sync add",
                   "old_encryption_keys": "add-old-key", "web_user": "web-password",
                   "web_password": "web-password"}
@@ -440,6 +440,9 @@ def cmd_config(args):
         return 0
     if args.key in _LIST_COMMANDS:
         print(f"[ERROR] Use '{launcher()} {_LIST_COMMANDS[args.key]}' to change {args.key}.")
+        return 1
+    if args.key == "discord_user_token":
+        print("[ERROR] Log in with Discord in the dashboard's Settings instead.")
         return 1
     if args.key in ("bot_token", "channel_id", "encryption_key", "encryption_salt", "encryption_enabled", "web_token"):
         print("[ERROR] Use 'setup' to change the bot token, channel or encryption.")
