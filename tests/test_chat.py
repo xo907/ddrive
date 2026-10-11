@@ -9,6 +9,7 @@ import socket
 import struct
 import threading
 import time
+import urllib.error
 import urllib.parse
 
 import helpers
@@ -23,7 +24,7 @@ def msg(mid, channel, author, content, day=1, guild=None, files=(), edited=None)
     m = {"id": str(mid), "channel_id": str(channel), "author": author, "content": content, "type": 0,
          "timestamp": f"2024-03-{day:02d}T10:00:00.000000+00:00", "edited_timestamp": edited, "embeds": [],
          "attachments": [{"id": f"9{mid}{i}", "filename": name, "url": f"https://cdn.example/{name}?sig={time.time()}",
-                          "proxy_url": f"https://media.example/{name}?sig=1", "size": 5,
+                          "size": 5,
                           "content_type": "image/png" if name.endswith(".png") else "text/plain"} for i, name in enumerate(files)]}
     if guild:
         m["guild_id"] = str(guild)
@@ -44,6 +45,8 @@ class FakeAccount:
     history = {}
     downloads = 0
     calls = 0
+    gone = False                 # Discord no longer has the attachments
+    refreshed = []
 
     def __init__(self, token):
         self.token = token
@@ -76,9 +79,15 @@ class FakeAccount:
 
     def download(self, url):
         type(self).downloads += 1
+        if self.gone or "ex=1&" in url:                               # removed, or a link that ran out
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
         if "format=webp&width=400" in url:                            # the small preview Discord makes
-            return io.BytesIO(b"\x89PNG small")
+            return io.BytesIO(b"\x89PNG from Discord")
         return io.BytesIO(b"hello")
+
+    def refresh_urls(self, urls):
+        type(self).refreshed += urls
+        return {u: u.replace("ex=1&", "ex=7fffffff&") for u in urls}
 
 
 class FakeGateway:
@@ -101,6 +110,7 @@ class ChatTest(helpers.DriveTest):
         super().setUp()
         FakeAccount.history = history()
         FakeAccount.downloads = FakeAccount.calls = 0
+        FakeAccount.gone, FakeAccount.refreshed = False, []
 
     def account(self, d):
         c = d.chat
@@ -402,6 +412,37 @@ class ChatWebTest(helpers.DriveTest):
         self.assertEqual(status, 200, data[:300])
         return json.loads(data)
 
+    def attachments(self):
+        """Shown and opened from Discord while it is there; from the copy on the drive when it is gone."""
+        pic, doc = self.get("/api/chat/messages?files=1&source=live")["messages"][0]["attachments"]
+        self.assertEqual((pic["preview"], doc.get("preview")), ("/Discord/Direct messages/Anna [500]/files/previews/9820.webp", None))
+        at = "id=82&a=" + pic["id"]
+        self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[2], b"\x89PNG from Discord")
+        status, headers, _ = self.req("GET", "/api/chat/open?" + at)
+        self.assertEqual((status, headers["Location"].split("?")[0]), (303, "https://cdn.example/pic.png"))
+        self.assertEqual(self.req("GET", "/api/chat/open?id=82&a=nope")[0], 404)
+        self.assertEqual(self.req("GET", "/api/chat/preview?id=82&a=" + doc["id"])[0], 404)       # not a picture
+
+        FakeAccount.gone = True
+        helpers.DriveTest.write(self.d, pic["preview"], b"\x89PNG kept on the drive")
+        self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[2], b"\x89PNG kept on the drive")
+        status, headers, _ = self.req("GET", "/api/chat/open?" + at)
+        self.assertEqual((status, headers["Location"]), (303, "/api/file?path=" + urllib.parse.quote(pic["path"])))
+        self.assertEqual(self.req("GET", headers["Location"])[2], b"hello")
+        self.d.fs.unlink(pic["path"])                                 # neither on Discord nor on the drive
+        self.assertEqual(self.req("GET", "/api/chat/open?" + at)[0], 404)
+        FakeAccount.gone = False
+
+        # A link that ran out is renewed before it is used.
+        old = msg(83, 500, ANNA, "old", 10, files=["old.png"])
+        old["attachments"][0]["url"] = "https://cdn.example/old.png?ex=1&is=2&hm=3"
+        self.d.chat.store.save_message(old, "live")
+        self.get("/api/chat/messages?files=1")
+        status, headers, _ = self.req("GET", "/api/chat/open?id=83&a=" + old["attachments"][0]["id"])
+        self.assertEqual((status, headers["Location"], FakeAccount.refreshed),
+                         (303, "https://cdn.example/old.png?ex=7fffffff&is=2&hm=3", ["https://cdn.example/old.png?ex=1&is=2&hm=3"]))
+        self.d.chat.store._run("DELETE FROM messages WHERE id='83'")
+
     def wait_archive(self):
         self.d.chat.archiver._thread.join(20)
         return self.get("/api/chat")["archive"]
@@ -443,10 +484,7 @@ class ChatWebTest(helpers.DriveTest):
         self.assertEqual(self.post("/api/chat/flush", {})[1]["written"], 2)
         self.post("/api/chat/logger/rules", {"downloadAttachments": True})
         FakeGateway.last.emit("MESSAGE_CREATE", msg(82, 500, ANNA, "look", 10, files=["pic.png", "doc.txt"]))
-        files = self.get("/api/chat/messages?files=1&source=live")["messages"][0]["attachments"]
-        self.assertEqual([(a["filename"], a["thumb"]) for a in files], [("pic.png", True), ("doc.txt", False)])
-        status, headers, body = self.req("GET", "/api/thumb?path=" + urllib.parse.quote(files[0]["path"]))
-        self.assertEqual((status, body), (200, b"\x89PNG small"))     # shown instead of fetching the picture itself
+        self.attachments()
         self.d.chat.store.save_delete("82")
         self.d.chat.flush()
         self.assertEqual(self.post("/api/chat/logger", {"on": False})[1]["logger"]["status"], "stopped")

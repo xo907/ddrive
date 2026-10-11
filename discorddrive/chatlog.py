@@ -9,6 +9,8 @@ to your other devices and costs nothing. The account token stays on this compute
 secrets in the config file; logging and archiving run on the device you logged in on.
 """
 
+import contextlib
+import json
 import logging
 import os
 import random
@@ -16,6 +18,7 @@ import secrets
 import socket
 import threading
 import time
+import urllib.parse
 
 from . import chatstore
 from .chat import TEXT_CHANNELS, AccountAPI, AccountError, Gateway, clean_token, dm_name, parse_ts, snowflake_from_ms
@@ -415,6 +418,7 @@ class Chat:
         self.make_gateway = Gateway
         self._stop = threading.Event()
         self._flushed = time.monotonic()
+        self._urls = {}                   # attachment id -> (a working link or None, until when that holds)
 
     @property
     def store(self):
@@ -525,6 +529,44 @@ class Chat:
         self.guilds, self.dms = [], []
         self._save_token("")
         log.info("Discord messages: logged out.")
+
+    # ------------------------------------------------------------ attachments, from Discord itself
+    @staticmethod
+    def _expires(url):
+        """When a Discord attachment link stops working (they carry it), or None when it doesn't say."""
+        try:
+            return int(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["ex"][0], 16)
+        except (KeyError, ValueError, IndexError):
+            return None
+
+    def refresh(self, attachments):
+        """Ask Discord for working links for those whose link has run out (several at once)."""
+        now = time.time()
+        stale = [a for a in attachments if a.get("url") and self._urls.get(a.get("id"), (None, 0))[1] <= now
+                 and (self._expires(a["url"]) or now + 600) < now + 300]
+        if len(self._urls) > 5000:
+            self._urls.clear()
+        for i in range(0, len(stale), 50):
+            some, got = stale[i:i + 50], {}
+            if self.api is not None:
+                try:
+                    got = self.api.refresh_urls([a["url"] for a in some])
+                except Exception as e:
+                    log.debug("refreshing attachment links: %s", e)
+            for a in some:
+                url = got.get(a["url"])
+                self._urls[a.get("id")] = (url, (self._expires(url) or now + 3600) if url else now + 600)
+
+    def live_url(self, a):
+        """A link to the attachment on Discord that should still work, or None."""
+        url, until = self._urls.get(a.get("id"), (None, 0))
+        if until > time.time():
+            return url
+        url = a.get("url")
+        return url if url and (self._expires(url) or time.time() + 600) > time.time() + 60 else None
+
+    def fetch(self, url):
+        return (self.api or self.make_api("")).download(url)
 
     def sync_directory(self):
         self.require()
@@ -663,12 +705,65 @@ class ChatHandlers:
     def _get_api_chat_messages(self):
         self._chat_guard()
         found = self.chat.store.messages(self._query())
-        for m in found["messages"]:
-            for a in m["attachments"]:
-                if a.get("path"):                # a small preview is shown instead of fetching the file itself
-                    node = self.drive.index.resolve(a["path"])
-                    a["thumb"] = bool(node is not None and self._thumb_read(node))
+        # the pictures on this page are about to be asked for: get working links for them in one go
+        self.chat.refresh([a for m in found["messages"] for a in m["attachments"] if chatstore.is_media(a)])
         self._json(found)
+
+    def _chat_attachment(self):
+        self._chat_guard()
+        q = self._query()
+        row = self.chat.store.get(q.get("id") or "")
+        for a in json.loads(row["attachments"] or "[]") if row is not None else ():
+            if str(a.get("id")) == q.get("a"):
+                self.chat.refresh([a])
+                return a
+        raise ApiErrorProxy(404, "That attachment is not known")
+
+    def _get_api_chat_preview(self):
+        """A small picture of an attachment: from Discord, or the copy on the drive when Discord has none."""
+        a, chat, data = self._chat_attachment(), self.chat, None
+        if not chatstore.is_media(a):
+            return self._error(404, "no preview")
+        url = chat.live_url(a)
+        if url:
+            try:
+                with contextlib.closing(chat.fetch(chatstore.preview_url(url))) as src:
+                    data = src.read(chatstore.PREVIEW_MAX + 1)
+                if len(data) > chatstore.PREVIEW_MAX or not chatstore.picture_type(data):
+                    data = None
+            except Exception:
+                data = None
+        if data is None and a.get("preview"):
+            node = self.drive.index.resolve(a["preview"])
+            if node is not None and not node["is_dir"]:
+                data = self.drive.fs.read_file(node["id"], 0, min(node["size"], chatstore.PREVIEW_MAX))
+        if data is None and a.get("path"):           # saved by 1.3.2, with the dashboard's own thumbnails
+            node = self.drive.index.resolve(a["path"])
+            data = self._thumb_read(node) if node is not None else None
+        if not data or not chatstore.picture_type(data):
+            return self._error(404, "no preview")
+        self.send_response(200)
+        self.send_header("Content-Type", chatstore.picture_type(data))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store" if self.drive.locks.covering(FOLDER) else "private, max-age=3600")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def _get_api_chat_open(self):
+        """Open an attachment: on Discord when it is still there (checked first), else the copy on the drive."""
+        a = self._chat_attachment()
+        url = self.chat.live_url(a)
+        if url:
+            try:
+                self.chat.fetch(url).close()
+                return self._redirect(url)
+            except Exception as e:
+                log.debug("attachment %s is not on Discord any more: %s", a.get("filename"), e)
+        if a.get("path") and self.drive.index.resolve(a["path"]) is not None:
+            return self._redirect("/api/file?path=" + urllib.parse.quote(a["path"]))
+        self._send(404, b"This attachment is gone from Discord and there is no copy of it on the drive.", "text/plain; charset=utf-8")
 
     def _get_api_chat_places(self):
         self._chat_guard()

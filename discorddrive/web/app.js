@@ -356,6 +356,31 @@ async function refreshStatus() {
   }
 }
 
+// ------------------------------------------------------------------ menu
+// Its sections fold, and the whole menu shrinks to a strip of icons, to leave more room for the page.
+const navState = (() => { try { return JSON.parse(localStorage.getItem("dd-nav") || "{}") || {}; } catch { return {}; } })();
+function applyNav(save) {
+  const shut = navState.shut || {};
+  document.querySelector(".app").classList.toggle("rail", !!navState.rail);
+  const t = $("#nav-toggle");
+  t.setAttribute("aria-pressed", String(!!navState.rail));
+  t.title = navState.rail ? "Show the menu" : "Shrink the menu to icons";
+  for (const head of document.querySelectorAll(".nav-head")) {
+    head.setAttribute("aria-expanded", String(!shut[head.dataset.group]));
+    head.nextElementSibling.classList.toggle("shut", !!shut[head.dataset.group]);
+  }
+  if (save) { try { localStorage.setItem("dd-nav", JSON.stringify(navState)); } catch { /* private mode */ } }
+}
+$("#nav-toggle").addEventListener("click", () => { navState.rail = !navState.rail; applyNav(true); });
+for (const head of document.querySelectorAll(".nav-head")) {
+  head.addEventListener("click", () => {
+    navState.shut = { ...(navState.shut || {}), [head.dataset.group]: head.getAttribute("aria-expanded") === "true" };
+    applyNav(true);
+  });
+}
+for (const a of document.querySelectorAll("#nav a")) a.title = a.textContent.trim();
+applyNav(false);
+
 // ------------------------------------------------------------------ routing
 function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
 function parseRoute() {
@@ -3299,12 +3324,22 @@ function msgRow(m) {
         !m.on_drive && h("span", { class: "tag", title: "The text of this message was just recorded and is written to the drive within half a minute. Its attachments are saved to the drive right away." }, "text not on the drive yet")),
       m.content && h("div", { class: "ch-text" }, m.content),
       m.edits.map((e) => h("div", { class: "ch-old" }, h("span", {}, `Before the edit${e.ts ? " of " + fmtFull.format(e.ts) : ""}`), e.old_content)),
-      m.attachments.map((a) => !a.path ? h("span", { class: "ch-file off", title: "Not saved to the drive" }, icon("file"), a.filename || "file")
-        : a.thumb ? h("a", { class: "ch-thumb", href: fileUrl(a.path), target: "_blank", rel: "noopener", title: `${a.filename || "file"}${a.size ? " · " + size(a.size) : ""}` },
-                      h("img", { src: "/api/thumb" + q({ path: a.path }), alt: a.filename || "", loading: "lazy" }),
-                      (a.content_type || "").startsWith("video/") && h("span", { class: "play" }, icon("play")))
-        : h("a", { class: "ch-file", href: fileUrl(a.path), target: "_blank", rel: "noopener" }, icon("file"), a.filename || "file", a.size ? h("span", { class: "muted" }, size(a.size)) : null)),
+      m.attachments.map((a) => attachmentEl(m, a)),
       !m.content && !m.attachments.length ? h("div", { class: "ch-text muted" }, m.embeds.length ? "(a link preview)" : "(no text)") : null));
+}
+
+// Shown and opened from Discord while it is still there; the copy on the drive is the backup (the server decides).
+function attachmentEl(m, a) {
+  const name = a.filename || "file";
+  const open = "/api/chat/open" + q({ id: m.id, a: a.id });
+  const note = a.path ? "A copy is on your drive" : "Not copied to the drive: it opens from Discord while it is still there";
+  const chip = () => h("a", { class: "ch-file" + (a.path ? "" : " off"), href: open, target: "_blank", rel: "noopener", title: note },
+                       icon(a.path ? "file" : "link"), name, a.size ? h("span", { class: "muted" }, size(a.size)) : null);
+  if (!/^(image|video)\//.test(a.content_type || "")) return chip();
+  const box = h("a", { class: "ch-thumb", href: open, target: "_blank", rel: "noopener", title: `${name}${a.size ? " · " + size(a.size) : ""} · ${note}` },
+    h("img", { src: "/api/chat/preview" + q({ id: m.id, a: a.id }), alt: name, loading: "lazy", onerror: () => box.replaceWith(chip()) }),
+    (a.content_type || "").startsWith("video/") && h("span", { class: "play" }, icon("play")));
+  return box;
 }
 
 const msgFilter = (kindKey) => kindKey === "all" ? {} : { [kindKey]: 1 };

@@ -3,6 +3,17 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.3 (2026-10-10)
+
+- Messages: attachments are shown and opened from Discord itself while they are still there. Previews
+  of pictures and videos come from Discord, and opening one checks that Discord still has it and
+  sends you there (links that ran out are renewed). When it is gone from Discord, the preview and the
+  file come from the copy on your drive instead. The preview is now kept on the drive as well (in
+  `files/previews/`), not on the computer. Attachments that were not copied to the drive open from
+  Discord for as long as they exist.
+- The menu takes less room: its sections (Tools, Share and sync, History, Drive) fold, and the button
+  at the top left shrinks the whole menu to a strip of icons. Both are remembered per browser.
+
 ## 1.3.2 (2026-10-10)
 
 - Messages are written to the drive within half a minute of being recorded, instead of every ten

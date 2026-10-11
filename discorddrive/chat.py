@@ -74,16 +74,18 @@ class AccountAPI:
     def _open(self, req):
         return urllib.request.urlopen(req, timeout=self.timeout)
 
-    def request(self, method, path, query=None, stop=None):
+    def request(self, method, path, query=None, stop=None, body=None):
         """The decoded answer of one request. Waits out "slow down" answers; `stop` (an Event) ends the waiting."""
+        data_out = json.dumps(body).encode("utf-8") if body is not None else None
         pairs = [(k, v) for k, v in (query or {}).items() if v not in (None, "")]
         url = API + path + ("?" + urllib.parse.urlencode(pairs) if pairs else "")
         attempt = 0
         while True:
             if stop is not None and stop.is_set():
                 raise InterruptedError("stopped")
-            req = urllib.request.Request(url, method=method, headers={
-                "Authorization": self.token, "User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"})
+            req = urllib.request.Request(url, data=data_out, method=method, headers={
+                "Authorization": self.token, "User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9",
+                **({"Content-Type": "application/json"} if data_out is not None else {})})
             try:
                 with self._open(req) as resp:
                     status, data = resp.status, resp.read()
@@ -133,6 +135,11 @@ class AccountAPI:
 
     def messages(self, channel_id, before=None, limit=100, stop=None):
         return self.request("GET", f"/channels/{channel_id}/messages", {"limit": limit, "before": before}, stop=stop) or []
+
+    def refresh_urls(self, urls):
+        """{old link: working link} for attachment links that ran out (Discord's links last about a day)."""
+        r = self.request("POST", "/attachments/refresh-urls", body={"attachment_urls": list(urls)}) or {}
+        return {x.get("original"): x.get("refreshed") for x in r.get("refreshed_urls") or [] if x.get("refreshed")}
 
     def download(self, url):
         """An attachment, as an open stream (the caller closes it)."""

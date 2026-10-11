@@ -1141,3 +1141,28 @@ a.ch-file:hover { background: var(--hover); }
   .ch-cols, .ch-cols.wide { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .ch-note { flex-wrap: wrap; }
 }
+
+/* The menu: sections that fold, and a strip of icons instead of the whole menu */
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-head { display: flex; align-items: center; justify-content: space-between; flex: none; height: 28px; margin-top: 10px; padding: 0 10px;
+            border: 0; border-radius: 6px; background: none; color: var(--faint); font-size: 11px; font-weight: 600;
+            letter-spacing: .04em; text-transform: uppercase; }
+.nav-head:hover { background: var(--hover); color: var(--muted); }
+.nav-head svg { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform .12s; }
+.nav-head[aria-expanded="false"] svg { transform: rotate(180deg); }
+#nav-toggle { flex: none; margin-left: -6px; }
+#nav-toggle + .brand { width: 142px; }
+@media (min-width: 761px) {
+  .nav-group.shut a:not(.on) { display: none; }
+  .app.rail { grid-template-columns: 60px minmax(0, 1fr); }
+  .app.rail .side { padding: 14px 10px; }
+  .app.rail .side a { justify-content: center; padding: 0; }
+  .app.rail .side a span, .app.rail .usage, .app.rail .brand span, .app.rail .nav-head svg { display: none; }
+  .app.rail #nav-toggle + .brand { width: auto; }
+  .app.rail .nav-head { height: 1px; margin: 8px 6px; padding: 0; background: var(--line); font-size: 0; pointer-events: none; }
+  .app.rail .nav-group.shut a:not(.on) { display: flex; }
+}
+@media (max-width: 760px) {
+  .nav-head, #nav-toggle { display: none; }
+  .nav-group { display: contents; }
+}
