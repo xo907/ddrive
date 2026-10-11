@@ -754,6 +754,27 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "resources": resources.snapshot(d),
         })
 
+    def _post_api_resources_clean(self):
+        """The buttons on the Resources page."""
+        what = self._body_json().get("what")
+        d = self.drive
+        if what == "cache":
+            freed = resources.clear_cache(d)
+            log.info("Web dashboard: the read cache was cleared (%d bytes)", freed)
+            return self._json({"ok": True, "freed": freed})
+        if what == "thumbs":
+            return self._json({"ok": True, "freed": resources.clear_thumbnails(d)})
+        if what == "fetches":
+            running = [i for i in self.app.fetches.items if i["state"] == "running"]
+            for i in running:
+                self.app.fetches.cancel(i["id"])
+            return self._json({"ok": True, "count": len(running)})
+        if what == "uploads":
+            count, skipped, freed = resources.cancel_waiting_uploads(d)
+            log.warning("Web dashboard: %d waiting upload(s) were cancelled (%d being sent were left alone)", count, skipped)
+            return self._json({"ok": True, "count": count, "skipped": skipped, "freed": freed})
+        raise ApiError(400, "Unknown action")
+
     # ------------------------------------------------------------ activity and log
     def _uploads(self):
         """Uploads to Discord in progress, with percent, speed and time left."""

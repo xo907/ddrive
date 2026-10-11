@@ -1308,6 +1308,8 @@ function renderResources(quiet) {
   const upText = up < 3600 ? `${Math.max(1, Math.round(up / 60))} min` : up < 172800 ? `${Math.round(up / 3600)} h` : `${Math.round(up / 86400)} days`;
   const of = (n, limit) => limit ? `${size(n || 0)} of ${size(limit)}` : size(n || 0);
   const low = d && lim.min_free && d.free < lim.min_free * 1.5;
+  const running = (status.fetches || []).filter((x) => x.state === "running").length;
+  if (quiet && document.activeElement && document.activeElement.closest && document.activeElement.closest("dialog[open]")) return;
   page(...head,
     h("div", { class: "stats" },
       stat("Processor", r.cpu == null ? "…" : `${r.cpu}%`, `of one core · ${plural(r.cores, "core")}${r.load != null ? ` · load ${r.load}` : ""}`,
@@ -1332,7 +1334,32 @@ function renderResources(quiet) {
       h("div", {}, "Running for"), h("div", {}, upText),
       h("div", {}, "Threads"), h("div", {}, String(r.threads)),
       h("div", {}, "Version"), h("div", {}, status.version)),
+    h("h2", {}, "Tidy up"),
+    h("div", { class: "settings" },
+      tidyRow("Clear the read cache", `Removes the parts of opened files that are kept for faster reopening (${size(sz.cache || 0)} on disk). Files you keep offline stay. Nothing is lost: they are fetched again when needed.`,
+              "Clear", { what: "cache" }, (x) => `Read cache cleared: ${size(x.freed)} freed`),
+      tidyRow("Delete thumbnails", `Removes the stored small pictures (${size(sz.thumbs || 0)}). They are made again when you look at pictures and videos.`,
+              "Delete", { what: "thumbs" }, (x) => `Thumbnails deleted: ${size(x.freed)} freed`),
+      tidyRow("Stop downloads from links", running ? `${plural(running, "download")} from a web address ${running === 1 ? "is" : "are"} running. What they fetched so far is removed.`
+                : "No download from a web address is running.", "Stop all", { what: "fetches" }, (x) => `${plural(x.count, "download")} stopped`, !running),
+      tidyRow("Cancel waiting uploads", r.waiting ? `${plural(r.waiting, "file")} (${size(sz.staging || 0)}) ${r.waiting === 1 ? "is" : "are"} waiting to go to Discord or stuck. Uploads being sent this moment are left alone.`
+                : "Nothing is waiting to upload.", "Cancel them", { what: "uploads" },
+              (x) => `${plural(x.count, "upload")} cancelled${x.skipped ? `, ${x.skipped} being sent right now left alone` : ""}`, !r.waiting,
+              { title: `Cancel ${plural(r.waiting || 0, "waiting upload")}?`, ok: "Cancel the uploads", danger: true,
+                text: "These files are not on Discord yet. A file that was never uploaded is removed from the drive for good; a changed file goes back to its last uploaded version. This can't be undone." })),
     h("p", { class: "muted", style: "margin-top:28px;font-size:12px" }, "Limits are changed in ", h("a", { class: "link", href: "#/settings" }, "Settings"), " (read cache) and the config file."));
+}
+
+function tidyRow(title, text, label, body, done, off, sure) {
+  const b = h("button", { class: "btn ghost small" + (sure ? " danger" : ""), type: "button", disabled: !!off, onclick: async () => {
+    if (sure && !await ask(sure)) return;
+    b.disabled = true;
+    const r = await attempt(() => api("/api/resources/clean", body));
+    if (r) toast(done(r));
+    await refreshStatus();
+    if (route.name === "resources") { keepScroll = true; try { renderResources(true); } finally { keepScroll = false; } }
+  } }, label);
+  return h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, title), h("div", { class: "s" }, text)), h("div", { class: "set-ctl" }, b));
 }
 
 function renderHealth(quiet) {

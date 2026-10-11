@@ -3,6 +3,14 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.4 (2026-10-11)
+
+- Resources has a "Tidy up" section with buttons: clear the read cache (files kept offline stay),
+  delete the thumbnails, stop all downloads from web addresses, and cancel the uploads that are
+  waiting or stuck. The last one asks first: a file that was never uploaded is removed, a changed
+  file goes back to its last uploaded version; uploads being sent at that moment are left alone.
+  Until now cancelling uploads needed the drive to be stopped (`cancel-uploads`).
+
 ## 1.4.3 (2026-10-11)
 
 - Resources is its own page in the menu, under Health (Drive): processor, memory, disk, the drive's

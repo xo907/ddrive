@@ -114,6 +114,80 @@ def _data_sizes(data_dir):
     return value
 
 
+# ---------------------------------------------------------------------- tidying up (buttons on the Resources page)
+def _forget_sizes():
+    with _lock:
+        _sizes["at"] = 0.0
+
+
+def clear_cache(drive):
+    """Remove what was kept from files that were opened (not what is kept for offline use). Returns bytes freed."""
+    freed = drive.cache.free_space() if drive.cache is not None else 0
+    _forget_sizes()
+    return freed
+
+
+def clear_thumbnails(drive):
+    """Remove the stored thumbnails (they are made again when pictures are looked at). Returns bytes freed."""
+    root, freed = os.path.join(drive.cfg.resolved_data_dir, "thumbs"), 0
+    for folder, _, names in os.walk(root):
+        for name in names:
+            path = os.path.join(folder, name)
+            try:
+                size = os.path.getsize(path)
+                os.remove(path)
+                freed += size
+            except OSError:
+                pass
+    _forget_sizes()
+    return freed
+
+
+def cancel_waiting_uploads(drive):
+    """Give up on the uploads that are waiting or stuck (not the ones being sent this moment): a changed
+    file goes back to its last uploaded version, a file that was never uploaded is removed.
+    Returns (cancelled, left alone because they are being sent or written right now, bytes freed)."""
+    import json
+    up, idx, fs = drive.uploader, drive.index, drive.fs
+    with up._lock:
+        active = set(up._active)
+    cancelled = skipped = freed = 0
+    for n in idx.unsynced_files():
+        nid = n["id"]
+        if nid in active or fs.is_busy(nid):
+            skipped += 1
+            continue
+        with up._lock:
+            if nid in up._active:            # a worker took it meanwhile
+                skipped += 1
+                continue
+            up._pending.pop(nid, None)
+            up._failures.pop(nid, None)
+        rec = idx.kv_get(f"upload:{nid}")
+        if rec:
+            try:
+                idx.release(up.record_mids(json.loads(rec)))
+            except ValueError:
+                pass
+            idx.kv_delete(f"upload:{nid}")
+        try:
+            freed += os.path.getsize(fs.staging_path(nid))
+        except OSError:
+            pass
+        chunks = idx.get_chunks(nid)
+        with fs.lock:
+            fs._chunk_maps.pop(nid, None)
+            if chunks:
+                idx.update(nid, state="synced", size=sum(c["size"] for c in chunks))
+            else:
+                idx.delete_node(nid)
+        fs._remove_staging(nid)
+        up.progress.pop(nid, None)
+        cancelled += 1
+    _forget_sizes()
+    return cancelled, skipped, freed
+
+
 def snapshot(drive):
     cfg = drive.cfg
     data_dir = cfg.resolved_data_dir
@@ -132,6 +206,7 @@ def snapshot(drive):
         "cpu": _process_cpu(), "cores": os.cpu_count() or 1, "load": load,
         "memory": memory, "threads": threading.active_count(), "started": _STARTED,
         "disk": disk, "folder": data_dir, "sizes": _data_sizes(data_dir),
+        "waiting": len(drive.index.unsynced_ids()) if drive.index is not None else 0,
         "limits": {"cache": 0 if memory_cache else cfg.cache_max_bytes, "staging": cfg.staging_max_bytes,
                    "min_free": cfg.min_free_disk_bytes, "memory_cache": getattr(drive.cache, "memory_bytes", 0) if memory_cache else 0},
     }

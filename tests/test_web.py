@@ -74,6 +74,27 @@ class WebTest(helpers.DriveTest):
                          (["cache", "index", "messages", "staging", "thumbs"], True, True))
         self.assertGreater(r["sizes"]["index"], 0)
 
+    def test_tidying_up(self):
+        self.login()
+        post = lambda what: json.loads(self.req("POST", "/api/resources/clean", {"what": what})[2])
+        self.write(self.d, "/kept.txt", b"the uploaded version")
+        self.upload(self.d)
+        self.write(self.d, "/kept.txt", b"a change that never made it to Discord")
+        self.write(self.d, "/new.txt", b"never uploaded")
+        self.assertEqual(json.loads(self.req("GET", "/api/status")[2])["resources"]["waiting"], 2)
+        r = post("uploads")
+        self.assertEqual((r["count"], r["skipped"], r["freed"] > 0), (2, 0, True))
+        self.assertIsNone(self.d.index.resolve("/new.txt"))            # never uploaded: gone
+        self.assertEqual(self.read(self.d, "/kept.txt"), b"the uploaded version")
+        self.assertEqual((self.d.uploader._pending, self.d.index.unsynced_ids()), ({}, []))
+        self.assertEqual(post("uploads")["count"], 0)
+        self.read(self.d, "/kept.txt", cold=False)                     # now in the read cache
+        self.assertGreater(post("cache")["freed"], 0)
+        self.assertEqual(post("cache")["freed"], 0)
+        self.assertEqual(self.read(self.d, "/kept.txt", cold=False), b"the uploaded version")
+        self.assertEqual((post("thumbs")["freed"], post("fetches")["count"]), (0, 0))
+        self.assertEqual(self.req("POST", "/api/resources/clean", {"what": "everything"})[0], 400)
+
     def test_forged_or_old_sessions_fail(self):
         self.login()
         self.cookie = self.cookie[:-4] + "AAAA"
