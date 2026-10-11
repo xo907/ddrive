@@ -3,6 +3,14 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.2 (2026-10-11)
+
+- Health shows what the drive uses on the computer it runs on, under "This computer": processor
+  (the drive's share, with the system load on Linux), memory (the drive's, and how much is free),
+  free disk space, and how much of the disk the drive's own files take: read cache, files waiting to
+  upload, the file list, thumbnails and the Messages search list, each next to its limit.
+- Without the drive driver installed, file errors carry their error number again.
+
 ## 1.4.1 (2026-10-10)
 
 - Windows: files that are already on the drive can be changed in place (appending to a file, a

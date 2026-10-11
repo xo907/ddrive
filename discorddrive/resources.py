@@ -1,0 +1,137 @@
+"""What the drive is using on this computer: processor, memory, disk. For Health in the dashboard.
+
+Standard library only: /proc on Linux, two Windows calls through ctypes. A number that can't be had
+on some system is left out (None) rather than guessed.
+"""
+
+import os
+import shutil
+import sys
+import threading
+import time
+
+_STARTED = time.time()
+_lock = threading.Lock()
+_cpu = {"at": time.monotonic(), "used": time.process_time(), "pct": None}
+_sizes = {"at": 0.0, "dir": None, "value": {}}
+SIZES_EVERY = 30.0           # measuring folders means walking them: not on every request
+
+
+def _process_cpu():
+    """How much of one processor core the drive used lately, in percent (several cores: over 100)."""
+    with _lock:
+        now, used = time.monotonic(), time.process_time()
+        if now - _cpu["at"] >= 2.0:          # several pages may ask at once: measure over a real stretch
+            _cpu["pct"] = round(100.0 * (used - _cpu["used"]) / (now - _cpu["at"]), 1)
+            _cpu["at"], _cpu["used"] = now, used
+        return _cpu["pct"]
+
+
+def _memory_linux():
+    out = {}
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    out["process"] = int(line.split()[1]) * 1024
+        with open("/proc/meminfo") as f:
+            info = {k: int(v.split()[0]) * 1024 for k, _, v in (line.partition(":") for line in f) if v.strip()}
+        out["total"] = info.get("MemTotal")
+        out["available"] = info.get("MemAvailable", info.get("MemFree"))
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+def _memory_windows():
+    import ctypes
+    from ctypes import wintypes
+    out = {}
+    try:
+        class Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                (name, ctypes.c_size_t) for name in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                                     "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                                     "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+        c = Counters()
+        c.cb = ctypes.sizeof(c)
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        get = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
+        get.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        if get(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            out["process"] = int(c.WorkingSetSize)
+
+        class Status(ctypes.Structure):
+            _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD)] + [
+                (name, ctypes.c_ulonglong) for name in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile",
+                                                        "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
+        s = Status()
+        s.dwLength = ctypes.sizeof(s)
+        if k32.GlobalMemoryStatusEx(ctypes.byref(s)):
+            out["total"], out["available"] = int(s.ullTotalPhys), int(s.ullAvailPhys)
+    except (OSError, AttributeError):
+        pass
+    return out
+
+
+def _folder_bytes(path):
+    total = 0
+    stack = [path]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        else:
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return total
+
+
+def _data_sizes(data_dir):
+    """How much each part of the drive's own folder holds (measured now and then, not every time)."""
+    with _lock:
+        if _sizes["dir"] == data_dir and time.monotonic() - _sizes["at"] < SIZES_EVERY:
+            return _sizes["value"]
+    value = {"cache": _folder_bytes(os.path.join(data_dir, "cache")), "staging": _folder_bytes(os.path.join(data_dir, "staging")),
+             "thumbs": _folder_bytes(os.path.join(data_dir, "thumbs")), "index": 0, "messages": 0}
+    try:
+        for name in os.listdir(data_dir):
+            if name.startswith("index.db"):
+                value["index"] += os.path.getsize(os.path.join(data_dir, name))
+            elif name.startswith("chat.db"):
+                value["messages"] += os.path.getsize(os.path.join(data_dir, name))
+    except OSError:
+        pass
+    with _lock:
+        _sizes.update(at=time.monotonic(), dir=data_dir, value=value)
+    return value
+
+
+def snapshot(drive):
+    cfg = drive.cfg
+    data_dir = cfg.resolved_data_dir
+    memory = _memory_windows() if sys.platform == "win32" else _memory_linux()
+    try:
+        disk = shutil.disk_usage(data_dir)
+        disk = {"total": disk.total, "free": disk.free}
+    except OSError:
+        disk = None
+    try:
+        load = round(os.getloadavg()[0], 2)
+    except (OSError, AttributeError):        # no such thing on Windows
+        load = None
+    memory_cache = drive.cache is not None and getattr(drive.cache, "memory_mode", False)
+    return {
+        "cpu": _process_cpu(), "cores": os.cpu_count() or 1, "load": load,
+        "memory": memory, "threads": threading.active_count(), "started": _STARTED,
+        "disk": disk, "folder": data_dir, "sizes": _data_sizes(data_dir),
+        "limits": {"cache": 0 if memory_cache else cfg.cache_max_bytes, "staging": cfg.staging_max_bytes,
+                   "min_free": cfg.min_free_disk_bytes, "memory_cache": getattr(drive.cache, "memory_bytes", 0) if memory_cache else 0},
+    }

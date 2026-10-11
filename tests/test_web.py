@@ -64,7 +64,15 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("GET", "/api/status")[0], 200)
         status, _, body = self.req("GET", "/")
         self.assertIn(b"app.js", body)
-        self.assertEqual(json.loads(self.req("GET", "/api/status")[2])["user"], "Dennis")
+        status = json.loads(self.req("GET", "/api/status")[2])
+        self.assertEqual(status["user"], "Dennis")
+        r = status["resources"]                                        # what the drive uses, for Health
+        self.assertGreater(r["memory"]["process"], 1 << 20)
+        self.assertGreater(r["memory"]["total"], r["memory"]["available"])
+        self.assertGreater(r["disk"]["total"], r["disk"]["free"])
+        self.assertEqual((sorted(r["sizes"]), r["limits"]["staging"] > 0, r["cores"] >= 1),
+                         (["cache", "index", "messages", "staging", "thumbs"], True, True))
+        self.assertGreater(r["sizes"]["index"], 0)
 
     def test_forged_or_old_sessions_fail(self):
         self.login()

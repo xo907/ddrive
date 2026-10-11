@@ -1287,6 +1287,36 @@ function stat(k, v, s, pct) {
            s && h("div", { class: "s" }, s), pct != null && h("div", { class: "meter" }, h("i", { style: `width:${pct}%` })));
 }
 
+// What the drive is using on the computer it runs on (processor, memory, disk).
+function resourcesSection(r) {
+  if (!r) return null;
+  const m = r.memory || {}, d = r.disk, sz = r.sizes || {}, lim = r.limits || {};
+  const used = d ? d.total - d.free : 0;
+  const mine = (sz.cache || 0) + (sz.staging || 0) + (sz.thumbs || 0) + (sz.index || 0) + (sz.messages || 0);
+  const memPct = m.total && m.available != null ? Math.round(100 * (m.total - m.available) / m.total) : null;
+  const up = Math.max(0, Date.now() / 1000 - r.started);
+  const upText = up < 3600 ? `${Math.max(1, Math.round(up / 60))} min` : up < 172800 ? `${Math.round(up / 3600)} h` : `${Math.round(up / 86400)} days`;
+  const of = (n, limit) => limit ? `${size(n || 0)} of ${size(limit)}` : size(n || 0);
+  const low = d && lim.min_free && d.free < lim.min_free * 1.5;
+  return [
+    h("h2", {}, "This computer"),
+    h("div", { class: "stats" },
+      stat("Processor", r.cpu == null ? "…" : `${r.cpu}%`, `of one core · ${plural(r.cores, "core")}${r.load != null ? ` · load ${r.load}` : ""}`,
+           r.cpu == null ? null : Math.min(100, r.cpu)),
+      stat("Memory", m.process ? size(m.process) : "—", m.total ? `used by the drive · ${size(m.available || 0)} of ${size(m.total)} free` : "used by the drive", memPct),
+      stat("Disk", d ? size(d.free) : "—", d ? `free of ${size(d.total)}${low ? " · running low" : ""}` : "", d ? Math.round(100 * used / d.total) : null),
+      stat("Drive's own files", size(mine), `on this disk · running for ${upText}`, d ? Math.min(100, Math.round(100 * mine / d.total)) : null)),
+    h("div", { class: "kv" },
+      h("div", {}, "Read cache"), h("div", {}, lim.memory_cache ? `In memory only (up to ${size(lim.memory_cache)}); ${size(sz.cache || 0)} on disk` : of(sz.cache, lim.cache)),
+      h("div", {}, "Waiting to upload"), h("div", {}, `${of(sz.staging, lim.staging)}${lim.staging ? " (new files wait when it is full)" : ""}`),
+      h("div", {}, "File list"), h("div", {}, size(sz.index || 0)),
+      h("div", {}, "Thumbnails"), h("div", {}, size(sz.thumbs || 0)),
+      sz.messages ? [h("div", {}, "Messages (search list)"), h("div", {}, size(sz.messages))] : null,
+      h("div", {}, "Kept free"), h("div", {}, lim.min_free ? `${size(lim.min_free)}: the drive pauses rather than go below this` : "No limit set"),
+      h("div", {}, "Folder"), h("div", {}, h("code", {}, r.folder)),
+      h("div", {}, "Threads"), h("div", {}, String(r.threads)))];
+}
+
 function renderHealth(quiet) {
   if (!status) { if (!quiet) page(h("h1", {}, "Health"), h("p", { class: "lede" }, "Connecting to the drive…")); return; }
   const st = status.stats, hl = status.health, sc = hl.scrub || {}, sv = status.saved || {};
@@ -1334,6 +1364,7 @@ function renderHealth(quiet) {
       h("div", {}, "Uploading with"), h("div", {}, plural(status.bots, "bot")),
       h("div", {}, "Encryption"), h("div", {}, status.encrypted ? "On (AES-256-GCM): Discord sees only random data" : "Off")),
     uploads.length ? [h("h2", {}, "Uploading now"), h("div", { class: "list" }, uploads)] : null,
+    resourcesSection(status.resources),
     h("h2", {}, "Devices"),
     h("div", { class: "list rows-simple" }, status.devices.map((d) => h("div", { class: "row", style: "grid-template-columns:minmax(0,1fr) auto" },
       h("span", { class: "name" }, h("span", { class: "label" }, d.name || d.id), h("span", { class: "tag" }, d.id), d.me && h("span", { class: "tag" }, "This device")),

@@ -34,7 +34,7 @@ from .actions import default_restore_folder, snapshot_restore_ops, undelete_ops,
 from .config import Config, config_path, launcher as _launcher
 from .crypto import check_password, hash_password
 from .index import ROOT_ID, new_uid
-from . import passkeys
+from . import passkeys, resources
 from .shares import Shares
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
@@ -751,6 +751,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "snapshots": {"interval": d.cfg.snapshot_interval_hours, "keep": d.cfg.snapshot_keep_days},
             "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
             "fetches": self._fetch_list(),
+            "resources": resources.snapshot(d),
         })
 
     # ------------------------------------------------------------ activity and log
