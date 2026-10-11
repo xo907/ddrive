@@ -317,7 +317,7 @@ class PlusHandlers:
                 if self.drive.fs._hidden(r["path"]) or (r["src"] and self.drive.fs._hidden(r["src"]))                         or housekeeping(r["path"]) or r["path"].lower() == "/bookmarks":
                     continue
                 dev = r["device"] or me
-                r["device_name"] = (devices.get(dev) or {}).get("name") or (socket.gethostname() if dev == me else dev)
+                r["device_name"] = (devices.get(dev) or {}).get("name") or (self._host_name() if dev == me else dev)
                 r["me"] = dev == me
                 r["exists"] = idx.get_by_uid(r["uid"]) is not None if r["uid"] else False
                 out.append(r)
@@ -339,7 +339,7 @@ class PlusHandlers:
         st = d.index.stats(max_age=5)
         jobs = d.sync.snapshot() if d.sync else []
         self._json({
-            "host": socket.gethostname(), "mount": d.cfg.mount_point, "version": __version__,
+            "host": self._host_name(), "mount": d.cfg.mount_point, "version": __version__,
             "stats": {k: st.get(k) for k in ("files", "dirs", "bytes", "versions", "version_bytes", "chunks",
                                              "protected_chunks", "unsynced")},
             "starred": self._starred()[:12],
@@ -528,7 +528,7 @@ class PlusHandlers:
         import hashlib
         import hmac
         header = self.headers.get("Authorization") or ""
-        addr = "dav:" + self.client_address[0]
+        addr = "dav:" + self._addr()
         user, pw = self.app.credentials()
         ok = False
         if header.lower().startswith("basic ") and user and pw and not self.app.locked_for(addr):

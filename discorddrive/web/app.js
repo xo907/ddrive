@@ -6,6 +6,10 @@ const $ = (sel) => document.querySelector(sel);
 const main = $("#main");
 let status = null;
 let route = { name: "", args: [] };
+// Somebody signed in to an account (not the owner) has files and tools of their own, and none of the
+// pages that manage the drive or the computer. The drive refuses those requests anyway; this hides them.
+const isAccount = () => !!status && status.role === "account";
+const OWNER_PAGES = ["sync", "log", "health", "resources", "check"];
 
 // ------------------------------------------------------------------ helpers
 function h(tag, attrs, ...children) {
@@ -290,7 +294,7 @@ function itemMenu(it) {
     !it.dir && kind(it.name) === "text" && { label: "Edit", icon: "rename", run: () => editText(it) },
     "-",
     { label: it.starred ? "Remove the star" : "Star", icon: "star", run: () => setStar(it, !it.starred) },
-    { label: "Available offline", icon: "offline", checked: !!it.pinned, run: () => setPinned(it, !it.pinned) },
+    !isAccount() && { label: "Available offline", icon: "offline", checked: !!it.pinned, run: () => setPinned(it, !it.pinned) },
     it.locked ? { label: "Lock again now", icon: "lock", run: lockAllNow }
               : { label: "Lock with a password…", icon: "lock", run: () => lockDialog(it) },
     it.locked && { label: "Remove the lock…", icon: "lock", run: () => removeLockDialog(it) },
@@ -300,7 +304,7 @@ function itemMenu(it) {
     !it.dir && { label: "Duplicate", icon: "copy", run: () => duplicate(it) },
     !it.dir && { label: "Earlier versions", icon: "history", run: () => openItem(it, "versions") },
     { label: "Details", icon: "info", run: () => openItem(it) },
-    { label: "Check for problems", icon: "check", run: () => go("#/check?" + new URLSearchParams({ path: it.path })) },
+    !isAccount() && { label: "Check for problems", icon: "check", run: () => go("#/check?" + new URLSearchParams({ path: it.path })) },
     route.name === "files" && { label: sel.has(it.path) ? "Deselect" : "Select", icon: "check", run: () => toggleSel(it.path) },
     "-",
     { label: "Delete", icon: "trash", danger: true, run: () => remove(it) },
@@ -316,7 +320,7 @@ function backgroundMenu() {
     currentDir !== "/" && { label: "Request files into this folder…", icon: "link", run: () => requestDialog({ path: currentDir, name: base(currentDir), dir: true }) },
     currentDir !== "/" && { label: "Download this folder as ZIP", icon: "download",
                             run: () => download("/api/zip" + q({ path: currentDir }), base(currentDir) + ".zip") },
-    { label: "Check this folder for problems", icon: "check", run: () => go("#/check?" + new URLSearchParams({ path: currentDir })) },
+    !isAccount() && { label: "Check this folder for problems", icon: "check", run: () => go("#/check?" + new URLSearchParams({ path: currentDir })) },
     "-",
     { label: "Refresh", icon: "refresh", run: render },
   ];
@@ -340,7 +344,8 @@ async function refreshStatus() {
   if (busy) { dot.className = "dot busy"; text.textContent = `Uploading ${st.unsynced || busy}`; }
   else if (st.outbox) { dot.className = "dot busy"; text.textContent = "Syncing"; }
   else { dot.className = "dot ok"; text.textContent = "Up to date"; }
-  $("#usage").textContent = `${plural(st.files, "file")} · ${size(st.bytes)}`;
+  const quota = status.quota && status.quota.bytes;
+  $("#usage").textContent = `${plural(st.files, "file")} · ${size(quota ? status.quota.used : st.bytes)}${quota ? " of " + size(quota) : ""}`;
   showDiscordUploads(status.uploads);
   showFetches(status.fetches);
   if (note && route.name === "notes") noteUploadState();
@@ -350,6 +355,9 @@ async function refreshStatus() {
   lk.title = status.locks && status.locks.open ? "Locked folders are open in this browser" : "Locked folders";
   const acct = $("#account");
   if (acct && status.user) { acct.textContent = status.user.slice(0, 1).toUpperCase(); acct.title = `Signed in as ${status.user}`; }
+  else if (acct && isAccount()) { if (!acct.firstChild) acct.append(icon("user")); acct.title = `Your account (${status.account})`; }
+  for (const a of document.querySelectorAll("#nav a")) a.hidden = isAccount() && OWNER_PAGES.includes(a.dataset.nav);
+  $("#sync").setAttribute("href", isAccount() ? "#/storage" : "#/health");
   if ((route.name === "health" || route.name === "resources") && !$("#sheet").classList.contains("open")) {
     keepScroll = true;
     try { (route.name === "health" ? renderHealth : renderResources)(true); } finally { keepScroll = false; }
@@ -399,10 +407,11 @@ function render() {
   closeSheet();
   leaveNotes();
   leaveMessages();
+  if (isAccount() && OWNER_PAGES.includes(route.name)) return go("#/home");
   if (route.name !== "files" || route.path !== currentDir) sel.clear();
   const views = { files: renderFiles, search: renderSearch, deleted: renderDeleted, snapshots: renderSnapshots,
                   snapshot: renderSnapshot, health: renderHealth, notes: renderNotes, shared: renderShared,
-                  settings: renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
+                  settings: isAccount() ? renderAccount : renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
                   history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources };
   (views[route.name] || renderFiles)();
@@ -1505,7 +1514,7 @@ const SETTING_ROWS = [
   ["Web dashboard", [
     ["web_hosts", "Domain names", "Names this dashboard answers to behind a reverse proxy (e.g. drive.example.com). Several: separate with commas.", "list"],
     ["web_public_url", "Address for share links", "Used when you share from this computer itself, e.g. https://drive.example.com. Empty: the first domain name.", "text"],
-    ["webdav_enabled", "Other apps (WebDAV)", "File managers, “Map network drive”, rclone and backup apps can open the drive at /dav/ with the dashboard’s user name and password.", "bool"],
+    ["webdav_enabled", "Other apps (WebDAV)", "File managers, “Map network drive”, rclone and backup apps can open the drive at /dav/, with a name and password you set for them under Sign-in.", "bool"],
     ["web_lan", "On your network", "Phones and computers at home (and a reverse proxy on another machine) can open the dashboard.", "bool"],
   ]],
   ["Discord", [
@@ -1563,9 +1572,11 @@ async function renderSettings() {
            data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
            h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))]).flat(),
        h("div", { id: "discord-settings" }),
-       h("div", { id: "signin-settings" }));
+       h("div", { id: "signin-settings" }),
+       h("div", { id: "accounts-settings" }));
   discordSection($("#discord-settings"));
   signInSection($("#signin-settings"));
+  accountsSection($("#accounts-settings"));
 }
 
 // ------------------------------------------------------------------ notes
@@ -2240,7 +2251,7 @@ async function unlockDialog() {
   const m = modal("Unlock",
     h("p", { class: "muted", style: "margin:0 0 16px" }, "Type the password of a locked folder or file. Everything locked with it shows up in this browser."),
     field("Password", pw),
-    info && h("div", { class: "toggle" },
+    info && !isAccount() && h("div", { class: "toggle" },
       h("div", {}, h("div", { class: "t" }, `Also show on the drive (${info.mount})`),
         h("div", { class: "s" }, `On ${info.host}, for every program there, for the same time`)),
       switchEl(false, (v) => { drive = v; }, "Also show on the drive")),
@@ -2925,23 +2936,24 @@ async function addPasskey(redraw) {
   }
 }
 
-function setPasswordDialog(info, redraw) {
-  const user = h("input", { value: info.user || "", autocomplete: "username", spellcheck: "false" });
+function appPasswordDialog(info, redraw) {
+  const user = h("input", { value: info.dav_user || "", autocomplete: "off", spellcheck: "false" });
   const a = pwInput("New password (at least 8 characters)"), b = pwInput("The same password again");
   const go_ = h("button", { class: "btn", type: "button", onclick: async () => {
+    if (!user.value.trim()) return toast("Choose a user name");
     if (a.value.length < 8) return toast("Use at least 8 characters");
     if (a.value !== b.value) return toast("The two passwords are different");
-    if (await attempt(() => api("/api/signin/password", { user: user.value.trim(), password: a.value }), "Password set. Other browsers have to sign in again.")) { m.close(); redraw(); }
-  } }, info.password ? "Change the password" : "Set the password");
-  const m = modal(info.password ? "Change the password" : "Set a password",
-    h("p", { class: "muted", style: "margin:0 0 16px" }, "A fallback for places where passkeys don't work (plain http on your home network) and for other apps over WebDAV."),
+    if (await attempt(() => api("/api/webdav/password", { user: user.value.trim(), password: a.value }), "Password for other apps set")) { m.close(); redraw(); }
+  } }, info.dav_password ? "Change the password" : "Set the password");
+  const m = modal("Password for other apps",
+    h("p", { class: "muted", style: "margin:0 0 16px" }, "For apps that open the drive over WebDAV. It does not sign in to this dashboard: that takes your 24 words (or a passkey)."),
     field("User name", user), field("Password", a), field("Again", b), h("div", { class: "modal-actions" }, go_));
-  a.focus();
+  user.focus();
 }
 
 async function showPhrase() {
   if (!await ask({ title: "Show the recovery phrase?", ok: "Show it",
-                   text: "These 24 words are the key to your drive: anyone who sees them can read your files. Make sure nobody is looking at your screen." })) return;
+                   text: "These 24 words sign in as the owner and are the key to your drive: anyone who sees them can read your files. Make sure nobody is looking at your screen." })) return;
   const r = await attempt(() => api("/api/signin/phrase", {}));
   if (!r) return;
   const words = r.phrase.split(" ");
@@ -2963,9 +2975,12 @@ async function signInSection(into) {
             : !info.can_passkey ? "Browsers only allow passkeys on https (your domain through a reverse proxy) or on localhost." : "";
   into.replaceChildren(
     h("h2", {}, "Sign-in"),
-    h("p", { class: "muted", style: "margin:0 0 12px" }, `Signed in as ${info.user || "you"}. Passkeys are the easy way in; your drive's recovery phrase always works as the backup.`),
+    h("p", { class: "muted", style: "margin:0 0 12px" }, `You are the owner of this drive. There are no user names or passwords: you sign in with your 24-word recovery phrase, or with a passkey you add here.`),
     h("div", { class: "settings" },
-      row("Passkeys", why || `Sign in with a fingerprint, face, PIN, phone or security key. A passkey works at the address it was made for (this one: ${info.rp}).`,
+      row("Recovery phrase", info.local ? (info.encrypted ? "The 24 words that are your drive's key. They sign you in here and set up new devices." : "The 24 words that sign you in here.")
+                                        : "Your 24 words are only shown on the computer that runs the drive (or with recovery-phrase in its terminal).",
+          h("button", { class: "btn ghost small", disabled: !info.local, onclick: showPhrase }, "Show")),
+      row("Passkeys", why || `Sign in with a fingerprint, face, PIN, phone or security key instead of typing the words. A passkey works at the address it was made for (this one: ${info.rp}).`,
           h("button", { class: "btn small", disabled: !!why, onclick: () => addPasskey(redraw) }, "Add a passkey")),
       info.passkeys.map((p) => h("div", { class: "set-row sub" },
         h("div", { class: "set-text" }, h("div", { class: "t" }, icon("lock", "tag-ico"), " ", p.name, !p.here && h("span", { class: "tag", style: "margin-left:8px" }, p.rp)),
@@ -2974,18 +2989,112 @@ async function signInSection(into) {
           if (await ask({ title: `Remove “${p.name}”?`, ok: "Remove", danger: true, text: "It can no longer sign in here. Delete it from your device's passkey list too." })
               && await attempt(() => api("/api/signin/passkey/remove", { id: p.id }), "Passkey removed")) redraw();
         } }, "Remove")))),
-      info.phrase && row("Recovery phrase", info.local ? "The 24 words that are your drive's key. They sign in here and set up new devices."
-                                                       : "The 24 words that are your drive's key. They are only shown on the computer that runs the drive (or with recovery-phrase in its terminal).",
-          h("button", { class: "btn ghost small", disabled: !info.local, onclick: showPhrase }, "Show")),
-      row("Password", info.password ? "A fallback for plain http and for other apps (WebDAV)." : "None set. Not needed with a passkey; other apps over WebDAV need one.",
+      row("Password for other apps", info.dav_password ? `Apps that open the drive over WebDAV sign in as “${info.dav_user}”. It doesn't open this dashboard.`
+                                                       : "None set. Only apps that open the drive over WebDAV need one; it doesn't open this dashboard.",
           h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
-            h("button", { class: "btn ghost small", onclick: () => setPasswordDialog(info, redraw) }, info.password ? "Change" : "Set"),
-            info.password && h("button", { class: "btn ghost small", onclick: async () => {
-              if (await ask({ title: "Remove the password?", ok: "Remove", danger: true, text: "Signing in is then by passkey or recovery phrase only. Other apps over WebDAV stop working." })
-                  && await attempt(() => api("/api/signin/password", { password: "" }), "Password removed")) redraw();
-            } }, "Remove"))),
-      info.password && row("Allow signing in with the password", "Off: only passkeys and the recovery phrase open the dashboard. The password then only serves other apps (WebDAV).",
-          switchEl(info.password_login, async (on) => { await attempt(() => api("/api/signin/password-login", { on }), on ? "Password sign-in is on" : "Password sign-in is off"); }, "Allow signing in with the password"))));
+            h("button", { class: "btn ghost small", onclick: () => appPasswordDialog(info, redraw) }, info.dav_password ? "Change" : "Set"),
+            info.dav_password && h("button", { class: "btn ghost small", onclick: async () => {
+              if (await ask({ title: "Remove the password?", ok: "Remove", danger: true, text: "Other apps over WebDAV stop working until you set a new one." })
+                  && await attempt(() => api("/api/webdav/password", { password: "" }), "Password removed")) redraw();
+            } }, "Remove")))));
+}
+
+// ------------------------------------------------------------------ accounts (the owner's side)
+// Other people on this dashboard: each account is 24 words the dashboard made, with storage of its own.
+const SIGNUP_MODES = [["closed", "Closed", "Nobody can make an account."],
+                      ["invite", "Invite only", "Only with an invite code you make below."],
+                      ["public", "Public", "Anybody who can open this dashboard can make one."]];
+const fromHere = (item) => (isLocal() && item.url) || location.origin + item.path;
+
+function inviteDialog(redraw) {
+  const uses = h("select", {}, [["1", "One account"], ["5", "5 accounts"], ["25", "25 accounts"], ["0", "Any number"]].map(([v, l]) => h("option", { value: v }, l)));
+  const days = h("select", {}, [["1", "1 day"], ["7", "7 days"], ["30", "30 days"], ["0", "Until you remove it"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
+  const note = h("input", { placeholder: "Who it is for (only you see this)", maxlength: "80", spellcheck: "false" });
+  const result = h("div");
+  const go_ = h("button", { class: "btn", type: "button", onclick: async () => {
+    const r = await attempt(() => api("/api/accounts/invite", { uses: Number(uses.value), days: Number(days.value), note: note.value.trim() }));
+    if (!r) return;
+    go_.remove();
+    result.replaceChildren(linkBox(location.origin + "/signup?invite=" + r.code, `Send this link, or just the code: ${r.code}`));
+    redraw();
+  } }, "Make the invite");
+  modal("Invite somebody", h("p", { class: "muted", style: "margin:0 0 16px" }, "Whoever opens the link gets 24 words and an account with storage of their own. They never see your files or the drive's settings."),
+    field("Good for", uses), field("Works for", days), field("Note", note), result, h("div", { class: "modal-actions" }, go_));
+}
+
+async function accountsSection(into) {
+  const d = await api("/api/accounts").catch(() => null);
+  if (!d || !into.isConnected) return;
+  const redraw = () => accountsSection(into);
+  const row = (t, text, ctl, sub) => h("div", { class: "set-row" + (sub ? " sub" : "") }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" + (sub ? "" : " wide") }, ctl));
+  const save = async (changes, ok) => { if (await attempt(() => api("/api/settings", changes), ok || "Saved")) { await refreshStatus(); redraw(); } };
+  const gb = d.quota / 2 ** 30;
+  const mode = SIGNUP_MODES.find(([k]) => k === d.mode) || SIGNUP_MODES[0];
+  into.replaceChildren(
+    h("h2", {}, "Accounts"),
+    h("p", { class: "muted", style: "margin:0 0 12px" }, "Let other people use this dashboard. An account is 24 words made here: no name, no password. Each one has its own storage, encrypted with its own words, and sees files, notes, bookmarks, contacts, messages and share links. Never your files, and nothing that manages the drive."),
+    h("div", { class: "settings" },
+      row("Who can make an account", mode[2],
+          h("select", { "aria-label": "Who can make an account", onchange: (e) => save({ signup_mode: e.target.value }, "Saved") },
+            SIGNUP_MODES.map(([k, label]) => h("option", { value: k, selected: k === d.mode }, label)))),
+      d.mode === "public" && row("Sign-up page", "Anybody with this address can make an account.", linkBox(fromHere(d))),
+      row("Storage per account (GB)", "Earlier versions and deleted files count until they are gone. 0: no limit.",
+          h("input", { value: String(Math.round(gb * 100) / 100), inputmode: "decimal", onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+                       onchange: (e) => { const v = Number(e.target.value); if (!(v >= 0)) return toast("Not a number"); save({ account_quota_bytes: Math.round(v * 2 ** 30) }); } })),
+      row("Most accounts", "No more than this many are made. 0: no limit.",
+          h("input", { value: String(d.max), inputmode: "numeric", onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+                       onchange: (e) => { const v = Number(e.target.value); if (!(v >= 0)) return toast("Not a number"); save({ accounts_max: Math.round(v) }); } })),
+      d.mode !== "closed" && row("Invites", d.mode === "invite" ? "A code lets somebody make an account." : "Not needed while sign-up is public; they still work.",
+          h("button", { class: "btn small", onclick: () => inviteDialog(redraw) }, "Invite somebody")),
+      d.mode !== "closed" && d.invites.map((i) => row(
+        [h("code", {}, i.code), i.note && ` · ${i.note}`, !i.valid && h("span", { class: "tag", style: "margin-left:8px" }, i.expired ? "Run out" : "Used up")],
+        `${i.uses ? `${i.used} of ${plural(i.uses, "account")} made` : `${plural(i.used, "account")} made, any number allowed`} · ${i.expires ? "until " + fmtFull.format(new Date(i.expires * 1000)) : "no end date"}`,
+        h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
+          i.valid && h("button", { class: "btn ghost small", onclick: async () => { try { await navigator.clipboard.writeText(fromHere(i)); toast("Invite link copied"); } catch { toast(fromHere(i)); } } }, "Copy link"),
+          h("button", { class: "btn ghost small", onclick: async () => { if (await attempt(() => api("/api/accounts/invite/revoke", { code: i.code }), "Invite removed")) redraw(); } }, "Remove")), true))),
+    h("h2", {}, `${plural(d.accounts.length, "account")}`),
+    d.accounts.length ? h("div", { class: "settings" }, d.accounts.map((a) => row(
+        [h("code", {}, a.id), a.disabled && h("span", { class: "tag busy", style: "margin-left:8px" }, "Switched off"), a.open && !a.disabled && h("span", { class: "tag", style: "margin-left:8px" }, "In use")],
+        `${plural(a.files, "file")}, ${size(a.bytes)} · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : ""}${a.invite ? " · invite " + a.invite : ""}`,
+        h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
+          h("button", { class: "btn ghost small", onclick: async () => {
+            if (!a.disabled && !await ask({ title: "Switch this account off?", ok: "Switch off", danger: true, text: "It is signed out and can't sign in, and its share links stop working. Nothing is deleted: you can switch it on again." })) return;
+            if (await attempt(() => api("/api/accounts/disable", { id: a.id, off: !a.disabled }), a.disabled ? "Switched on again" : "Switched off")) redraw();
+          } }, a.disabled ? "Switch on" : "Switch off"),
+          h("button", { class: "btn danger small", onclick: async () => {
+            if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
+                && await attempt(() => api("/api/accounts/delete", { id: a.id }), "Account deleted")) { await refreshStatus(); redraw(); }
+          } }, "Delete")))))
+      : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one above." : "None yet."));
+}
+
+// ------------------------------------------------------------------ your account (somebody signed in to one)
+async function renderAccount() {
+  const a = await attempt(() => api("/api/account"));
+  if (!a || route.name !== "settings") return;
+  const used = a.bytes + a.version_bytes;
+  const row = (t, text, ctl) => h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" }, ctl));
+  page(h("h1", {}, "Your account"),
+       h("p", { class: "lede" }, "Your account is your 24 words: they sign you in, and they are the key everything here is encrypted with. There is no name, no password and no way to reset them, so keep them safe."),
+       h("div", { class: "settings" },
+         row("Account", [h("code", {}, a.id), a.created ? ` · made ${when(a.created)}` : ""]),
+         row("Storage", `${plural(a.files, "file")}, ${size(a.bytes)}${a.version_bytes ? `, plus ${size(a.version_bytes)} of earlier versions and deleted files` : ""}.`
+                        + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
+             a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
+         a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         row("Sign out", "On this browser. Signing in again takes your 24 words.",
+             h("button", { class: "btn ghost small", onclick: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } }, "Sign out"))),
+       h("div", { id: "discord-settings" }),
+       h("h2", {}, "Delete the account"),
+       h("div", { class: "settings" },
+         row("Delete everything", "Your files, notes, bookmarks, contacts, messages and share links are removed for good, and the 24 words stop working.",
+             h("button", { class: "btn danger small", onclick: async () => {
+               const typed = await ask({ title: "Delete your account?", value: "", ok: "Delete for good", danger: true, text: "Everything in it is removed and can't be brought back. Type delete to confirm." });
+               if (typed == null) return;
+               if (String(typed).trim().toLowerCase() !== "delete") return toast("Nothing was deleted: type delete to confirm");
+               if (await attempt(() => api("/api/account/delete", { confirm: "delete" }))) location.reload();
+             } }, "Delete my account"))));
+  discordSection($("#discord-settings"));
 }
 
 // ------------------------------------------------------------------ stars
@@ -3035,10 +3144,11 @@ async function renderHome() {
         h("button", { class: "btn", onclick: () => { currentDir = "/"; $("#pick").click(); } }, "Upload"))),
     h("div", { class: "stats home-stats" },
       card("#/storage", "On the drive", size(st.bytes), `${plural(st.files, "file")} in ${plural(st.dirs, "folder")}`),
-      card("#/health", "Protected", `${pct}%`, st.unsynced ? `${plural(st.unsynced, "file")} uploading` : "everything is in Discord"),
-      card("#/sync", "Folder sync", d.sync.jobs ? plural(d.sync.jobs, "folder") : "Off",
-           d.sync.problems ? plural(d.sync.problems, "problem") : d.sync.running ? "syncing now" : d.sync.jobs ? "up to date" : "back up a folder by itself"),
-      card("#/shared", "Shared", plural(d.shares, "link"), `${plural(d.devices, "device")} on this drive`)),
+      card(isAccount() ? "#/storage" : "#/health", "Protected", `${pct}%`, st.unsynced ? `${plural(st.unsynced, "file")} uploading` : "everything is stored"),
+      isAccount() ? card("#/settings", "Your account", "Encrypted", "with your 24 words")
+        : card("#/sync", "Folder sync", d.sync.jobs ? plural(d.sync.jobs, "folder") : "Off",
+               d.sync.problems ? plural(d.sync.problems, "problem") : d.sync.running ? "syncing now" : d.sync.jobs ? "up to date" : "back up a folder by itself"),
+      card("#/shared", "Shared", plural(d.shares, "link"), isAccount() ? "links you made" : `${plural(d.devices, "device")} on this drive`)),
     h("div", { class: "h-head" }, h("h2", {}, "Starred"), d.starred.length ? h("a", { class: "link", href: "#/starred" }, "All starred") : null),
     d.starred.length ? h("div", { class: "h-tiles" }, d.starred.map(tile))
       : h("p", { class: "muted" }, "Right-click a file or folder and choose Star to keep it here."),
@@ -3048,9 +3158,9 @@ async function renderHome() {
     h("div", { class: "h-head" }, h("h2", {}, "Activity"), h("a", { class: "link", href: "#/history" }, "All activity")),
     d.history.length ? h("div", { class: "list" }, d.history.map(activityRow))
       : h("p", { class: "muted" }, "What is added, changed and deleted, on any of your devices, shows up here."),
-    h("p", { class: "muted", style: "margin-top:40px;font-size:12px" }, `DiscordDrive ${d.version} on ${d.host} · `,
-      h("button", { class: "link", onclick: whatsNew }, "What's new"), " · ",
-      h("button", { class: "link", onclick: connectApps }, "Use it from other apps")));
+    h("p", { class: "muted", style: "margin-top:40px;font-size:12px" }, `DiscordDrive ${d.version}${d.host ? " on " + d.host : ""} · `,
+      h("button", { class: "link", onclick: whatsNew }, "What's new"),
+      !isAccount() && [" · ", h("button", { class: "link", onclick: connectApps }, "Use it from other apps")]));
 }
 
 async function renderStarred() {
@@ -3242,15 +3352,19 @@ function requestDialog(it) {
 
 // ------------------------------------------------------------------ other apps (WebDAV)
 async function connectApps() {
-  const s = await api("/api/settings").catch(() => null);
+  const [s, info] = await Promise.all([api("/api/settings").catch(() => null), api("/api/signin").catch(() => null)]);
   const on = !!(s && s.values.webdav_enabled);
   const addr = `${location.origin}/dav/`;
   const body = h("div");
+  const has = () => !!(info && info.dav_password);
   const draw = (enabled) => body.replaceChildren(
-    h("p", { class: "muted", style: "margin:0 0 16px" }, "Other apps can open the drive over WebDAV: file managers on phones, “Map network drive” in Windows, Finder’s “Connect to Server”, rclone, backup apps. They sign in with the dashboard’s user name and password. Password-locked folders are never shown there."),
+    h("p", { class: "muted", style: "margin:0 0 16px" }, "Other apps can open the drive over WebDAV: file managers on phones, “Map network drive” in Windows, Finder’s “Connect to Server”, rclone, backup apps. They can't type 24 words, so they get a user name and password of their own, which open nothing else. Password-locked folders are never shown there."),
     h("div", { class: "toggle" }, h("div", {}, h("div", { class: "t" }, "Let other apps connect"), h("div", { class: "s" }, enabled ? "On" : "Off")),
       switchEl(enabled, async (v) => { if (await attempt(() => api("/api/settings", { webdav_enabled: v }), v ? "Other apps can connect now" : "Turned off")) draw(v); }, "Let other apps connect")),
-    enabled && linkBox(addr, location.protocol === "https:" ? "Server address. User name and password: the dashboard’s."
+    enabled && h("div", { class: "toggle" }, h("div", {}, h("div", { class: "t" }, has() ? `They sign in as “${info.dav_user}”` : "No password for them yet"),
+        h("div", { class: "s" }, has() ? "With the password you chose for them." : "Nothing can connect until you set one.")),
+      h("button", { class: "btn ghost small", type: "button", onclick: () => appPasswordDialog(info, async () => { Object.assign(info, await api("/api/signin").catch(() => info)); draw(enabled); }) }, has() ? "Change" : "Set")),
+    enabled && has() && linkBox(addr, location.protocol === "https:" ? "Server address."
       : "Server address. Over plain http the password travels unencrypted, and Windows refuses it: use your https address (a reverse proxy) when you can."));
   draw(on);
   modal("Use the drive from other apps", body);
@@ -3262,16 +3376,18 @@ function openPalette() {
   const pages = [["Home", "#/home"], ["Files", "#/files/"], ["Gallery", "#/gallery/"], ["Starred", "#/starred"], ["Recent", "#/recent"],
                  ["Activity", "#/history"], ["Storage", "#/storage"], ["Resources", "#/resources"], ["Notes", "#/notes"], ["Bookmarks", "#/bookmarks"], ["Messages", "#/messages"], ["Contacts", "#/contacts"], ["Shared links", "#/shared"],
                  ["Folder sync", "#/sync"], ["Deleted files", "#/deleted"], ["Snapshots", "#/snapshots"], ["Log", "#/log"], ["Health", "#/health"],
-                 ["Settings", "#/settings"]].map(([label, href]) => ({ label, hint: "Go to", icon: "enter", run: () => go(href) }));
+                 [isAccount() ? "Your account" : "Settings", "#/settings"]]
+    .filter(([, href]) => !isAccount() || !OWNER_PAGES.includes(href.slice(2)))
+    .map(([label, href]) => ({ label, hint: "Go to", icon: "enter", run: () => go(href) }));
   const actions = [
     { label: "Upload files", hint: "Action", icon: "upload", run: () => $("#pick").click() },
     { label: "New folder", hint: "Action", icon: "newfolder", run: () => { if (route.name !== "files") go("#/files/"); setTimeout(newFolder, 150); } },
     { label: "Save from a link", hint: "Action", icon: "download", run: () => saveFromLink(route.name === "files" ? currentDir : "/") },
     { label: "Unlock locked folders", hint: "Action", icon: "lock", run: unlockDialog },
     { label: "Lock folders again now", hint: "Action", icon: "lock", run: lockAllNow },
-    { label: "Use the drive from other apps (WebDAV)", hint: "Action", icon: "globe", run: connectApps },
+    !isAccount() && { label: "Use the drive from other apps (WebDAV)", hint: "Action", icon: "globe", run: connectApps },
     { label: "What's new", hint: "Action", icon: "info", run: whatsNew },
-  ];
+  ].filter(Boolean);
   const input = h("input", { placeholder: "Find a file, a page or an action…", spellcheck: "false", autocomplete: "off" });
   const list = h("div", { class: "pal-list" });
   const dlg = h("dialog", { class: "palette" }, input, list);
@@ -3806,9 +3922,9 @@ async function renderMessages() {
 $("#account").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   openMenu([
-    { label: status && status.user ? `Signed in as ${status.user}` : "Signed in", icon: "user", disabled: true },
+    { label: isAccount() ? `Account ${status.account}` : status && status.user ? `Signed in as ${status.user}` : "Signed in", icon: "user", disabled: true },
     "-",
-    { label: "Settings", icon: "settings", run: () => go("#/settings") },
+    { label: isAccount() ? "Your account" : "Settings", icon: "settings", run: () => go("#/settings") },
     { label: "What's new", icon: "info", run: whatsNew },
     { label: "Sign out", icon: "signout", run: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } },
   ], r.right - 220, r.bottom + 6, "Account");
@@ -3818,8 +3934,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(
 // ------------------------------------------------------------------ start
 dropTarget(document.querySelector('#nav a[data-nav="files"]'), "/");
 dropTarget(document.querySelector('#nav a[data-nav="deleted"]'), "/", "delete");
-render();
-refreshStatus();
+refreshStatus().then(render);          // who is signed in decides which pages there are
 (function poll() {
   const busy = status && (status.uploads.length || status.downloads || status.queued || (status.fetches || []).some((f) => f.state === "running"));
   setTimeout(async () => { await refreshStatus(); poll(); }, busy ? 1000 : 3000);

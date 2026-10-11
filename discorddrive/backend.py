@@ -232,7 +232,8 @@ class DiscordBackend:
 
 
 class LocalBackend:
-    """Fake Discord: every 'message' is a file in `root`. For tests only."""
+    """Fake Discord: every 'message' is a file in `root`. For tests, and for the change journal of an
+    account, which stays on the computer that serves it (accounts.py)."""
 
     upload_slots = 1
 

@@ -3,6 +3,31 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.5.0 (2026-10-11)
+
+- **Accounts.** Other people can use the dashboard with storage of their own. An account is 24 words
+  that the sign-up page makes and shows once: no name, no email, no password, and no way to reset
+  them. The words are the account's encryption key, so what it stores is unreadable for Discord, for
+  other accounts and with the drive's own key. An account has files, gallery, stars, notes, bookmarks,
+  contacts, messages, share links, locked folders, earlier versions, deleted files and snapshots, and
+  none of the pages that manage the drive or the computer (Settings, Sync, Log, Health, Resources,
+  checks, WebDAV); the drive refuses those requests for it.
+- Settings has an **Accounts** section for the owner: who can make an account (**closed**, the
+  default; **invite only**, with codes made there, each for a number of accounts and a number of
+  days; or **public**), storage per account (5 GB unless changed), the most accounts allowed, and the
+  list of accounts with what they store, to switch off or delete.
+- **Signing in to the dashboard is by 24 words only.** User names and passwords are gone: the drive's
+  recovery phrase signs the owner in (from the first visit on; `recovery-phrase` shows it), and
+  passkeys still work for the owner. Browsers signed in with a password have to sign in once more.
+  A drive without encryption gets 24 sign-in words of its own, shown by `recovery-phrase`.
+- The password that remains is for other apps over WebDAV only (Settings, Sign-in, "Password for
+  other apps", or `webdav-password`; `web-password` still works as a name for it). It never opens the
+  dashboard, and changing it no longer signs browsers out.
+- DiscordDrive Lite signs in with 24 words too: `lite connect` asks for them. Run it once more on
+  computers that were connected with a name and password. With an account's words it shows that
+  account's storage.
+- `unprotect --forgot` asks for the recovery phrase (it used to take the dashboard password as well).
+
 ## 1.4.6 (2026-10-11)
 
 - Health: the "Bring back from a snapshot or an earlier version" bar is always shown above the

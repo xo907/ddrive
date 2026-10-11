@@ -418,7 +418,7 @@ class ChatWebTest(helpers.DriveTest):
         FakeAccount.history = history()
         self.d = self.drive(web_token="secret-token")
         self.web = self.d.start_web(port=0)
-        self.web.set_credentials("Dennis", "correct horse")
+        self.phrase = test_web.words.key_to_phrase(bytes.fromhex(self.d.cfg.encryption_key))
         self.cookie = None
         self.d.chat.make_api, self.d.chat.make_gateway = FakeAccount, FakeGateway
         self.login()

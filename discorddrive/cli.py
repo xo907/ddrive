@@ -405,8 +405,8 @@ def cmd_approve_keys(args):
 _SECRET_FIELDS = {"bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens",
                   "web_token", "web_password", "discord_user_token"}
 _LIST_COMMANDS = {"extra_bot_tokens": "bots add <token>", "hidden_folders": "hide <folder>", "sync_jobs": "sync add",
-                  "old_encryption_keys": "add-old-key", "web_user": "web-password",
-                  "web_password": "web-password"}
+                  "old_encryption_keys": "add-old-key", "web_user": "webdav-password",
+                  "web_password": "webdav-password"}
 
 
 def cmd_config(args):
@@ -791,9 +791,31 @@ def _show_phrase(key_hex, first=False):
 def cmd_recovery_phrase(args):
     """Show the 24-word recovery phrase of this drive (its encryption key, as words)."""
     cfg = Config.load()
-    if not cfg.encryption_key:
-        print("[ERROR] No encryption key is configured on this device.")
-        return 1
+    if not (cfg.encryption_enabled and cfg.encryption_key):
+        # A drive without encryption has no key to write as words; the dashboard still signs in with 24.
+        from . import words
+        from .web import owner_key
+        key = owner_key(cfg)
+        if not key:
+            print("[ERROR] No encryption key is configured on this device, and the dashboard has not run yet.")
+            print(f"        Start the drive once ({launcher()} start), then try again.")
+            return 1
+        if args.check:
+            try:
+                ok = words.phrase_to_key(input("Type your 24 words to check them: ")).hex() == key
+            except (ValueError, EOFError) as e:
+                print(f"[ERROR] {str(e) or 'Nothing entered'}.")
+                return 1
+            print("[OK] Those are the words that sign in to this dashboard." if ok else
+                  "[ERROR] Those are 24 valid words, but they do NOT sign in here.")
+            return 0 if ok else 1
+        print()
+        print("--- The 24 words that sign you in to the dashboard ---")
+        print(words.grid(words.key_to_phrase(bytes.fromhex(key))))
+        print()
+        print("This drive is not encrypted, so these words are no encryption key: they only sign you in to")
+        print("the web dashboard, as its owner, on this computer. Keep them to yourself.")
+        return 0
     if args.check:
         from . import words
         try:
@@ -896,7 +918,8 @@ def cmd_status(args):
             row("Upload bots", f"{1 + len(cfg.extra_bot_tokens)} (uploads are spread over all of them)")
     if cfg.web_enabled:
         row("Web dashboard", f"http://localhost:{cfg.web_port}/" + (" (also on your network)" if cfg.web_lan else "")
-            + (f", sign in as '{cfg.web_user}'" if cfg.web_password else ", no sign-in set yet"))
+            + ", sign in with your recovery phrase"
+            + ("" if cfg.signup_mode in ("", "closed") else f"; accounts for others: {cfg.signup_mode}"))
     if cfg.hidden_folders:
         row("Hidden here", ", ".join(cfg.hidden_folders))
 
@@ -1911,7 +1934,6 @@ def _ask_password(prompt):
 def cmd_lock(args):
     """lock <path>: protect a folder or file with a password | unlock: show locked items on this
     device's drive | relock: hide them again | unprotect <path>: remove a lock."""
-    from .crypto import check_password
     from .locks import Locks
     setup_logging(args.verbose, log_to_file=False)
     cfg = Config.load()
@@ -1972,19 +1994,17 @@ def cmd_lock(args):
             return 1
         if args.forgot:
             from . import words
-            typed = _ask_password("The drive's recovery phrase, or the dashboard's password (input is hidden): ") or ""
-            if words.looks_like_phrase(typed):
-                try:
-                    ok = bool(cfg.encryption_key) and words.phrase_to_key(typed).hex() == cfg.encryption_key
-                except ValueError as e:
-                    print(f"[ERROR] {e}.")
-                    return 1
-            else:
-                ok = bool(cfg.web_password) and check_password(typed, cfg.web_password)
+            from .web import owner_key
+            typed = _ask_password("The drive's recovery phrase (input is hidden): ") or ""
+            try:
+                ok = bool(owner_key(cfg)) and words.phrase_to_key(typed).hex() == owner_key(cfg)
+            except ValueError as e:
+                print(f"[ERROR] {e}.")
+                return 1
         else:
             ok = locks.check(node["uid"], _ask_password("Password of the lock (input is hidden): ") or "")
         if not ok:
-            print("[ERROR] Wrong password. Nothing changed."
+            print(("[ERROR] Those are not this drive's 24 words. Nothing changed." if args.forgot else "[ERROR] Wrong password. Nothing changed.")
                   + ("" if args.forgot else f" (Forgot it? {launcher()} unprotect <path> --forgot asks for the recovery phrase instead.)"))
             return 1
         locks.remove(node["uid"])
@@ -2014,11 +2034,13 @@ def cmd_web(args):
         print(f"(To open it on your phone too: {launcher()} config web_lan true, then restart the drive.)")
     if cfg.web_passkeys:
         print(f"Sign in with a passkey ({len(cfg.web_passkeys)} added), or with your recovery phrase.")
-    elif cfg.web_user or cfg.web_password:
-        print("Sign in with your recovery phrase" + (f", or as '{cfg.web_user}' with the password" if cfg.web_password else "")
-              + ". Add a passkey under Settings -> Sign-in.")
     else:
-        print("No sign-in yet: the first visit from this computer sets it up (your recovery phrase always works too).")
+        print(f"Sign in with your 24-word recovery phrase ({launcher()} recovery-phrase shows it). There is no user name or")
+        print("password. To skip typing the words next time, add a passkey under Settings -> Sign-in.")
+    if cfg.signup_mode == "public":
+        print("Accounts: anybody who can open the dashboard can make one (Settings -> Accounts).")
+    elif cfg.signup_mode == "invite":
+        print("Accounts: others can make one with an invite code from Settings -> Accounts.")
     if not running:
         print(f"[!] The drive isn't running: start it first ({launcher()} start).")
         return 0
@@ -2028,13 +2050,15 @@ def cmd_web(args):
     return 0
 
 
-def cmd_web_password(args):
-    """Set the user name and password of the web dashboard."""
+def cmd_webdav_password(args):
+    """Set the user name and password other apps use over WebDAV (they don't sign in to the dashboard)."""
     import getpass
     from .crypto import hash_password
     cfg = Config.load()
+    print("For apps that open the drive over WebDAV (file managers, rclone, \"Map network drive\").")
+    print("The dashboard itself is opened with your 24-word recovery phrase, never with this password.")
     try:
-        current = cfg.web_user or "admin"
+        current = cfg.web_user or "drive"
         user = input(f"User name [{current}]: ").strip() or current
         while True:
             pw = getpass.getpass("New password (at least 8 characters, input is hidden): ")
@@ -2051,8 +2075,8 @@ def cmd_web_password(args):
     cfg.web_user = user
     cfg.web_password = hash_password(pw)
     cfg.save()
-    print(f"[OK] The dashboard now asks for '{user}' and this password. Browsers that were signed in have to "
-          "sign in again.")
+    print(f"[OK] Other apps now sign in as '{user}' with this password"
+          + ("." if cfg.webdav_enabled else f". WebDAV is off: turn it on with {launcher()} config webdav_enabled true"))
     return 0
 
 
@@ -2341,7 +2365,8 @@ def main():
     p_health.add_argument("--protect", action="store_true", help="Add spare pieces to files uploaded without them")
     p_web = subparsers.add_parser("web", help="Show the address of the web dashboard")
     p_web.add_argument("--open", action="store_true", help="Also open it in the browser")
-    subparsers.add_parser("web-password", help="Set the user name and password of the web dashboard")
+    subparsers.add_parser("webdav-password", aliases=["web-password"],
+                          help="Set the user name and password other apps use over WebDAV (not for the dashboard)")
     p_purge = subparsers.add_parser("purge", help="Delete a deleted file for good (no recovery afterwards)")
     p_purge.add_argument("path", help="Original path of the deleted file (or a folder with --all)")
     p_purge.add_argument("--all", action="store_true", help="Every deleted file under that folder")
@@ -2374,7 +2399,7 @@ def main():
     subparsers.add_parser("relock", help="Hide password-locked folders on this device's drive again now")
     p_unprot = subparsers.add_parser("unprotect", help="Remove the password lock of a folder or file")
     p_unprot.add_argument("path")
-    p_unprot.add_argument("--forgot", action="store_true", help="Forgot its password: ask for the dashboard's password instead")
+    p_unprot.add_argument("--forgot", action="store_true", help="Forgot its password: ask for the drive's recovery phrase instead")
     p_hide = subparsers.add_parser("hide", help="Don't show a folder on this device")
     p_hide.add_argument("path")
     p_unhide = subparsers.add_parser("unhide", help="Show a hidden folder on this device again")
@@ -2493,8 +2518,8 @@ def main():
         return cmd_health(args)
     elif args.command == "web":
         return cmd_web(args)
-    elif args.command == "web-password":
-        return cmd_web_password(args)
+    elif args.command in ("webdav-password", "web-password"):
+        return cmd_webdav_password(args)
     elif args.command == "purge":
         return cmd_purge(args)
     elif args.command in ("hide", "unhide"):

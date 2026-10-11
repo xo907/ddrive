@@ -10,7 +10,9 @@ import urllib.parse
 import zipfile
 
 import helpers
-from discorddrive import locks
+from discorddrive import locks, words
+
+STRANGER = words.key_to_phrase(os.urandom(32))       # 24 valid words that belong to nobody
 
 
 class WebTest(helpers.DriveTest):
@@ -18,7 +20,8 @@ class WebTest(helpers.DriveTest):
         super().setUp()
         self.d = self.drive(web_token="secret-token")
         self.web = self.d.start_web(port=0)
-        self.web.set_credentials("Dennis", "correct horse")
+        self.web.set_credentials("Dennis", "correct horse")       # what other apps use over WebDAV
+        self.phrase = words.key_to_phrase(bytes.fromhex(self.d.cfg.encryption_key))
         self.cookie = None
 
     def tearDown(self):
@@ -47,8 +50,8 @@ class WebTest(helpers.DriveTest):
     def form(self, **fields):
         return urllib.parse.urlencode(fields)
 
-    def login(self, user="dennis", password="correct horse"):
-        status, headers, body = self.req("POST", "/login", self.form(user=user, password=password), auth=False)
+    def login(self, phrase=None):
+        status, headers, body = self.req("POST", "/login", self.form(phrase=phrase or self.phrase), auth=False)
         if status == 303:
             self.cookie = headers["Set-Cookie"].split(";")[0]
         return status, body
@@ -58,14 +61,17 @@ class WebTest(helpers.DriveTest):
         status, _, body = self.req("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b'action="/login"', body)                       # the sign-in form
-        self.assertEqual(self.login(password="wrong")[0], 401)
+        self.assertNotIn(b'type="password"', body)                    # no name, no password: 24 words
+        self.assertEqual(self.login(STRANGER)[0], 401)
+        self.assertEqual(self.login("just a few words")[0], 401)
+        self.assertEqual(self.req("POST", "/login", self.form(user="dennis", password="correct horse"), auth=False)[0], 401)
         self.assertEqual(self.req("GET", "/api/status")[0], 401)
-        self.assertEqual(self.login()[0], 303)                         # user name is not case-sensitive
+        self.assertEqual(self.login()[0], 303)
         self.assertEqual(self.req("GET", "/api/status")[0], 200)
         status, _, body = self.req("GET", "/")
         self.assertIn(b"app.js", body)
         status = json.loads(self.req("GET", "/api/status")[2])
-        self.assertEqual(status["user"], "Dennis")
+        self.assertEqual((status["user"], status["role"]), ("Dennis", "owner"))
         r = status["resources"]                                        # what the drive uses, for Health
         self.assertGreater(r["memory"]["process"], 1 << 20)
         self.assertGreater(r["memory"]["total"], r["memory"]["available"])
@@ -147,14 +153,16 @@ class WebTest(helpers.DriveTest):
         self.cookie = self.cookie[:-4] + "AAAA"
         self.assertEqual(self.req("GET", "/api/status")[0], 401)
         self.login()
-        self.web.set_credentials("Dennis", "a new password")           # changing the password signs everyone out
+        self.web.set_credentials("Dennis", "a new password")           # the WebDAV password has nothing to do with it
+        self.assertEqual(self.req("GET", "/api/status")[0], 200)
+        self.web.cfg.web_token = "another-secret"                      # a new secret signs everyone out
         self.assertEqual(self.req("GET", "/api/status")[0], 401)
-        self.assertEqual(self.login(password="a new password")[0], 303)
+        self.assertEqual(self.login()[0], 303)
 
     def test_lockout(self):
         for _ in range(5):
-            self.assertEqual(self.login(password="nope")[0], 401)
-        status, body = self.login()                                     # even the right password waits now
+            self.assertEqual(self.login(STRANGER)[0], 401)
+        status, body = self.login()                                     # even the right phrase waits now
         self.assertEqual(status, 429)
         self.assertIn(b"Too many", body)
 
@@ -163,20 +171,16 @@ class WebTest(helpers.DriveTest):
         _, headers, _ = self.req("POST", "/api/logout", {})
         self.assertIn("Max-Age=0", headers["Set-Cookie"])
 
-    def test_first_sign_in_from_this_computer(self):
-        self.web.cfg.web_user = self.web.cfg.web_password = ""
+    def test_nothing_is_set_up_without_the_phrase(self):
+        self.web.cfg.web_user = self.web.cfg.web_password = ""          # a new drive: nothing to choose, the phrase signs in
         status, _, body = self.req("GET", "/")
-        self.assertIn(b'action="/setup"', body)
-        status, _, body = self.req("POST", "/setup", self.form(user="me", password="short", password2="short"), auth=False)
-        self.assertEqual(status, 400)
-        status, headers, _ = self.req("POST", "/setup", self.form(user="me", password="long enough", password2="long enough"),
-                                      auth=False)
-        self.assertEqual(status, 303)
-        self.cookie = headers["Set-Cookie"].split(";")[0]
-        self.assertEqual(self.req("GET", "/api/status")[0], 200)
-        # once set, /setup can't replace it
-        self.assertEqual(self.req("POST", "/setup", self.form(user="x", password="12345678", password2="12345678"),
-                                  auth=False)[0], 403)
+        self.assertIn(b'action="/login"', body)
+        self.assertIn(b"recovery-phrase", body)                         # on the computer itself: where to find the words
+        self.assertNotIn(b"/signup", body)                              # accounts are closed unless the owner opens them
+        self.assertEqual(self.req("POST", "/setup", self.form(user="me", password="long enough", password2="long enough"),
+                                  auth=False)[0], 401)
+        self.assertEqual(self.login()[0], 303)
+        self.assertEqual(json.loads(self.req("GET", "/api/status")[2])["user"], "Owner")
 
     def test_zip_copy_and_purge(self):
         self.login()

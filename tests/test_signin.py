@@ -1,5 +1,5 @@
-"""Signing in without a password: the recovery phrase and passkeys (with a pretend authenticator that
-signs the way a real one does)."""
+"""Signing in: the recovery phrase and passkeys (with a pretend authenticator that signs the way a
+real one does). There are no names and passwords."""
 
 import hashlib
 import http.client
@@ -163,18 +163,18 @@ class SignInTest(helpers.DriveTest):
         self.web.save_cfg(web_user="Dennis", web_password="", web_passkeys=[])
         status, page = self.req("GET", "/")
         self.assertIn(b'name="phrase"', page)
-        self.assertNotIn(b'name="password"', page)                       # no password set: not offered
+        self.assertNotIn(b'name="password"', page)                       # there is no such thing
         self.assertEqual(self.req("GET", "/api/status")[0], 401)
         other = words.key_to_phrase(os.urandom(32))
         status, page = self.sign_in_with_phrase(other)
         self.assertEqual(status, 401)
-        self.assertIn(b"not this drive", page)
+        self.assertIn(b"nobody here has that phrase", page)
         self.assertIn(b"word 1", self.sign_in_with_phrase("zzz " + " ".join(self.phrase.split()[1:]))[1])
         self.assertEqual(self.sign_in_with_phrase()[0], 303)
         status, st = self.req("GET", "/api/status")
         self.assertEqual((status, st["user"]), (200, "Dennis"))
         info = self.req("GET", "/api/signin")[1]
-        self.assertEqual((info["phrase"], info["password"], info["passkeys"], info["rp"], info["can_passkey"]),
+        self.assertEqual((info["encrypted"], info["dav_password"], info["passkeys"], info["rp"], info["can_passkey"]),
                          (True, False, [], "localhost", True))
 
     def test_phrase_is_shown_only_on_the_computer_itself(self):
@@ -259,28 +259,37 @@ class SignInTest(helpers.DriveTest):
         finally:
             conn.close()
 
-    def test_password_is_optional(self):
-        self.web.save_cfg(web_user="Dennis")
+    def test_a_password_is_only_for_other_apps(self):
         self.sign_in_with_phrase()
-        self.assertEqual(self.req("POST", "/api/signin/password", {"password": "short"})[0], 400)
-        self.assertEqual(self.req("POST", "/api/signin/password", {"password": "correct horse"})[0], 200)
+        self.assertEqual(self.req("POST", "/api/webdav/password", {"user": "dennis", "password": "short"})[0], 400)
+        self.assertEqual(self.req("POST", "/api/webdav/password", {"user": "dennis", "password": "correct horse"})[0], 200)
         self.assertEqual(self.req("GET", "/api/status")[0], 200)                              # this browser stays in
+        info = self.req("GET", "/api/signin")[1]
+        self.assertEqual((info["dav_user"], info["dav_password"]), ("dennis", True))
         form = urllib.parse.urlencode({"user": "dennis", "password": "correct horse"})
-        self.assertEqual(self.req("POST", "/login", form, cookie=False)[0], 303)
-        self.assertEqual(self.req("POST", "/api/signin/password-login", {"on": False})[0], 200)
-        self.assertEqual(self.req("POST", "/login", form, cookie=False)[0], 401)              # switched off
+        self.assertEqual(self.req("POST", "/login", form, cookie=False)[0], 401)              # it never opens the dashboard
         self.assertNotIn(b'name="password"', self.req("GET", "/", cookie=False)[1])
-        self.assertEqual(self.sign_in_with_phrase()[0], 303)                                  # the phrase still works
-        self.assertEqual(self.req("POST", "/api/signin/password", {"password": ""})[0], 200)  # remove it
-        self.assertFalse(self.req("GET", "/api/signin")[1]["password"])
+        self.assertEqual(self.req("POST", "/api/webdav/password", {"password": ""})[0], 200)  # remove it
+        self.assertFalse(self.req("GET", "/api/signin")[1]["dav_password"])
 
-    def test_first_visit_on_the_computer_needs_no_password(self):
+    def test_a_drive_without_encryption_still_has_words(self):
+        self.d.cfg.encryption_enabled = False                                                 # no key to be the phrase
+        self.assertEqual(self.sign_in_with_phrase()[0], 401)
         local = f"127.0.0.1:{self.web.port}"
-        self.assertIn(b"Welcome", self.req("GET", "/", host=local)[1])
-        self.assertEqual(self.req("POST", "/setup", urllib.parse.urlencode({"user": "Dennis"}), host=local)[0], 303)
-        self.assertEqual(self.req("GET", "/api/status", host=local)[1]["user"], "Dennis")
-        self.cookie = None
-        self.assertEqual(self.req("POST", "/setup", urllib.parse.urlencode({"user": "Mallory"}), host=local)[0], 403)
+        made = words.key_to_phrase(bytes.fromhex(self.web.owner_key()))
+        self.assertNotEqual(made, self.phrase)
+        self.assertEqual(self.sign_in_with_phrase(made)[0], 303)
+        self.assertEqual(self.req("POST", "/api/signin/phrase", host=local)[1]["phrase"], made)
+
+    def test_the_first_visit_asks_for_the_phrase_too(self):
+        local = f"127.0.0.1:{self.web.port}"
+        page = self.req("GET", "/", host=local)[1]
+        self.assertIn(b'name="phrase"', page)
+        self.assertIn(b"recovery-phrase", page)                                               # where the owner finds the words
+        self.d.cfg.web_hosts = ["drive.example.com"]
+        self.assertNotIn(b"recovery-phrase", self.req("GET", "/", host="drive.example.com")[1])   # not for other computers
+        self.assertEqual(self.req("POST", "/setup", urllib.parse.urlencode({"user": "Mallory"}), host=local)[0], 401)
+        self.assertEqual(self.req("GET", "/api/status", host=local)[0], 401)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """DiscordDrive Lite: use a drive that runs on another computer (the host), without running one here.
 
-    lite connect <address>      sign in to the host's dashboard address (asks for its user name and password)
+    lite connect <address>      sign in to the host's dashboard address (asks for your 24 words)
     lite mount [-m X:] [-b]     show the host's drive as a drive letter / folder on this computer
     lite stop                   take it away again
     lite autostart on|off       show it by itself when this computer starts
@@ -11,9 +11,10 @@ disk. Files are read from the host a part at a time as programs ask for them (so
 seeks without being downloaded), and a file you save goes to a temporary file here only until it has
 been handed to the host, which stores it on the drive like any other.
 
-It talks to the host's web dashboard (the same requests the dashboard page makes), signed in with the
-dashboard's user name and password. The password is kept encrypted for this computer and account
-(secretbox.py), in lite.json next to where the full program keeps its config.
+It talks to the host's web dashboard (the same requests the dashboard page makes), signed in the way
+a browser is: with 24 words. The owner's recovery phrase shows the whole drive; the phrase of an
+account on that dashboard shows that account's own storage. The words are kept encrypted for this
+computer and account (secretbox.py), in lite.json next to where the full program keeps its config.
 """
 
 import argparse
@@ -56,7 +57,7 @@ class HostClient:
     """The host's dashboard, as a program sees it. Keeps one connection per thread and signs in again
     by itself when the session has run out."""
 
-    def __init__(self, address, user="", password="", cookie="", timeout=60.0):
+    def __init__(self, address, phrase="", cookie="", timeout=60.0):
         address = address.strip().rstrip("/")
         u = urllib.parse.urlsplit(address if "://" in address else "http://" + address)
         if u.scheme not in ("http", "https") or not u.hostname:
@@ -64,7 +65,7 @@ class HostClient:
         self.secure = u.scheme == "https"
         self.hostname, self.port = u.hostname, u.port or (443 if self.secure else 80)
         self.address = f"{u.scheme}://{u.netloc}"
-        self.user, self.password, self.cookie = user, password, cookie
+        self.phrase, self.cookie = phrase, cookie
         self.timeout = timeout
         self._local = threading.local()
         self._login_lock = threading.Lock()
@@ -94,7 +95,7 @@ class HostClient:
             if method == "POST":
                 h["X-DD"] = "1"
             resp = self._send(method, path, body, h)
-            if resp.status == 401 and attempt == 0 and self.password:
+            if resp.status == 401 and attempt == 0 and self.phrase:
                 resp.read()
                 self.login(stale=h["Cookie"])
                 if hasattr(body, "seek"):
@@ -115,7 +116,7 @@ class HostClient:
         with self._login_lock:
             if stale is not None and stale != f"dd_session={self.cookie}":
                 return                       # another thread signed in meanwhile
-            form = urllib.parse.urlencode({"user": self.user, "password": self.password})
+            form = urllib.parse.urlencode({"phrase": self.phrase})
             resp = self._send("POST", "/login", form, {"Content-Type": "application/x-www-form-urlencoded"})
             resp.read()
             cookie = ""
@@ -127,10 +128,10 @@ class HostClient:
                 self.cookie = cookie
                 return
             if resp.status == 429:
-                raise HostError(429, "Too many wrong passwords from this computer. Wait a few minutes and try again.")
+                raise HostError(429, "Too many wrong tries from this computer. Wait a few minutes and try again.")
             if resp.status == 401:
-                raise HostError(401, "Wrong user name or password. (The host needs a dashboard password: its Settings, "
-                                     "Sign-in, with \"Allow signing in with the password\" on.)")
+                raise HostError(401, "The host doesn't know those 24 words. Use the drive's recovery phrase, or the "
+                                     "phrase of your account on that dashboard.")
             if resp.status == 421:
                 raise HostError(421, "The host doesn't answer to that name. Use its number address, or add the name to "
                                      "\"Domain names\" in the host's Settings.")
@@ -572,7 +573,9 @@ def client_from(s):
     except (secretbox.ProtectError, ValueError):
         raise HostError(0, "The saved sign-in can't be read on this computer or account. Run "
                            f"'{me()} connect {s['host']}' again.") from None
-    return HostClient(s["host"], s.get("user", ""), secret.get("password", ""), secret.get("cookie", ""))
+    if not secret.get("phrase"):             # saved by a version that signed in with a name and password
+        raise HostError(0, f"Sign-in is by 24 words now. Run '{me()} connect {s['host']}' again.")
+    return HostClient(s["host"], secret["phrase"], secret.get("cookie", ""))
 
 
 def _pid_file():
@@ -587,17 +590,18 @@ def _is_mounted(mp):
 
 def cmd_connect(args):
     address = args.address or input("Address of the host's dashboard (e.g. http://192.168.1.20:8765): ").strip()
-    user = args.user or input("User name of the host's dashboard: ").strip()
-    password = args.password or getpass.getpass("Password (input is hidden): ")
-    client = HostClient(address, user, password)
+    phrase = args.phrase or getpass.getpass("Your 24 words (the drive's recovery phrase, or your account's; input is hidden): ")
+    phrase = " ".join(phrase.split())
+    client = HostClient(address, phrase)
     client.login()
     st = client.status()
+    user = "the owner" if st.get("role", "owner") == "owner" else f"account {st.get('account')}"
     s = load_settings()
     s.update(host=client.address, user=user,
-             protected=secretbox.protect(json.dumps({"password": password, "cookie": client.cookie}).encode("utf-8")))
+             protected=secretbox.protect(json.dumps({"phrase": phrase, "cookie": client.cookie}).encode("utf-8")))
     s.setdefault("mount_point", normalize_mount_point(""))
     save_settings(s)
-    print(f"[SUCCESS] Connected to {client.address} as {st.get('user') or user}: DiscordDrive {st.get('version')}, "
+    print(f"[SUCCESS] Connected to {client.address} as {user}: DiscordDrive {st.get('version')}, "
           f"{st['stats']['files']} files ({format_size(st['stats']['bytes'])}).")
     if not client.secure and client.hostname not in ("localhost", "127.0.0.1", "::1"):
         print("          This address is plain http: fine on your own network; over the internet use the host's https address.")
@@ -913,8 +917,7 @@ def main(argv, verbose=False):
     sub = parser.add_subparsers(dest="action")
     p = sub.add_parser("connect", help="Sign in to a host: the address of its web dashboard")
     p.add_argument("address", nargs="?")
-    p.add_argument("-u", "--user")
-    p.add_argument("-p", "--password", help="Asked for when left out (better: it then stays out of your command history)")
+    p.add_argument("-p", "--phrase", help="Your 24 words. Asked for when left out (better: they then stay out of your command history)")
     p = sub.add_parser("mount", help="Show the host's drive as a drive letter / folder on this computer")
     p.add_argument("-m", "--mount", help="Drive letter (Windows) or folder (Linux)")
     p.add_argument("-b", "--background", action="store_true", help="Keep it running in the background")

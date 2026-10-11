@@ -3,12 +3,15 @@
 Runs inside the drive process (standard library only) on http://127.0.0.1:<web_port>, or on every
 network interface with `web_lan` so a phone on the same network can use it.
 
-Sign-in: a user name and password (`web-password`, or the first visit from the computer running
-the drive). Only a scrypt hash of the password is stored. A successful sign-in sets a signed session
-cookie (HttpOnly, SameSite=Strict, 30 days); changing the password signs every browser out. Repeated
-wrong passwords lock that address out for a while. POST requests also need an `X-DD` header, which a
-page on another site can't send. Share links carry their own signed, expiring token and only give
-access to the one file.
+Sign-in is by 24-word phrase, never by name and password. The owner signs in with the drive's
+recovery phrase (or a passkey added afterwards) and sees everything. Other people can have accounts
+(accounts.py): each is a phrase the dashboard made, with storage of its own, and sees files, notes,
+bookmarks, contacts, messages, share links and history, but nothing that manages the drive or the
+computer (ACCOUNT_GET / ACCOUNT_POST below list what an account may ask for; everything else is the
+owner's). A successful sign-in sets a signed session cookie (HttpOnly, SameSite=Strict, 30 days).
+Repeated wrong phrases lock that address out for a while. POST requests also need an `X-DD` header,
+which a page on another site can't send. Share links carry their own id and only give access to the
+one item.
 """
 
 import base64
@@ -32,9 +35,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import __version__
 from .actions import default_restore_folder, intact_copy, older_copies, repair_op, snapshot_restore_ops, undelete_ops, version_put_op
 from .config import Config, config_path, launcher as _launcher
-from .crypto import check_password, hash_password
+from .accounts import MODES, AccountError, Accounts, AccountShares
+from .crypto import hash_password
 from .index import ROOT_ID, new_uid
-from . import passkeys, resources
+from . import passkeys, resources, words
 from .shares import Shares
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
@@ -46,13 +50,41 @@ STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 COOKIE = "dd_session"
 PIECE = 1024 * 1024
 SESSION_DAYS = 30
-MAX_FAILURES = 5          # wrong passwords from one address before it has to wait
-LOCKOUT = 60.0            # seconds, doubled for every further wrong password (up to an hour)
+MAX_FAILURES = 5          # wrong phrases (or passwords of a lock) from one address before it has to wait
+LOCKOUT = 60.0            # seconds, doubled for every further wrong one (up to an hour)
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
 _BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
                       "/api/chat")
 _MEDIA_EXT = ("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "mp4", "m4v", "webm", "mov", "mkv", "avi")
 NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave ("Save" uploads right away)
+
+# What somebody signed in to an account (not the owner) may ask for: their own files and tools.
+# Anything not listed here answers 403 for them, so a new route is the owner's until it is added.
+ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
+    contacts contacts/export locks starred recent history home insights bookmarks changelog""".split())
+ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete share shares/update shares/revoke
+    contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
+    undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
+    bookmarks/save bookmarks/refresh bookmarks/delete""".split())
+
+
+def account_may(method, route):
+    name = route[5:].strip("/") if route.startswith("/api/") else None
+    if name is None:
+        return False
+    if name == "chat" or name.startswith("chat/"):          # their own Discord messages
+        return True
+    return name in (ACCOUNT_GET if method == "GET" else ACCOUNT_POST)
+
+
+def owner_key(cfg):
+    """The key whose 24 words sign the owner in, in hex: the drive's own key, or, for a drive that
+    isn't encrypted, one made from the dashboard's secret. '' before either exists."""
+    if cfg.encryption_enabled and cfg.encryption_key:
+        return cfg.encryption_key
+    if not cfg.web_token:
+        return ""
+    return hashlib.sha256(b"DiscordDrive-owner:" + cfg.web_token.encode()).hexdigest()
 
 
 class ApiError(Exception):
@@ -110,12 +142,14 @@ class WebServer:
         self.fetches = Fetches(drive)     # files being saved from a web address
         self.challenges = passkeys.Challenges()
         self._book = (None, [])           # (mtime, size) of the address book file, its contacts
+        self.accounts = Accounts(drive)   # other people's accounts, each with a drive of its own
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
         self._thread = threading.Thread(target=self.httpd.serve_forever, name="WebDashboard", daemon=True)
         self._thread.start()
         threading.Thread(target=self._clean_thumbs, name="Thumbs", daemon=True).start()
+        self.accounts.start()
         return self
 
     def _clean_thumbs(self):
@@ -138,53 +172,43 @@ class WebServer:
             self.httpd.server_close()
         except Exception:
             pass
+        self.accounts.stop()
 
     def local_url(self):
         return f"http://localhost:{self.port}/"
 
-    # ------------------------------------------------------------ auth
-    def credentials(self):
-        """(user, password hash). Picks up a password set with `web-password` while the drive runs."""
-        if not getattr(self.drive, "local_test_dir", None):
+    # ------------------------------------------------------------ signing in
+    def _reload_cfg(self):
+        """Pick up what a command changed in the config file while the drive runs."""
+        if getattr(self.drive, "local_test_dir", None):
+            return
+        try:
+            mtime = os.path.getmtime(config_path())
+        except OSError:
+            mtime = None
+        if mtime != self._cfg_mtime:
+            self._cfg_mtime = mtime
             try:
-                mtime = os.path.getmtime(config_path())
-            except OSError:
-                mtime = None
-            if mtime != self._cfg_mtime:
-                self._cfg_mtime = mtime
-                try:
-                    saved = Config.load()
-                    self.cfg.web_user, self.cfg.web_password = saved.web_user, saved.web_password
-                    self.cfg.web_passkeys, self.cfg.web_password_login = saved.web_passkeys, saved.web_password_login
-                except (Exception, SystemExit) as e:
-                    log.warning("Could not read the dashboard sign-in from the config: %s", e)
+                saved = Config.load()
+                for k in ("web_user", "web_password", "web_passkeys", "signup_mode", "account_quota_bytes", "accounts_max"):
+                    setattr(self.cfg, k, getattr(saved, k))
+            except (Exception, SystemExit) as e:
+                log.warning("Could not read the dashboard's settings from the config: %s", e)
+
+    def credentials(self):
+        """(user, password hash) other apps sign in with over WebDAV. The dashboard itself has neither."""
+        self._reload_cfg()
         return self.cfg.web_user or "", self.cfg.web_password or ""
 
     def set_credentials(self, user, password):
-        self.cfg.web_user, self.cfg.web_password = user, hash_password(password)
-        if not getattr(self.drive, "local_test_dir", None):
-            saved = Config.load()
-            saved.web_user, saved.web_password = self.cfg.web_user, self.cfg.web_password
-            saved.save()
-            self._cfg_mtime = os.path.getmtime(config_path())
+        self.save_cfg(web_user=user, web_password=hash_password(password) if password else "")
 
-    # ------------------------------------------------------------ signing in: passkeys, phrase, password
     def user_name(self):
-        return self.credentials()[0] or ("owner" if self.sign_in_ready() else "")
+        """What the owner is called on the page."""
+        return self.cfg.web_user or "Owner"
 
-    def sign_in_ready(self):
-        """True once somebody has set up a way to sign in (a name, a password or a passkey)."""
-        user, pw = self.credentials()
-        return bool(user or pw or self.cfg.web_passkeys)
-
-    def password_allowed(self):
-        user, pw = self.credentials()
-        return bool(user and pw and getattr(self.cfg, "web_password_login", True))
-
-    def phrase_key(self):
-        """The drive's key when the recovery phrase can sign in (the drive is encrypted), else None."""
-        key = self.cfg.encryption_key if self.cfg.encryption_enabled else ""
-        return key or None
+    def owner_key(self):
+        return owner_key(self.cfg)
 
     def save_cfg(self, **changes):
         for k, v in changes.items():
@@ -197,21 +221,19 @@ class WebServer:
             self._cfg_mtime = os.path.getmtime(config_path())
 
     def _secret(self, purpose=b"") -> bytes:
-        # Sessions also depend on the password hash, so a new password ends every session.
-        extra = self.cfg.web_password.encode() if purpose == b"session" else b""
-        return hashlib.sha256(b"DiscordDrive-web:" + (self.cfg.web_token or "").encode() + purpose + extra).digest()
+        return hashlib.sha256(b"DiscordDrive-web:" + (self.cfg.web_token or "").encode() + purpose).digest()
 
-    def new_session(self, user):
-        # "n" makes every sign-in its own session (each browser unlocks locked folders for itself)
-        payload = _b64(json.dumps({"u": user, "t": int(time.time()), "n": _b64(os.urandom(9))},
+    def new_session(self, account=""):
+        """A session cookie for the owner ('') or for an account (its id). "n" makes every sign-in its
+        own session (each browser unlocks locked folders for itself)."""
+        payload = _b64(json.dumps({"a": account, "t": int(time.time()), "n": _b64(os.urandom(9))},
                                   separators=(",", ":")).encode())
         sig = _b64(hmac.new(self._secret(b"session"), payload.encode(), hashlib.sha256).digest())
         return f"{payload}.{sig}"
 
-    def session_user(self, value):
-        """The signed-in user of a session cookie, or None."""
-        user = self.user_name()
-        if not value or not user:
+    def session(self, value):
+        """Who a session cookie belongs to: '' the owner, an account's id, or None (signed out)."""
+        if not value:
             return None
         try:
             payload, sig = value.split(".", 1)
@@ -219,9 +241,14 @@ class WebServer:
             if not hmac.compare_digest(good, sig):
                 return None
             data = json.loads(_unb64(payload))
-            if data.get("u") != user or time.time() - data.get("t", 0) > SESSION_DAYS * 86400:
+            if time.time() - data.get("t", 0) > SESSION_DAYS * 86400:
                 return None
-            return user
+            account = data.get("a")
+            if account is None:
+                return "" if data.get("u") else None       # a session from before accounts: the owner's
+            if account == "":
+                return ""
+            return account if self.accounts.active(str(account)) is not None else None
         except Exception:
             return None
 
@@ -280,6 +307,29 @@ class WebServer:
         return _b64(hmac.new(self._secret(b"share"), msg, hashlib.sha256).digest())
 
 
+class _Space:
+    """What a request sees as `self.app` while it serves an account: the account's own share links,
+    downloads from links and caches. Of the dashboard itself only what SHARED lists comes through, so
+    nothing a request of the owner cached (folder sizes, contacts, bookmarks) can reach an account."""
+
+    SHARED = frozenset(("port", "accounts", "open_locks", "open_locks_add", "open_locks_clear", "locked_for", "note_login",
+                        "share_unlock_value", "new_session"))
+
+    def __init__(self, server, drive):
+        self._server = server
+        self.drive, self.cfg = drive, drive.cfg
+        self.shares = AccountShares(drive.index, drive.id)
+        self.fetches = Fetches(drive)
+        self.contacts_lock = threading.Lock()
+        self._book = (None, [])
+        drive.busy.append(lambda: any(i["state"] == "running" for i in self.fetches.items))
+
+    def __getattr__(self, name):
+        if name in _Space.SHARED:
+            return getattr(self._server, name)
+        raise AttributeError(name)
+
+
 class _Counted:
     """The connection's input, counting what is read, so that a request body nobody read can be
     cleared away before the next request on the same connection (it would be taken for its start)."""
@@ -307,13 +357,37 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     protocol_version = "HTTP/1.1"
 
     # ------------------------------------------------------------ plumbing
+    # A request is served from the owner's drive, or, for somebody signed in to an account (and for an
+    # account's share links), from that account's own drive: `drive` and `app` are then the account's.
+    _acct = None
+    _space = None
+
     @property
-    def app(self) -> WebServer:
-        return self.server.app
+    def app(self):
+        return self._space or self.server.app
 
     @property
     def drive(self):
-        return self.server.app.drive
+        return self._acct or self.server.app.drive
+
+    def _enter(self, aid):
+        """Serve the rest of this request from an account's drive."""
+        server = self.server.app
+        d = server.accounts.acquire(aid)
+        with server.accounts._lock:
+            if d.space is None:
+                d.space = _Space(server, d)
+        d.fs.scope.unlocked = frozenset()
+        self._acct, self._space = d, d.space
+
+    def _leave(self):
+        d, self._acct, self._space = self._acct, None, None
+        if d is not None:
+            self.server.app.accounts.release(d)
+
+    def _host_name(self):
+        """This computer's name: for the owner's pages only."""
+        return "" if self._acct is not None else socket.gethostname()
 
     def log_message(self, fmt, *args):
         log.debug("web %s - %s", self.address_string(), fmt % args)
@@ -339,13 +413,24 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return v
         return None
 
-    def _authed(self):
-        return self.app.session_user(self._cookie()) is not None
+    def _who(self):
+        """'' for the owner, an account's id, or None when nobody is signed in."""
+        return self.server.app.session(self._cookie())
 
     def _local_request(self):
-        """From the computer running the drive (the only place a first password may be set)."""
+        """From the computer running the drive (the only place the owner's phrase is shown)."""
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if self.headers.get("X-Forwarded-For") or self.headers.get("Forwarded"):
+            return False                         # passed on by a reverse proxy: it came from somewhere else
         return self.client_address[0] in ("127.0.0.1", "::1") and host in ("127.0.0.1", "localhost", "::1")
+
+    def _addr(self):
+        """Where a request comes from, for slowing down wrong guesses and limiting new accounts: behind a
+        reverse proxy on this computer that is the address the proxy saw, so each visitor counts for
+        themselves instead of everybody counting as the proxy."""
+        peer = self.client_address[0]
+        seen = (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
+        return seen[:64] if seen and peer in ("127.0.0.1", "::1") else peer
 
     def _form(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -360,16 +445,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._send(303, b"", "text/plain", headers)
 
     def _signin(self, error="", status=200):
-        app = self.app
         rp, _ = self._rp()
-        ways = dict(passkey=bool(rp and self._here(rp)), phrase=bool(app.phrase_key()), password=app.password_allowed())
-        if not app.sign_in_ready() and self._local_request():
-            mode = "setup"                       # the first visit on the computer itself
-        elif any(ways.values()):
-            mode = "login"
-        else:
-            mode = "remote"
-        self._send(status, _signin_page(mode, error, **ways).encode("utf-8"), "text/html; charset=utf-8", _PAGE_HEADERS)
+        hint = f"{_launcher()} recovery-phrase" if self._local_request() else ""
+        html = _signin_page(error, passkey=bool(rp and self._here(rp)), signup=self.server.app.accounts.mode(), hint=hint)
+        self._send(status, html.encode("utf-8"), "text/html; charset=utf-8", _PAGE_HEADERS)
 
     # ------------------------------------------------------------ signing in
     def _rp(self):
@@ -390,7 +469,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"challenge": self.app.challenges.new("login"), "rpId": rp, "allow": [p["id"] for p in mine]})
 
     def _passkey_login(self):
-        addr = self.client_address[0]
+        addr = self._addr()
         wait = self.app.locked_for(addr)
         if wait:
             return self._error(429, f"Too many failed tries. Wait {int(wait) + 1} seconds.")
@@ -410,7 +489,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         keys = [dict(p, count=count, last=time.time()) if p is key else p for p in self.drive.cfg.web_passkeys]
         self.app.save_cfg(web_passkeys=keys)
         self._send(200, b'{"ok":true}', "application/json; charset=utf-8",
-                   {"Set-Cookie": self._cookie_for(self.app.new_session(self.app.user_name() or "owner"))})
+                   {"Set-Cookie": self._cookie_for(self.app.new_session())})
 
     def _get_api_signin(self):
         rp, _ = self._rp()
@@ -420,8 +499,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "user": self.app.user_name(), "rp": rp, "can_passkey": bool(rp) and secure, "local": self._local_request(),
             "passkeys": [{"id": p["id"], "name": p.get("name") or "Passkey", "rp": p.get("rp"), "created": p.get("created"),
                           "last": p.get("last"), "here": p.get("rp") == rp} for p in cfg.web_passkeys or []],
-            "password": bool(cfg.web_password), "password_login": bool(cfg.web_password_login),
-            "phrase": bool(self.app.phrase_key()), "webdav": bool(cfg.webdav_enabled),
+            "encrypted": bool(cfg.encryption_enabled and cfg.encryption_key), "webdav": bool(cfg.webdav_enabled),
+            "dav_user": cfg.web_user or "", "dav_password": bool(cfg.web_password),
         })
 
     def _post_api_signin_passkey_options(self):
@@ -429,7 +508,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if not rp:
             raise ApiError(400, "Passkeys need a name in the address: open the dashboard as http://localhost:"
                                 f"{self.app.port}/ on this computer, or through your https address.")
-        user = self.app.user_name() or "owner"
+        user = self.app.user_name()
         self._json({"challenge": self.app.challenges.new("register"), "rp": {"id": rp, "name": "DiscordDrive"},
                     "user": {"id": _b64(hashlib.sha256(b"dd-user:" + user.encode()).digest()[:16]), "name": user,
                              "displayName": user},
@@ -460,32 +539,28 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self.app.save_cfg(web_passkeys=keys)
         self._json({"ok": True})
 
-    def _post_api_signin_password(self):
-        """Set, change or (empty) remove the password. Other browsers are signed out; this one stays in."""
+    def _post_api_webdav_password(self):
+        """Set, change or (empty) remove the name and password other apps use over WebDAV."""
         body = self._body_json()
         password = str(body.get("password") or "")
-        name = str(body.get("user") or self.app.user_name() or "owner").strip()[:64]
+        name = str(body.get("user") or self.drive.cfg.web_user or "drive").strip()[:64]
         if password and len(password) < 8:
             raise ApiError(400, "Use a password of at least 8 characters")
-        self.app.save_cfg(web_user=name, web_password=hash_password(password) if password else "")
-        self._send(200, b'{"ok":true}', "application/json; charset=utf-8",
-                   {"Set-Cookie": self._cookie_for(self.app.new_session(name))})
-
-    def _post_api_signin_password_login(self):
-        self.app.save_cfg(web_password_login=bool(self._body_json().get("on")))
+        if password and not name:
+            raise ApiError(400, "Choose a user name for the apps to sign in with")
+        self.app.set_credentials(name, password)
+        self.app._dav_ok = {}
         self._json({"ok": True})
 
     def _post_api_signin_phrase(self):
-        """The recovery phrase, shown only on the computer that runs the drive."""
+        """The owner's 24 words, shown only on the computer that runs the drive."""
         if not self._local_request():
             raise ApiError(403, "The recovery phrase is only shown on the computer that runs the drive "
                                 f"(open the dashboard there, or run '{_launcher()} recovery-phrase').")
-        key = self.app.phrase_key()
+        key = self.app.owner_key()
         if not key:
-            raise ApiError(404, "This drive isn't encrypted, so it has no recovery phrase")
-        from . import words
+            raise ApiError(404, "This drive has no key yet")
         self._json({"phrase": words.key_to_phrase(bytes.fromhex(key))})
-
 
     def _send(self, status, body=b"", ctype="application/json; charset=utf-8", headers=None):
         self.send_response(status)
@@ -540,6 +615,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         try:
             self._route(method)
         finally:
+            self._leave()
             # Leave nothing of this request behind on the connection.
             try:
                 if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
@@ -571,8 +647,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._send(405, b"Method not allowed", "text/plain")
             if method == "POST" and route == "/login":
                 return self._login()
-            if method == "POST" and route == "/setup":
-                return self._setup()
+            if route == "/signup":
+                return self._signup(method)
             if method == "POST" and route == "/passkey/options":
                 return self._passkey_options()
             if method == "POST" and route == "/passkey/login":
@@ -581,13 +657,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._shared(route[3:], method)
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
                                              "/manifest.webmanifest", "/share-upload.js", "/signin.js"):
-                if route in ("/", "/index.html") and not self._authed():
+                if route in ("/", "/index.html") and self._who() is None:
                     return self._signin()
                 return self._static(route.lstrip("/") or "index.html")
-            if not self._authed():
+            who = self._who()
+            if who is None:
                 return self._error(401, "Signed out. Reload the page to sign in.")
             if method == "POST" and self.headers.get("X-DD") != "1":
                 return self._error(403, "missing X-DD header")
+            if who:                              # an account: its own drive, and only what accounts may do
+                if not account_may(method, route):
+                    return self._error(403, "Only the owner of this drive can do that.")
+                self._enter(who)
             # Pages that refresh by themselves don't count as using an unlocked folder.
             self.drive.fs.scope.unlocked = self.app.open_locks(self._cookie(), touch=route not in _BACKGROUND_ROUTES)
             fn = getattr(self, f"_{method.lower()}_{route.strip('/').replace('/', '_').replace('-', '_')}", None)
@@ -596,6 +677,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             fn()
         except (ApiError, ApiErrorProxy) as e:
             self._error(e.status, str(e))
+        except AccountError as e:
+            self._error(503, str(e))
         except (BrokenPipeError, ConnectionResetError):
             pass
         except OSError as e:
@@ -629,57 +712,59 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         return f"{COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(days * 86400)}"
 
     def _login(self):
-        addr = self.client_address[0]
-        wait = self.app.locked_for(addr)
+        """Sign in with 24 words: the drive's recovery phrase is the owner, an account's phrase is that account."""
+        app = self.server.app
+        addr = self._addr()
+        wait = app.locked_for(addr)
         form = self._form()
         if wait:
             return self._signin(f"Too many failed tries. Try again in {int(wait) + 1} seconds.", 429)
-        user, pw = self.app.credentials()
-        if form.get("phrase"):
-            # the recovery phrase is the drive's key: whoever has it may sign in (and set up a passkey again)
-            from . import words
-            key = self.app.phrase_key()
-            try:
-                given = words.phrase_to_key(form["phrase"]).hex()
-            except ValueError as e:
-                self.app.note_login(addr, False)
-                return self._signin(f"That phrase isn't right: {e}.", 401)
-            ok = bool(key) and hmac.compare_digest(given, key)
-            self.app.note_login(addr, ok)
-            if not ok:
-                log.warning("Web dashboard: a wrong recovery phrase from %s", addr)
-                return self._signin("Those are 24 valid words, but not this drive's recovery phrase.", 401)
-            if not self.app.sign_in_ready():
-                self.app.save_cfg(web_user="owner")
-            return self._redirect("/", self._cookie_for(self.app.new_session(self.app.user_name() or "owner")))
-        given = (form.get("user") or "").strip()
-        ok = self.app.password_allowed() and hmac.compare_digest(given.lower(), user.lower()) \
-            and check_password(form.get("password") or "", pw)
-        self.app.note_login(addr, ok)
-        if not ok:
-            log.warning("Web dashboard: wrong user name or password from %s", addr)
-            return self._signin("Wrong user name or password.", 401)
-        self._redirect("/", self._cookie_for(self.app.new_session(user)))
-
-    def _setup(self):
-        """The first visit, on the computer that runs the drive: choose a name (and, if wanted, a password)."""
-        if self.app.sign_in_ready() or not self._local_request():
-            return self._signin("", 403)
-        form = self._form()
-        name = (form.get("user") or "").strip()
-        password = form.get("password") or ""
-        if not name or len(name) > 64:
-            return self._signin("Choose a name.", 400)
-        if password and len(password) < 8:
-            return self._signin("Use a password of at least 8 characters (or leave it empty).", 400)
-        if password != (form.get("password2") or ""):
-            return self._signin("The two passwords are different.", 400)
-        if password:
-            self.app.set_credentials(name, password)
+        try:
+            key = words.phrase_to_key(form.get("phrase") or "")
+        except ValueError as e:
+            app.note_login(addr, False)
+            return self._signin(f"That phrase isn't right: {e}.", 401)
+        owner = app.owner_key()
+        if owner and hmac.compare_digest(key.hex(), owner):
+            who = ""
         else:
-            self.app.save_cfg(web_user=name)
-        log.info("Web dashboard: sign-in created for %s", name)
-        self._redirect("/#/settings", self._cookie_for(self.app.new_session(name)))
+            rec = app.accounts.find(key)
+            who = rec["id"] if rec is not None else None
+        app.note_login(addr, who is not None)
+        if who is None:
+            log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
+            return self._signin("Those are 24 valid words, but nobody here has that phrase.", 401)
+        self._redirect("/", self._cookie_for(app.new_session(who)))
+
+    def _signup(self, method):
+        """Making an account: the page gives 24 new words, and the account exists once they are confirmed."""
+        app = self.server.app
+        accounts, addr = app.accounts, self._addr()
+
+        def page(html, status=200):
+            self._send(status, html.encode("utf-8"), "text/html; charset=utf-8", _PAGE_HEADERS)
+
+        mode = accounts.mode()
+        if mode == "closed":
+            if method == "POST":
+                self._form()
+            return page(_signup_page("closed"), 403)
+        if method == "GET":
+            return page(_signup_page(mode, invite=self._query().get("invite") or ""))
+        form = self._form()
+        invite = (form.get("invite") or "").strip()
+        wait = app.locked_for("signup:" + addr)
+        if wait:
+            return page(_signup_page(mode, invite, f"Too many tries. Try again in {int(wait) + 1} seconds."), 429)
+        try:
+            if form.get("step") == "confirm":
+                rec = accounts.create(form.get("phrase"), form.get("ticket"), invite, addr)
+                return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
+            phrase, ticket = accounts.offer(invite, addr)
+        except AccountError as e:
+            app.note_login("signup:" + addr, False)
+            return page(_signup_page(mode, invite, str(e)), 400)
+        page(_signup_page("phrase", invite, phrase=phrase, ticket=ticket))
 
     def _post_api_logout(self):
         self.app.open_locks_clear(self._cookie())
@@ -719,6 +804,14 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     def _get_api_status(self):
         d = self.drive
         st = d.index.stats(max_age=2)
+        if self._acct is not None:               # an account sees its own storage, nothing of the computer
+            return self._json({
+                "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True,
+                "stats": st, "uploads": self._uploads(), "downloads": len(d.cache.active), "queued": len(d.uploader._pending),
+                "quota": {"bytes": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]},
+                "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
+                "fetches": self._fetch_list(), "public": self.public_base(),
+            })
         devices = []
         for dev, info in sorted(d.index.devices().items(), key=lambda kv: -kv[1].get("seen", 0)):
             devices.append({"id": dev, "name": info.get("name") or "", "seen": info.get("seen", 0),
@@ -728,7 +821,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         scrub = d.maintenance.scrub_state() if d.maintenance else {}
         self._json({
             "version": __version__,
+            "role": "owner",
             "user": self.app.user_name(),
+            "signup": self.app.accounts.mode(),
+            "accounts": self.app.accounts.count(),
             "mount": d.cfg.mount_point,
             "device": d.cfg.device_id,
             "encrypted": d.crypto is not None,
@@ -811,6 +907,61 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             log.warning("Web dashboard: %d waiting upload(s) were cancelled (%d being sent were left alone)", count, skipped)
             return self._json({"ok": True, "count": count, "skipped": skipped, "freed": freed})
         raise ApiError(400, "Unknown action")
+
+    # ------------------------------------------------------------ accounts
+    def _get_api_account(self):
+        """The account that is signed in, for its own page."""
+        d = self._acct
+        if d is None:
+            raise ApiError(404, "The owner has no account page")
+        rec = self.app.accounts.active(d.id) or {}
+        st = d.index.stats(max_age=2)
+        self._json({"id": d.id, "created": rec.get("created"), "files": st["files"], "bytes": st["bytes"],
+                    "version_bytes": st["version_bytes"], "quota": d.cfg.quota_bytes})
+
+    def _post_api_account_delete(self):
+        """An account deletes itself, with everything in it."""
+        d = self._acct
+        if d is None or str(self._body_json().get("confirm") or "").strip().lower() != "delete":
+            raise ApiError(400, "Type delete to confirm")
+        accounts = self.app.accounts
+        self._leave()
+        accounts.delete(d.id)
+        self._send(200, b'{"ok":true}', "application/json; charset=utf-8", {"Set-Cookie": self._cookie_for("", 0)})
+
+    def _get_api_accounts(self):
+        """Everything about accounts, for the owner's Settings."""
+        acc, cfg, base = self.app.accounts, self.drive.cfg, self.public_base()
+        invites = [dict(i, path=f"/signup?invite={i['code']}", url=f"{base}/signup?invite={i['code']}" if base else "")
+                   for i in acc.invites()]
+        self._json({"mode": acc.mode(), "quota": int(cfg.account_quota_bytes or 0), "max": int(cfg.accounts_max or 0),
+                    "accounts": acc.listing(), "invites": invites, "path": "/signup", "url": f"{base}/signup" if base else ""})
+
+    def _post_api_accounts_invite(self):
+        body = self._body_json()
+        try:
+            uses, days = max(0, min(10000, int(body.get("uses", 1)))), max(0.0, min(3650.0, float(body.get("days", 7))))
+        except (TypeError, ValueError):
+            raise ApiError(400, "bad number") from None
+        code = self.app.accounts.invite_new(uses, days, str(body.get("note") or ""))
+        log.info("Web dashboard: an invite was made (%s use(s), %s).", uses or "any number of", f"{days:g} day(s)" if days else "no expiry")
+        self._json({"ok": True, "code": code})
+
+    def _post_api_accounts_invite_revoke(self):
+        if not self.app.accounts.invite_revoke(self._body_json().get("code")):
+            raise ApiError(404, "That invite is already gone")
+        self._json({"ok": True})
+
+    def _post_api_accounts_disable(self):
+        body = self._body_json()
+        if not self.app.accounts.set_disabled(str(body.get("id") or ""), bool(body.get("off"))):
+            raise ApiError(404, "No such account")
+        self._json({"ok": True})
+
+    def _post_api_accounts_delete(self):
+        if not self.app.accounts.delete(str(self._body_json().get("id") or "")):
+            raise ApiError(404, "No such account")
+        self._json({"ok": True})
 
     # ------------------------------------------------------------ activity and log
     def _uploads(self):
@@ -1155,7 +1306,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     def public_base(self):
         """Where people reach this dashboard from outside: web_public_url, else the first domain in
         web_hosts (https, as a reverse proxy serves it), else a network address with web_lan."""
-        cfg = self.drive.cfg
+        cfg = self.server.app.cfg
         if (cfg.web_public_url or "").strip():
             return cfg.web_public_url.strip().rstrip("/")
         if cfg.web_hosts:
@@ -1174,7 +1325,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             direct = f"/s/{sid}/{urllib.parse.quote(node['name'])}"     # the file itself, for embedding
         return {"id": sid, "path": f"/s/{sid}", "url": f"{pub}/s/{sid}" if pub else "",
                 "direct_path": direct, "direct": f"{pub}{direct}" if pub and direct else "",
-                "lan": [f"http://{ip}:{self.app.port}/s/{sid}" for ip in lan_addresses()] if self.drive.cfg.web_lan else [],
+                "lan": [f"http://{ip}:{self.app.port}/s/{sid}" for ip in lan_addresses()] if self.server.app.cfg.web_lan else [],
                 "item": self.drive.index.path_of(node["id"]) if node else None, "dir": rec.get("d", False),
                 "created": rec.get("c"), "expires": rec.get("e"), "password": bool(rec.get("pw")),
                 "download": rec.get("dl", True), "views": rec.get("v", 0), "upload": bool(rec.get("up"))}
@@ -1365,7 +1516,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     # ------------------------------------------------------------ password-locked folders
     def _lock_attempt(self, check):
         """Run a password check, slowing down guessing like the sign-in does."""
-        addr = "lock:" + self.client_address[0]
+        addr = "lock:" + self._addr()
         wait = self.app.locked_for(addr)
         if wait:
             raise ApiError(429, f"Too many wrong passwords. Try again in {int(wait) + 1} seconds.")
@@ -1385,7 +1536,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                     open_here.append({"path": self.drive.index.path_of(node["id"]), "dir": bool(node["is_dir"]),
                                       "on_drive": uid in on_drive})
         self._json({"count": locks.count(), "open": open_here, "minutes": self.drive.cfg.lock_timeout_minutes,
-                    "mount": self.drive.cfg.mount_point, "host": socket.gethostname()})
+                    "mount": self.drive.cfg.mount_point, "host": self._host_name()})
 
     def _post_api_locks_add(self):
         body = self._body_json()
@@ -1703,6 +1854,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         "hidden_folders": (list, False, None),
         "lock_timeout_minutes": (float, False, lambda v: 0 <= v <= 100000),
         "webdav_enabled": (bool, False, None),
+        "signup_mode": (str, False, lambda v: v in MODES),
+        "account_quota_bytes": (int, False, lambda v: v >= 0),
+        "accounts_max": (int, False, lambda v: v >= 0),
     }
 
     def _get_api_settings(self):
@@ -1872,7 +2026,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     # ------------------------------------------------------------ share links
     def _shared(self, rest, method):
         sid, _, tail = rest.partition("/")
-        rec = self.app.shares.get(sid)
+        gone = False
+        if "." in sid:                           # an account's link, /s/<account>.<link>: served from its drive
+            try:
+                self._enter(sid.partition(".")[0])
+            except AccountError:
+                gone = True
+        rec = None if gone else self.app.shares.get(sid)
         root = self.drive.index.get_by_uid(rec["u"]) if rec else None
         if root is None:
             return self._send(404, _share_message("This link has expired", "Ask for a new one.").encode(),
@@ -1881,7 +2041,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         sending = tail == "upload" and method == "POST"       # a file arriving through a file request
         if rec.get("pw"):
             if method == "POST" and not sending:
-                addr = "share:" + self.client_address[0]
+                addr = "share:" + self._addr()
                 wait = self.app.locked_for(addr)
                 ok = not wait and self.app.shares.password_ok(rec, self._form().get("password"))
                 self.app.note_login(addr, ok)
@@ -1992,58 +2152,7 @@ _PAGE_HEADERS = {
 }
 
 
-def _signin_page(mode, error="", passkey=False, phrase=False, password=False):
-    err = f'<p class="err" role="alert">{_esc(error)}</p>' if error else ""
-    if mode == "login":
-        phrase_form = """<form method="post" action="/login">
-    <label>Recovery phrase<textarea name="phrase" rows="3" autocomplete="off" autocapitalize="none" spellcheck="false"
-      placeholder="the 24 words of your drive" required></textarea></label>
-    <button class="btn" type="submit">Sign in with the phrase</button>
-  </form>"""
-        password_form = """<form method="post" action="/login">
-    <label>User name<input name="user" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
-    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-    <button class="btn" type="submit">Sign in</button>
-  </form>"""
-        parts = []
-        if passkey:
-            parts.append('<div id="pk" hidden><button class="btn big" id="pk-go" type="button">Sign in with a passkey</button>'
-                         '<p class="muted small">Your fingerprint, face, PIN, phone or security key.</p>'
-                         '<p class="err" id="pk-err" role="alert" hidden></p></div>')
-        others = [(n, f) for n, f, on in (("Use a password", password_form, password),
-                                           ("Use your recovery phrase", phrase_form, phrase)) if on]
-        if passkey:
-            parts += [f"<details{' open' if error else ''}><summary>{n}</summary>{f}</details>" for n, f in others]
-        elif len(others) == 2:
-            parts += [others[0][1], f"<details{' open' if error and 'phrase' in error else ''}><summary>{others[1][0]}</summary>{others[1][1]}</details>"]
-        else:
-            parts += [f for _, f in others]
-        if not parts:
-            parts = ['<p class="muted">No way to sign in is set up. On the computer that runs the drive, run '
-                     '<code>web-password</code>.</p>']
-        script = '<script src="/signin.js"></script>' if passkey else ""
-        body = f"""<h1>Sign in</h1>
-  <p class="muted">DiscordDrive</p>
-  {err}
-  {''.join(parts)}{script}"""
-    elif mode == "setup":
-        body = f"""<h1>Welcome</h1>
-  <p class="muted">You are on the computer that runs the drive. Choose a name; next you can add a
-  <b>passkey</b> (fingerprint, face, PIN or security key) to sign in with. Your drive's 24-word
-  recovery phrase always signs in too.</p>
-  {err}
-  <form method="post" action="/setup">
-    <label>Your name<input name="user" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
-    <details><summary>Also set a password (optional)</summary>
-    <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8"></label>
-    <label>Password again<input name="password2" type="password" autocomplete="new-password" minlength="8"></label>
-    </details>
-    <button class="btn" type="submit">Continue</button>
-  </form>"""
-    else:
-        body = """<h1>Set up a sign-in first</h1>
-  <p class="muted">Nothing is set up for signing in to this dashboard yet. Open it once on the computer
-  running the drive, or run <code>web-password</code> there.</p>"""
+def _plain_page(body):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark"><title>DiscordDrive</title>
@@ -2052,6 +2161,71 @@ def _signin_page(mode, error="", passkey=False, phrase=False, password=False):
   <img src="/logo.svg" alt="" width="40" height="40">
   {body}
 </main></body></html>"""
+
+
+def _signin_page(error="", passkey=False, signup="closed", hint=""):
+    err = f'<p class="err" role="alert">{_esc(error)}</p>' if error else ""
+    form = """<form method="post" action="/login">
+    <label>Your 24 words<textarea name="phrase" rows="4" autocomplete="off" autocapitalize="none" autocorrect="off"
+      spellcheck="false" placeholder="the 24 words, in order" required></textarea></label>
+    <button class="btn" type="submit">Sign in</button>
+  </form>"""
+    parts = []
+    if passkey:
+        parts.append('<div id="pk" hidden><button class="btn big" id="pk-go" type="button">Sign in with a passkey</button>'
+                     '<p class="muted small">The owner\'s fingerprint, face, PIN, phone or security key.</p>'
+                     '<p class="err" id="pk-err" role="alert" hidden></p></div>')
+        parts.append(f"<details{' open' if error else ''}><summary>Use your 24 words</summary>{form}</details>")
+    else:
+        parts.append(form)
+    if signup != "closed":
+        parts.append('<p class="muted small">New here? <a href="/signup">Create an account</a></p>')
+    if hint:
+        parts.append(f'<p class="muted small">You are on the computer that runs the drive: <code>{_esc(hint)}</code> '
+                     "shows the owner's words.</p>")
+    script = '<script src="/signin.js"></script>' if passkey else ""
+    return _plain_page(f"""<h1>Sign in</h1>
+  <p class="muted">DiscordDrive</p>
+  {err}
+  {''.join(parts)}{script}""")
+
+
+def _signup_page(mode, invite="", error="", phrase="", ticket=""):
+    err = f'<p class="err" role="alert">{_esc(error)}</p>' if error else ""
+    back = '<p class="muted small"><a href="/">I already have an account</a></p>'
+    if mode == "closed":
+        return _plain_page(f"""<h1>No new accounts</h1>
+  <p class="muted">New accounts can't be made here. If you have one, sign in with its 24 words.</p>
+  {back}""")
+    hidden = f'<input type="hidden" name="invite" value="{_esc(invite)}">'
+    if mode == "phrase":
+        items = "".join(f"<li>{_esc(w)}</li>" for w in phrase.split())
+        return _plain_page(f"""<h1>Your 24 words</h1>
+  <p class="muted">These words <b>are</b> your account. They sign you in, and they are the key your files are
+  encrypted with. Write them down in this order, or keep them in a password manager.</p>
+  <ol class="phrase" id="words">{items}</ol>
+  <p class="muted small"><button class="link" id="copy" type="button" hidden>Copy the words</button></p>
+  <p class="muted"><b>They are shown only now.</b> Nobody can reset them: without them the account and
+  everything in it is gone.</p>
+  <form method="post" action="/signup">
+    <input type="hidden" name="step" value="confirm">
+    <input type="hidden" name="phrase" value="{_esc(phrase)}">
+    <input type="hidden" name="ticket" value="{_esc(ticket)}">{hidden}
+    <label class="tick"><input type="checkbox" name="saved" value="1" required> I have saved these 24 words</label>
+    <button class="btn" type="submit">Create my account</button>
+  </form><script src="/signin.js"></script>""")
+    code = (f'<label>Invite code<input name="invite" value="{_esc(invite)}" autocomplete="off" autocapitalize="none" '
+            'spellcheck="false" required autofocus></label>') if mode == "invite" else hidden
+    return _plain_page(f"""<h1>Create an account</h1>
+  <p class="muted">An account here is 24 words that this page makes for you: no name, no email, no password.
+  You get storage of your own, encrypted with those words.{' You need an invite code.' if mode == 'invite' else ''}</p>
+  {err}
+  <form method="post" action="/signup">
+    <input type="hidden" name="step" value="new">
+    {code}
+    <button class="btn" type="submit">Get my 24 words</button>
+  </form>
+  {back}""")
 
 
 _ACTIVE_TYPES = {"text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"}

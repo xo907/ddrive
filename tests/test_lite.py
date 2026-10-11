@@ -8,7 +8,7 @@ import io
 import os
 
 import helpers
-from discorddrive import lite
+from discorddrive import lite, words
 
 
 class LiteTest(helpers.DriveTest):
@@ -16,9 +16,9 @@ class LiteTest(helpers.DriveTest):
         super().setUp()
         self.host = self.drive(web_token="secret-token")
         self.web = self.host.start_web(port=0)
-        self.web.set_credentials("Dennis", "correct horse")
+        self.phrase = words.key_to_phrase(bytes.fromhex(self.host.cfg.encryption_key))
         self.address = f"http://127.0.0.1:{self.web.port}"
-        self.client = lite.HostClient(self.address, "dennis", "correct horse")
+        self.client = lite.HostClient(self.address, self.phrase)
         self.fs = lite.LiteFS(self.client, tmp_dir=os.path.join(self.tmp, "lite-tmp"), block=64 * 1024, cache_bytes=256 * 1024)
 
     def tearDown(self):
@@ -46,17 +46,20 @@ class LiteTest(helpers.DriveTest):
 
     def test_signing_in(self):
         with self.assertRaises(lite.HostError) as e:
-            lite.HostClient(self.address, "dennis", "wrong").login()
+            lite.HostClient(self.address, words.key_to_phrase(os.urandom(32))).login()
         self.assertEqual(e.exception.status, 401)
         with self.assertRaises(lite.HostError):
             lite.HostClient("ftp://example.com")
         with self.assertRaises(lite.HostError) as e:
-            lite.HostClient("http://127.0.0.1:1", "a", "b", timeout=2).login()
+            lite.HostClient("http://127.0.0.1:1", "a b", timeout=2).login()
         self.assertIn("can't be reached", str(e.exception))
-        self.assertEqual(self.client.status()["user"], "Dennis")       # signs in by itself on the first request
+        self.assertEqual(self.client.status()["role"], "owner")        # signs in by itself on the first request
         self.client.cookie = "stale.cookie"                            # ...and again when the session has run out
         self.assertEqual(self.client.list("/"), [])
-        self.web.set_credentials("Dennis", "a new password")           # the password was changed on the host
+        self.web.cfg.web_token = "another-secret"                      # everybody was signed out on the host
+        self.assertEqual(self.client.list("/"), [])                    # it signs in again
+        self.client.phrase = words.key_to_phrase(os.urandom(32))       # the words stopped being right
+        self.client.cookie = "stale.cookie"
         with self.assertRaises(lite.HostError) as e:
             self.client.list("/")
         self.assertEqual(e.exception.status, 401)
@@ -135,11 +138,12 @@ class LiteTest(helpers.DriveTest):
                 code = lite.main(list(argv))
             return code, out.getvalue()
         self.assertEqual(run("ls")[0], 1)                              # not connected yet
-        self.assertEqual(run("connect", self.address, "-u", "dennis", "-p", "nope")[0], 1)
-        code, text = run("connect", self.address, "-u", "dennis", "-p", "correct horse")
+        self.assertEqual(run("connect", self.address, "-p", words.key_to_phrase(os.urandom(32)))[0], 1)
+        code, text = run("connect", self.address, "-p", self.phrase)
         self.assertEqual(code, 0, text)
+        self.assertIn("as the owner", text)
         with open(os.environ["DISCORDDRIVE_LITE_CONFIG"]) as f:
-            self.assertNotIn("correct horse", f.read())                # the password is not stored readable
+            self.assertNotIn(self.phrase.split()[0] + " " + self.phrase.split()[1], f.read())   # the words are not stored readable
         src = os.path.join(self.tmp, "Album")
         os.makedirs(os.path.join(src, "sub"))
         for name, data in (("a.txt", b"one"), (os.path.join("sub", "b.txt"), b"two")):

@@ -71,13 +71,14 @@ snapshots can be brought back. A background check finds problems before you do.
 | **Sharing** | Links with an expiry, a password and view-only mode · direct links that embed in Discord · **file requests**: let others upload into a folder they can't see |
 | **Backup and sync** | Keep folders on your computer backed up, mirrored or two-way synced, live or on a schedule · save a file straight from a web link · WebDAV for other apps |
 | **Safety net** | Self-healing with spare pieces (Reed-Solomon) · versions of every file · undelete · daily snapshots of the whole drive · an activity list of what changed, when, on which device |
-| **Security** | Zero-knowledge encryption · **passkeys** (fingerprint, face, security key) for the dashboard · a 24-word recovery phrase · password-locked folders that vanish until unlocked · secrets in the config encrypted for your machine |
+| **Security** | Zero-knowledge encryption · sign-in by 24-word phrase or **passkey** (fingerprint, face, security key), no passwords · password-locked folders that vanish until unlocked · secrets in the config encrypted for your machine |
+| **For others** | **Accounts**: other people get storage of their own on your dashboard, each encrypted with its own 24 words · sign-up closed, by invite or public |
 | **Insight** | What takes the space, by kind and by folder · the largest files · a duplicate finder · health and repair status |
 | **Efficiency** | Compression · identical pieces stored once · parallel uploads with extra bots · gentle pacing that stays inside Discord's limits |
 
 All of it is described further down: [Web dashboard](#web-dashboard) ·
 [Sync and back up folders](#sync-and-back-up-folders) · [Password-locked folders](#password-locked-folders) ·
-[Self-healing](#self-healing) · [Snapshots](#snapshots) · [The config file](#the-config-file).
+[Self-healing](#self-healing) · [Snapshots](#snapshots) · [Accounts](#accounts) · [The config file](#the-config-file).
 
 ## Screenshots
 
@@ -375,6 +376,8 @@ Useful limits:
 | `snapshot_interval_hours` | `24` | Automatic snapshot of the whole drive (`0` = off), kept `snapshot_keep_days` (14) |
 | `web_enabled` / `web_port` | `true` / `8765` | The web dashboard on `http://127.0.0.1:8765` |
 | `web_lan` | `false` | Also open the dashboard to phones and computers on your home network |
+| `signup_mode` | `closed` | Who can make an [account](#accounts) on the dashboard: `closed`, `invite` or `public` |
+| `account_quota_bytes` / `accounts_max` | 5 GiB / `100` | What one account may store, and how many accounts there can be (`0` = no limit) |
 
 `DISCORDDRIVE_CONFIG`, `DISCORDDRIVE_TOKEN` and `DISCORDDRIVE_CHANNEL` environment variables
 override the config file location, token, and channel. See [`docs/config.example.json`](docs/config.example.json)
@@ -415,7 +418,7 @@ restore                              Rebuild this device's file list from Discor
 backup                               Save an index checkpoint now (normally automatic)
 context-menu install|uninstall       "Make available offline" / "Free up space" in Explorer (Windows)
 web [--open]                         Show (and open) the address of the web dashboard
-web-password                         Set the dashboard's user name and (optional) password
+webdav-password                      Set the user name and password other apps use over WebDAV
 health [--check] [--protect]         Self-healing status; check every piece now; protect old files now
 snapshots [create [label]|delete <n>] List snapshots, take one now, or delete one
 snapshot-restore <n> [path] [--to p] [--in-place]
@@ -493,19 +496,18 @@ upload by drag and drop, new folder, rename, delete, earlier versions, "availabl
 recently deleted files, snapshots, and a health page (protection, checks, repairs, uploads,
 devices).
 
-- **Signing in.** Three ways, managed under Settings → **Sign-in**:
-  - **Passkeys** (the easy way): a fingerprint, face, PIN, phone or security key. Add one with **Add a
-    passkey**; only its public key is stored. A passkey works at the address it was made for, and
-    browsers allow passkeys only on https (your domain through a reverse proxy) or on
-    `http://localhost:8765` on the computer itself, not on `http://127.0.0.1` or a plain-http network
-    address. Add one per address you use.
-  - **The recovery phrase** (the backup): your drive's 24 words always sign in, for example to add a
-    new passkey after losing a device, or where passkeys aren't possible.
-  - **A password** (optional): set, change or remove it there (or `web-password`), and switch off
-    signing in with it if you like. Other apps over WebDAV always need it.
+- **Signing in.** With 24 words. There are no user names and no passwords.
+  - **The recovery phrase**: your drive's 24 words sign you in as its owner, from the first visit on.
+    `recovery-phrase` shows them on the computer that runs the drive (so does Settings → **Sign-in**,
+    there only).
+  - **Passkeys** (so you don't have to type the words): a fingerprint, face, PIN, phone or security
+    key. Add one under Settings → Sign-in; only its public key is stored. A passkey works at the
+    address it was made for, and browsers allow passkeys only on https (your domain through a reverse
+    proxy) or on `http://localhost:8765` on the computer itself, not on `http://127.0.0.1` or a
+    plain-http network address. Add one per address you use.
 
-  The first visit on the computer running the drive only asks for a name. After 5 failed tries an
-  address has to wait. The account button (top right) signs this browser out.
+  After 5 failed tries an address has to wait. The account button (top right) signs this browser
+  out. Other people can have accounts of their own: see [Accounts](#accounts).
 - **Right-click** (or **long-press** on a phone) any file or folder for the usual actions: preview,
   download (folders as a ZIP), copy a share link, available offline, rename, move, duplicate,
   earlier versions, details, delete. Right-click empty space for new folder and uploads (files or a
@@ -548,9 +550,11 @@ devices).
   bar, gives the dashboard its own icon and window.
 - **Other apps (WebDAV)**: turn on Settings → **Other apps (WebDAV)** and connect file managers, "Map
   network drive" (Windows), "Connect to Server" (Finder), rclone or backup apps to
-  `https://your-address/dav/` with the dashboard's user name and password. Use your https address:
-  over plain http the password is sent unencrypted and Windows refuses to connect. Password-locked
-  folders are never shown over WebDAV.
+  `https://your-address/dav/`. Those apps can't type 24 words, so they get a user name and password
+  of their own (Settings → Sign-in → **Password for other apps**, or `webdav-password`), which open
+  nothing but WebDAV. Use your https address: over plain http the password is sent unencrypted and
+  Windows refuses to connect. Password-locked folders are never shown over WebDAV. WebDAV is the
+  owner's; accounts don't have it.
 - **Sync**: folders on the computer running the drive kept in step with folders on the drive (backup,
   mirror, two-way, move, download), with live progress, Sync now, pause and recent runs. See
   [Sync and back up folders](#sync-and-back-up-folders).
@@ -577,6 +581,50 @@ pieces existed), the drive names the files concerned: once in the log, and under
 can't be repaired** in the dashboard and in `health`. It tells a damaged file from a damaged earlier
 version or snapshot copy, and from a lost spare piece (that file still reads fine). Bring a damaged
 file back from an earlier version or a snapshot, or put it on the drive again from another copy.
+
+## Accounts
+
+Other people can use your dashboard with storage of their own. Settings → **Accounts** (the owner's
+Settings) decides who may make one:
+
+| `signup_mode` | Who can make an account |
+| --- | --- |
+| `closed` (the default) | Nobody. |
+| `invite` | Whoever has an invite code. **Invite somebody** makes one (for one account, several or any number; for a day, a week, a month or until you remove it) and gives a link to send. |
+| `public` | Anybody who can open the dashboard, at `/signup`. |
+
+- **An account is 24 words.** The sign-up page makes them, shows them once and asks the person to
+  save them. There is no name, no email and no password, and nobody (you included) can reset them:
+  without the words the account is gone. Signing in is typing them on the same page you sign in on.
+- **Storage of its own, encrypted with its own words.** The 24 words are the account's encryption
+  key. Everything it stores goes to your Discord channel encrypted with that key, so Discord, the
+  other accounts and your own drive key can't read it. An account never sees your files, and you
+  don't see theirs in your drive.
+- **What an account has**: files and folders (upload, preview, download, ZIP, move, rename), the
+  gallery, stars, notes, bookmarks, contacts, messages (their own Discord account), share links and
+  file requests, password-locked folders, earlier versions, deleted files, snapshots, the activity
+  list and the storage page. DiscordDrive Lite works with an account's words too.
+- **What it doesn't have**: Settings, Sync, Log, Health, Resources, checking and repairing, "available
+  offline", WebDAV, passkeys, and anything else that manages the drive or the computer. Those pages
+  aren't shown, and the drive refuses the requests behind them.
+- **Limits**: *Storage per account* (`account_quota_bytes`, 5 GB unless you change it; earlier
+  versions and deleted files count until they are gone) and *Most accounts* (`accounts_max`, 100).
+  At most three accounts an hour are made from one address.
+- **Managing them**: the list under Settings → Accounts shows each account's id, how much it stores
+  and when it last signed in. **Switch off** signs it out and stops its share links without deleting
+  anything; **Delete** removes it from this computer and from Discord. An account can delete itself
+  under *Your account*.
+
+What this is and isn't: the data is unreadable for Discord and for other accounts. The computer that
+runs the drive handles it while it is uploaded and shown, and keeps each account's key (encrypted for
+that computer, like the secrets of the config file) so that uploads finish and share links work while
+nobody is signed in. So an account trusts whoever runs the dashboard, as with any hosted storage.
+
+Accounts live on the computer that made them, in `accounts/` of the data folder: the list
+(`accounts.json`) and each account's file list. A checkpoint of every account's file list is also
+kept in the channel, so a lost account folder is rebuilt at the next sign-in. `accounts.json` itself
+is not in the channel: include it in a backup of that computer, because without it the accounts can't
+be found again. A second device on the same drive does not serve the first one's accounts.
 
 ## Faster uploads with more bots
 
@@ -672,7 +720,7 @@ computer has no bot, no encryption key and no copy of the drive: it shows the ho
 letter (Windows) or a folder (Linux) and streams, downloads and uploads through the host.
 
 ```text
-run.bat lite connect http://192.168.1.20:8765     sign in to the host (asks for user name and password)
+run.bat lite connect http://192.168.1.20:8765     sign in to the host (asks for your 24 words)
 run.bat lite mount                                the host's drive appears as Z: (or: -m Y:, -b for the background)
 run.bat lite stop                                 take it away again
 run.bat lite autostart on                         show it by itself when this computer starts
@@ -685,8 +733,9 @@ run.bat lite menu                                 all of this as a menu (also op
 Ubuntu and Raspberry Pi OS (`discorddrive-lite`), which contain only this.
 
 - **On the host**: the full DiscordDrive, running, with its dashboard reachable from the lite computer
-  (Settings → *On your network*, or your https domain) and a dashboard **password** (Settings →
-  Sign-in). Lite signs in with that user name and password; passkeys can't be used by a program.
+  (Settings → *On your network*, or your https domain). Lite signs in with 24 words, kept encrypted
+  on the lite computer: the drive's recovery phrase shows the whole drive, the words of an
+  [account](#accounts) show that account's own storage.
 - **On the lite computer**: this program and, for the drive letter or folder, the same driver the
   full drive uses (WinFsp on Windows, libfuse on Linux). `ls`, `get` and `put` work without it.
 - **Reading** fetches only the parts a program asks for, a few MB at a time, and keeps the last ones
@@ -694,8 +743,8 @@ Ubuntu and Raspberry Pi OS (`discorddrive-lite`), which contain only this.
 - **Writing** goes to a temporary file that is handed to the host when the file is closed and then
   removed. The host stores it on the drive like any other file (encrypted, uploaded to Discord,
   versioned). Changing part of an existing file fetches it first and sends it back whole.
-- The password is stored encrypted for that computer and account, like the full drive's secrets.
-  Over plain `http` it travels unencrypted when signing in: fine at home, use `https` elsewhere.
+- The 24 words are stored encrypted for that computer and account, like the full drive's secrets.
+  Over plain `http` they travel unencrypted when signing in: fine at home, use `https` elsewhere.
 - Everything the host's dashboard account may see is on the drive. Password-locked folders stay
   hidden (unlocking them is done in the dashboard).
 
@@ -841,6 +890,7 @@ File contents live in Discord. Locally, DiscordDrive only uses:
 | Files being edited | `staging/` | An existing file is downloaded completely while it is open for writing, then removed after it is re-uploaded |
 | Viewed files (read cache) | `cache/` | **Disk mode (default):** kept up to `cache_max_bytes` (5 GiB) so re-opening is instant. **Memory mode:** never written to disk |
 | Offline-pinned files | `cache/` | Until you unpin them (`free-space`) |
+| [Accounts](#accounts) | `accounts/` | Only if somebody has one: the list of accounts (`accounts.json`, their keys encrypted for this computer) and one folder per account with the same things as above (file list, files being written, up to 256 MiB of read cache) |
 | Discord messages (search list) | `chat.db` | Only if you use [Discord messages](#discord-messages). The text of the messages (no attachments), for searching: a copy of the files in `/Discord`, rebuilt from them when needed |
 
 **Memory-only cache.** To keep viewed files off the disk entirely, set `"cache_mode": "memory"`
@@ -906,6 +956,7 @@ so it is slower.
 | `rs.py` | Reed-Solomon erasure coding (the spare pieces), standard library only |
 | `heal.py` | Rebuilding and repairing pieces, the background check, protecting old files, snapshots |
 | `web.py`, `web/` | The web dashboard (server and app) |
+| `accounts.py` | Accounts: sign-up, invites, and each account's own drive on the shared channel |
 | `actions.py` | Restoring versions and snapshots (shared by the command line and the dashboard) |
 | `runtime.py` | Starting DiscordDrive again as a process (from source or as DiscordDrive.exe) |
 | `fuse_loader.py` | Finds WinFsp / libfuse and loads the vendored fusepy |

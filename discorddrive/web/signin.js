@@ -1,5 +1,14 @@
 "use strict";
-/* The sign-in page: signing in with a passkey. */
+/* The sign-in pages: copying a new account's words, and signing in with a passkey. */
+(function () {
+  var copy = document.getElementById("copy"), list = document.getElementById("words");
+  if (!copy || !list || !navigator.clipboard) return;
+  copy.hidden = false;
+  copy.addEventListener("click", function () {
+    var w = []; list.querySelectorAll("li").forEach(function (li) { w.push(li.textContent); });
+    navigator.clipboard.writeText(w.join(" ")).then(function () { copy.textContent = "Copied. Paste them into a password manager."; }, function () {});
+  });
+})();
 (function () {
   var box = document.getElementById("pk"), go = document.getElementById("pk-go"), err = document.getElementById("pk-err");
   if (!box || !window.PublicKeyCredential || !navigator.credentials) {

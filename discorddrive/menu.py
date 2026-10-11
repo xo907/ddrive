@@ -341,7 +341,7 @@ def settings_menu():
         bots, hidden = 1 + len(cfg.extra_bot_tokens or []), cfg.hidden_folders or []
         k_bots, k_hidden, k_auto, k_all, k_web = (str(n + i) for i in range(1, 6))
         options += [(None, None),
-                    (k_web, f"Web dashboard sign-in: {BOLD}{cfg.web_user or 'not set'}{RESET}"),
+                    (k_web, f"Password for other apps (WebDAV): {BOLD}{cfg.web_user if cfg.web_password else 'not set'}{RESET}"),
                     (k_bots, f"Bots for uploading (more = faster): {BOLD}{bots}{RESET}"),
                     (k_hidden, f"Folders hidden on this device: {BOLD}{len(hidden) or 'none'}{RESET}"),
                     (k_auto, f"Start automatically when this computer starts: {BOLD}{'ON' if auto else 'OFF'}{RESET}"),
@@ -363,8 +363,8 @@ def settings_menu():
             bots_page()
             continue
         if pick == k_web:
-            page(MAIN, "Settings", "Web dashboard sign-in")
-            cli("web-password")
+            page(MAIN, "Settings", "Password for other apps (WebDAV)")
+            cli("webdav-password")
             back("Settings")
             continue
         if pick == k_hidden:
@@ -932,13 +932,10 @@ def main():
             print()
             cli("approve-keys")
         elif pick == "11":
-            if not (cfg.web_user and cfg.web_password):
-                info("The dashboard asks for a user name and password. Choose them now:")
-                print()
-                if cli("web-password") != 0:
-                    back()
-                    continue
-                print()
+            info("The dashboard asks for your 24-word recovery phrase (shown by the recovery-phrase command, or")
+            info("under the key options of this menu). There is no user name or password. Add a passkey in")
+            info("its Settings to skip the typing.")
+            print()
             if not is_mounted(cfg):
                 warn("The dashboard runs inside the drive: start the drive first (option 1).")
             else:

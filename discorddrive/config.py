@@ -141,11 +141,13 @@ class Config:
     web_public_url: str = ""           # address share links use, e.g. https://drive.example.com (default: from web_hosts)
     web_lan: bool = False              # also reachable from other devices on your network (phone)
     web_token: str = ""                # secret that signs dashboard sessions and share links (generated)
-    web_user: str = ""                 # dashboard sign-in: user name...
-    web_password: str = ""             # ...and a scrypt hash of the password (set with 'web-password')
-    web_password_login: bool = True    # the password may be used to sign in (off: passkeys and the recovery phrase only)
-    web_passkeys: list = field(default_factory=list)  # passkeys that sign in to the dashboard (public keys only)
-    webdav_enabled: bool = False       # the drive for other apps at /dav/ (the dashboard's user name and password)
+    web_user: str = ""                 # other apps over WebDAV sign in with this name...
+    web_password: str = ""             # ...and this password (a scrypt hash; set with 'webdav-password'). Not for the dashboard.
+    web_passkeys: list = field(default_factory=list)  # passkeys that sign the owner in to the dashboard (public keys only)
+    webdav_enabled: bool = False       # the drive for other apps at /dav/ (web_user and web_password)
+    signup_mode: str = "closed"        # who may make an account on the dashboard: closed | invite | public
+    account_quota_bytes: int = 5 * 1024 * MiB  # what one account may store, earlier versions included (0 = no limit)
+    accounts_max: int = 100            # no more accounts than this are made (0 = no limit)
     fetch_private: bool = False        # "save from a link" may also fetch from this computer and the home network
     lock_timeout_minutes: float = 15.0  # password-locked folders lock again after this long (0 = until the drive restarts)
     sync_jobs: list = field(default_factory=list)  # folders kept in sync with the drive ('sync add', dashboard Sync)

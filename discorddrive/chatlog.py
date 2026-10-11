@@ -512,7 +512,10 @@ class Chat:
 
     def _save_token(self, token):
         self.d.cfg.discord_user_token = token
-        if not self.d.local_test_dir:
+        keep = getattr(self.d, "save_token", None)     # an account's drive keeps it with the account (accounts.py)
+        if keep is not None:
+            keep(token)
+        elif not self.d.local_test_dir:
             saved = Config.load()
             saved.discord_user_token = token
             saved.save()
@@ -642,6 +645,8 @@ class ChatHandlers:
         state = self.chat.state()
         if not self._shown(FOLDER):
             state.update(locked=True, totals=None)
+        if getattr(self, "_acct", None) is not None:      # an account isn't told the computer's name
+            state["device"] = "the server"
         self._json(state)
 
     def _get_api_chat(self):

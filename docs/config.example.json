@@ -42,5 +42,8 @@
   "web_enabled": true,
   "web_port": 8765,
   "web_lan": false,
-  "web_token": ""
+  "web_token": "",
+  "signup_mode": "closed",
+  "account_quota_bytes": 5368709120,
+  "accounts_max": 100
 }

@@ -120,6 +120,11 @@ class DiscordDriveFS(Operations):
                 log.warning("Refused to write %s: files larger than %.1f MiB are not allowed (max_file_size).",
                             path, limit / 2**20)
             raise FuseOSError(errno.EFBIG)
+        quota = int(getattr(self.cfg, "quota_bytes", 0) or 0)       # an account's allowance (accounts.py)
+        if quota > 0:
+            st = self.index.stats(max_age=2)
+            if st["bytes"] + st["version_bytes"] + new_size > quota:
+                raise FuseOSError(errno.ENOSPC)
 
     def _ensure_room(self, nbytes, what, max_wait=1800.0):
         """Hard rule: DiscordDrive never takes the local disk below `min_free_disk_bytes`, so
