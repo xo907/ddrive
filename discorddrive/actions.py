@@ -105,6 +105,17 @@ def intact_copy(idx, lost, path):
     return best
 
 
+def older_copies(idx, path):
+    """How many older copies of the file at `path` exist at all (in snapshots and earlier versions)."""
+    node = idx.resolve(path)
+    if node is None or node["is_dir"]:
+        return 0
+    n = len(idx.versions_for(node["uid"]))
+    for s in idx.snapshots():
+        n += len(idx._all("SELECT id FROM snapshot_entries WHERE snap_id=? AND is_dir=0 AND path=? COLLATE NOCASE", (s["id"], path)))
+    return n
+
+
 def repair_op(idx, path, copy):
     """The operation that puts an intact copy (see intact_copy) in the place of the damaged file. What is
     there now is kept as an earlier version, so this can be undone."""

@@ -3,6 +3,13 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.6 (2026-10-11)
+
+- Health: the "Bring back from a snapshot or an earlier version" bar is always shown above the
+  damaged parts, also when it has nothing to offer, and then says why: the running drive is older
+  than the page and needs a restart, no snapshot or earlier version contains the file, or its older
+  copies have the same missing part. Each damaged file says which of these applies.
+
 ## 1.4.5 (2026-10-11)
 
 - Health, "Parts that can't be repaired": damaged files that still have an intact older copy, in a

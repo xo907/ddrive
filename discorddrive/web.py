@@ -30,7 +30,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
-from .actions import default_restore_folder, intact_copy, repair_op, snapshot_restore_ops, undelete_ops, version_put_op
+from .actions import default_restore_folder, intact_copy, older_copies, repair_op, snapshot_restore_ops, undelete_ops, version_put_op
 from .config import Config, config_path, launcher as _launcher
 from .crypto import check_password, hash_password
 from .index import ROOT_ID, new_uid
@@ -764,6 +764,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 lost = d.healer._lost() if lost is None else lost
                 copy = intact_copy(d.index, lost, e["path"])
                 e["fix"] = {"source": copy["source"], "at": copy["at"], "size": copy["size"]} if copy else None
+                e["copies"] = older_copies(d.index, e["path"])       # so the page can say why nothing can be brought back
         return entries
 
     def _post_api_repair(self):

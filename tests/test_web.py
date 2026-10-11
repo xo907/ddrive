@@ -96,6 +96,7 @@ class WebTest(helpers.DriveTest):
         found = lost()
         self.assertEqual((found[("file", "/Docs/a.txt")]["fix"]["source"], found[("file", "/Docs/new.txt")]["fix"]), ("version", None))
         self.assertIsNone(found[("file", "/Docs/b.txt")]["fix"])       # unchanged since the snapshot: that copy has the same lost part
+        self.assertEqual((found[("file", "/Docs/b.txt")]["copies"], found[("file", "/Docs/new.txt")]["copies"]), (1, 0))
         self.assertNotIn(("file", "/Docs/c.txt"), found)
 
         r = post({"paths": ["/Docs/a.txt", "/Docs/new.txt", "/Docs/c.txt"]})                 # c is not damaged: left alone
