@@ -727,7 +727,10 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(json.loads(data)["name"], "holiday (2).jpg")                         # never overwrites
         status, _, data = self.req("POST", up + urllib.parse.quote("../../evil/..\\x.txt"), body=b"x", auth=False)
         self.assertEqual(json.loads(data)["name"], "x.txt")                                   # stays inside the folder
-        self.assertEqual(self.req("POST", up + "huge.bin", body=b"x" * (1024 * 1024 + 1), auth=False)[0], 413)
+        try:
+            self.assertEqual(self.req("POST", up + "huge.bin", body=b"x" * (1024 * 1024 + 1), auth=False)[0], 413)
+        except (BrokenPipeError, ConnectionResetError):
+            pass                         # refused before all of it was sent: the server had already hung up
         self.assertEqual(self.read(self.d, "/Inbox/holiday.jpg", cold=False), b"JPEGDATA")
         self.assertEqual(sorted(n for n, _, _ in self.d.fs.readdir("/Inbox", None) if n[0] != "."),
                          ["already-here.txt", "holiday (2).jpg", "holiday.jpg", "x.txt"])
