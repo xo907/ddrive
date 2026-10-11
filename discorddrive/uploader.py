@@ -336,7 +336,8 @@ class Uploader:
             else:
                 self.index.update(nid, state="error")
             delay = self._retry_later(nid)
-            log.error("Failed uploading %s: %s (retrying in %.0fs)", path, e, delay)
+            why = "this computer is out of memory" if isinstance(e, MemoryError) else str(e) or type(e).__name__
+            log.error("Failed uploading %s: %s (retrying in %.0fs)", path, why, delay)
             return
 
         # 5. Commit freshly uploaded chunks (commit_upload trashes them if the file changed meanwhile)

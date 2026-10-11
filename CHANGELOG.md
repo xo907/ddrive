@@ -3,6 +3,15 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.2.6 (2026-10-10)
+
+- Fixed uploads of large files failing over and over with "Discord HTTP 100". When a piece was cut
+  off midway (a dropped connection, or the computer running out of memory), the interim "100
+  Continue" from Discord was taken for the final answer and the whole file was put back in the
+  queue. Now only that piece is sent again, right away.
+- When the computer is out of memory, the log says so ("this computer is out of memory") instead of
+  "curl exit code 3221225773", "option -F: is badly used here", or an empty reason.
+
 ## 1.2.5 (2026-10-09)
 
 - The log can be cleared: a Clear button in the dashboard's Log tab (next to Download), `log --clear`,

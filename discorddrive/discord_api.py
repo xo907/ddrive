@@ -105,6 +105,20 @@ def _encode_multipart(fields, files):
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
+_OUT_OF_MEMORY = (0xC0000017, 0xC000012D, 0xC000009A)   # Windows: no memory, commit limit, no resources
+
+
+def _curl_failure(returncode, stderr):
+    """Why curl failed, in words: its own message, or what a Windows crash code means."""
+    code = returncode & 0xFFFFFFFF
+    err = (stderr or b"").decode("utf-8", "replace").strip()
+    if code in _OUT_OF_MEMORY or "out of memory" in err.lower():
+        return "this computer is out of memory, curl could not run"
+    if code >= 0x80000000:
+        return f"curl crashed with Windows error 0x{code:08X}"
+    return err.splitlines()[0] if err else f"curl exit code {returncode}"
+
+
 class DiscordAPI:
     def __init__(self, token: str, timeout: float = 600.0, retries: int = 8):
         token = (token or "").strip()
@@ -168,6 +182,9 @@ class DiscordAPI:
                 req_hdr_path = rf.name
             temp_files.append(req_hdr_path)
             cmd.extend(["-H", f"@{req_hdr_path}"])
+            # No "Expect: 100-continue" on uploads: an upload that dies after Discord's interim
+            # "100 Continue" would otherwise be reported with 100 as its status.
+            cmd.extend(["-H", "Expect:"])
 
             stdin_data = None
             if multipart_file:
@@ -189,9 +206,10 @@ class DiscordAPI:
             cmd.append(url)
             proc = subprocess.run(cmd, capture_output=True, input=stdin_data)
             raw = proc.stdout
-            if proc.returncode != 0 and b"__HTTP_STATUS__:" not in raw:
-                err = proc.stderr.decode("utf-8", "replace").strip() or f"curl exit code {proc.returncode}"
-                raise ConnectionError(err)
+            if proc.returncode != 0:
+                # curl still prints the status marker when a transfer fails midway, so the exit
+                # code decides: whatever arrived is incomplete and the request is tried again.
+                raise ConnectionError(_curl_failure(proc.returncode, proc.stderr))
             marker = b"\n__HTTP_STATUS__:"
             pos = raw.rfind(marker)
             if pos != -1:
@@ -272,7 +290,7 @@ class DiscordAPI:
                 delay = min(delay * 2, 60)
                 continue
 
-            if status == 0:  # curl reached nothing (DNS failure, connection reset, timeout)
+            if status < 200:  # nothing final arrived (DNS failure, connection reset, timeout, only "100 Continue")
                 last_err = ConnectionError("no HTTP response")
                 log.warning("No response from Discord; retrying in %.0fs", delay)
                 time.sleep(delay)
