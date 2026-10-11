@@ -116,6 +116,7 @@ class WebTest(helpers.DriveTest):
         # a file changed after a snapshot and then damaged comes back from the snapshot when it has no version left
         self.write(d, "/Docs/c.txt", b"c, changed" * 300)
         self.upload(d)
+        time.sleep(0.1)                                                # (on a fast computer they would be too new to expire)
         d.index.gc_versions(0.0000001, 0)                              # its earlier versions have expired
         mid = mids("/Docs/c.txt")[0]
         d.backend.delete(mid)
