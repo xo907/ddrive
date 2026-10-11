@@ -1387,17 +1387,24 @@ async function repairFromCopies(paths, all) {
   await refreshStatus();
 }
 
-async function recheckLost(btn) {
-  btn.disabled = true;
-  btn.textContent = "Checking…";
+// "Check again" runs on the drive until nothing more can be fixed; the page follows it through /api/status.
+let recheckSeen = 0;
+function recheckText(r) {
+  const fixed = r.readable + r.repaired;
+  return fixed ? `${r.readable ? plural(r.readable, "part") + " can be read after all" : ""}${r.readable && r.repaired ? ", " : ""}${r.repaired ? plural(r.repaired, "part") + " uploaded again from this computer" : ""}${r.left ? `; ${r.left} still listed` : ": nothing is damaged"}`
+               : "Checked again: these parts are still missing";
+}
+async function recheckLost() {
   const r = await attempt(() => api("/api/repair/recheck", {}));
-  if (r) {
-    const fixed = r.readable + r.repaired;
-    toast(fixed ? `${r.readable ? plural(r.readable, "part") + " can be read after all" : ""}${r.readable && r.repaired ? ", " : ""}${r.repaired ? plural(r.repaired, "part") + " uploaded again from this computer" : ""}${r.left ? `; ${r.left} still listed` : ": nothing is damaged"}`
-                : "Checked again: these parts are still missing");
-  }
+  if (r) recheckSeen = -1;                      // say what it found when it is done
   await refreshStatus();
   if (route.name === "health") renderHealth(true);
+}
+function recheckDone(r) {
+  if (!r || r.running || !r.finished || recheckSeen === r.finished) return;
+  const said = recheckSeen;
+  recheckSeen = r.finished;
+  if (said === -1) toast(recheckText(r));
 }
 
 async function forgetLost() {
@@ -1409,6 +1416,7 @@ async function forgetLost() {
 function renderHealth(quiet) {
   if (!status) { if (!quiet) page(h("h1", {}, "Health"), h("p", { class: "lede" }, "Connecting to the drive…")); return; }
   const st = status.stats, hl = status.health, sc = hl.scrub || {}, sv = status.saved || {};
+  recheckDone(hl.recheck);
   const pct = st.chunks ? Math.floor((st.protected_chunks / st.chunks) * 1000) / 10 : 100;
   const lede = hl.parity
     ? `Every group of ${hl.group} pieces is stored with ${hl.pieces} spare pieces, so Discord can lose pieces without you losing files. Missing pieces are rebuilt and uploaded again automatically.`
@@ -1439,8 +1447,13 @@ function renderHealth(quiet) {
       h("h2", { class: "warn-text" }, "Parts that can't be repaired"),
       h("p", { class: "muted", style: "margin:0 0 12px;max-width:680px" }, "A part of these is gone from Discord (or unreadable) and there were not enough spare pieces to rebuild it. A damaged file can be replaced by an earlier version or a snapshot copy if one is intact, or by putting it on the drive again from another copy."),
       h("div", { class: "heal-fix" },
-        h("span", {}, h("b", {}, "Check again. "), "Asks Discord for each of these parts once more. A part that can be read after all comes off the list, and one this computer still has a copy of is uploaded again."),
-        h("button", { class: "btn small", type: "button", onclick: (e) => recheckLost(e.currentTarget) }, "Check again"),
+        h("span", {}, h("b", {}, "Check again. "), hl.recheck && hl.recheck.running
+          ? `Working through the list${hl.recheck.readable + hl.recheck.repaired ? `: ${hl.recheck.readable + hl.recheck.repaired} fixed so far` : ""}. It keeps going until nothing more can be fixed; you can leave this page.`
+          : hl.recheck && hl.recheck.finished ? `Last time (${ago(hl.recheck.finished)}): ${recheckText(hl.recheck).replace(/^Checked again: /, "")}.`
+          : "Asks Discord for each of these parts once more, and keeps going until nothing more can be fixed. A part that can be read after all comes off the list, and one this computer still has a copy of is uploaded again."),
+        hl.recheck && hl.recheck.running
+          ? h("button", { class: "btn small", type: "button", disabled: true }, hl.recheck.total ? `Checking ${hl.recheck.checked} of ${hl.recheck.total}${hl.recheck.round > 1 ? " (again)" : ""}…` : "Checking…")
+          : h("button", { class: "btn small", type: "button", onclick: recheckLost }, "Check again"),
         h("button", { class: "btn ghost small", type: "button", onclick: forgetLost }, "Clear the list")),
       // Always said, also when nothing can be done, so it is clear where the option is and why it isn't offered.
       damagedFiles.length ? h("div", { class: "heal-fix" },
@@ -3982,6 +3995,7 @@ dropTarget(document.querySelector('#nav a[data-nav="files"]'), "/");
 dropTarget(document.querySelector('#nav a[data-nav="deleted"]'), "/", "delete");
 refreshStatus().then(render);          // who is signed in decides which pages there are
 (function poll() {
-  const busy = status && (status.uploads.length || status.downloads || status.queued || (status.fetches || []).some((f) => f.state === "running"));
+  const busy = status && (status.uploads.length || status.downloads || status.queued || (status.fetches || []).some((f) => f.state === "running")
+                          || (status.health && status.health.recheck && status.health.recheck.running));
   setTimeout(async () => { await refreshStatus(); poll(); }, busy ? 1000 : 3000);
 })();

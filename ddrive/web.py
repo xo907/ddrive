@@ -850,6 +850,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "group": d.cfg.parity_group, "pieces": d.cfg.parity_pieces,
                 "scrub": scrub, "healer": dict(d.healer.stats) if d.healer else {},
                 "lost": self._lost(),
+                "recheck": d.healer.recheck if d.healer else None,
                 "leader": d.maintenance.leader() if d.maintenance else False,
             },
             "devices": devices,
@@ -909,19 +910,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             n = d.healer.forget_lost()
             log.info("Web dashboard: the list of parts that can't be repaired was cleared (%d).", n)
             return self._json({"ok": True, "forgotten": n})
-        report = {}
-        d.healer.recheck_lost(limit=500, force=True, report=report)
-        d.healer.drain()
-        try:
-            d.journal.sync_once()                # a part that was uploaded again takes its place right away
-        except Exception as e:
-            log.debug("after re-checking: %s", e)
-        d.healer._lost_list = (0.0, [])
-        left = d.healer.lost_files()
-        log.info("Web dashboard: parts listed as lost were checked again: %d readable after all, %d uploaded again from "
-                 "this computer, %d still missing.", report["readable"], report["repaired"],
-                 len({(e["kind"], e["path"], e["at"]) for e in left}))
-        self._json({"ok": True, "readable": report["readable"], "repaired": report["repaired"], "left": len(left)})
+        # It can take a while (every part is asked for, repaired ones are uploaded at Discord's pace, and what
+        # got no answer is tried again), so it runs in the background; /api/status says how far it is.
+        started = d.healer.recheck_start(sync=d.journal.sync_once)
+        self._json({"ok": True, "started": started, "recheck": d.healer.recheck})
 
     def _post_api_resources_clean(self):
         """The buttons on the Resources page."""

@@ -131,7 +131,14 @@ class WebTest(helpers.DriveTest):
     def test_checking_lost_parts_again(self):
         self.login()
         d = self.d
-        post = lambda body: json.loads(self.req("POST", "/api/repair/recheck", body)[2])
+        def post(body):
+            r = json.loads(self.req("POST", "/api/repair/recheck", body)[2])
+            for _ in range(200):                                       # it works in the background and says how far it is
+                state = json.loads(self.req("GET", "/api/status")[2])["health"]["recheck"]
+                if body.get("forget") or not state["running"]:
+                    return r if body.get("forget") else state
+                time.sleep(0.05)
+            self.fail("the check did not finish")
         lost = lambda: [e["path"] for e in json.loads(self.req("GET", "/api/status")[2])["health"]["lost"]]
         d.cfg.parity_enabled, d.cfg.dedup = False, False
         for name in ("there", "cached", "gone"):
@@ -151,7 +158,7 @@ class WebTest(helpers.DriveTest):
         d.healer._lost_list = (0.0, [])
         self.assertEqual(sorted(lost()), ["/cached.bin", "/gone.bin", "/there.bin"])
         r = post({})                                                   # no waiting for the background's turn
-        self.assertEqual((r["readable"], r["repaired"], r["left"]), (1, 1, 1))
+        self.assertEqual((r["readable"], r["repaired"], r["left"], r["checked"]), (1, 1, 1, 3))
         self.assertEqual(lost(), ["/gone.bin"])
         self.assertEqual(self.read(d, "/cached.bin"), b"cached" * 4000)     # stored again, readable from Discord
         self.assertEqual(self.read(d, "/there.bin"), b"there" * 4000)

@@ -88,6 +88,47 @@ class LostPiecesTest(helpers.DriveTest):
         d.journal.sync_once()
         self.assertEqual(d.healer.lost_files(), [])
 
+    def test_checking_again_goes_on_until_nothing_more_can_be_fixed(self):
+        from ddrive.discord_api import DiscordError
+        d = self.drive(parity_enabled=False, dedup=False)
+        names = [f"/f{i}.bin" for i in range(6)]
+        for i, name in enumerate(names):
+            self.write(d, name, bytes([65 + i]) * 20000)
+        self.upload(d)
+        for name in names[3:]:
+            self.read(d, name, cold=False)                                # the last three are in this computer's cache
+        mids = [self.mids(d, name)[0] for name in names]
+        for mid in mids[1:]:                                              # f0 is fine, it was only listed by mistake
+            d.backend.delete(mid)
+        for mid in mids:
+            d.healer._note_lost(mid)
+        self.assertEqual(len(d.healer.lost_files()), 6)
+        # Discord is busy: every request fails the first time it is made
+        real_download, real_upload, seen = d.backend.download, d.backend.upload, set()
+
+        def flaky(fn):
+            def call(*args, **kwargs):
+                key = (fn.__name__, len(args[1]) if fn.__name__ == "upload" else args[0])
+                if key not in seen:
+                    seen.add(key)
+                    raise DiscordError(503, "busy")
+                return fn(*args, **kwargs)
+            return call
+        d.backend.download, d.backend.upload = flaky(real_download), flaky(real_upload)
+        st = d.healer.recheck_all(sync=d.journal.sync_once, pause=0)      # one "Check again"
+        d.backend.download, d.backend.upload = real_download, real_upload
+        self.assertEqual((st["readable"], st["repaired"], st["left"], st["running"]), (1, 3, 2, False))
+        self.assertGreater(st["round"], 1)
+        self.assertEqual(sorted(e["path"] for e in d.healer.lost_files()), ["/f1.bin", "/f2.bin"])
+        for i, name in enumerate(names[3:], 3):
+            self.assertEqual(self.read(d, name), bytes([65 + i]) * 20000)       # from Discord again
+        self.assertTrue(d.healer.recheck_start() and True)
+        for _ in range(100):
+            if not d.healer.recheck["running"]:
+                break
+            time.sleep(0.05)
+        self.assertEqual((d.healer.recheck["readable"], d.healer.recheck["repaired"], d.healer.recheck["left"]), (0, 0, 2))
+
     def test_a_lost_spare_piece_is_not_a_damaged_file(self):
         d = self.drive()
         self.write(d, "/big.bin", bytes(range(256)) * 1200)

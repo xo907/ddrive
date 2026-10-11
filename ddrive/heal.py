@@ -206,6 +206,92 @@ class Healer:
         self.schedule_repair(mid, data)
         return data
 
+    def _recheck_one(self, mid):
+        """Look at one listed piece again: "readable" (Discord has it after all: off the list), "repaired"
+        (this computer still held it: being uploaded again) or None (still missing). Network errors propagate."""
+        if self._read_again(mid) is not None:
+            current = self._lost()
+            current.pop(mid, None)
+            self.index.kv_set("lost_pieces", json.dumps(current, separators=(",", ":")))
+            with self._lock:
+                self._lost_logged.discard(mid)
+            self._lost_list = (0.0, [])
+            self._rechecked.pop(mid, None)
+            use = self.index.piece_users(mid)
+            names = list(dict.fromkeys(use["files"] + [v["path"] for v in use["versions"]]))[:5]
+            log.info("Piece %s can be read after all%s: it is no longer listed as damaged.", mid,
+                     f" ({', '.join(names)})" if names else "")
+            return "readable"
+        if self._from_this_computer(mid) is not None:
+            self._lost_list = (0.0, [])
+            return "repaired"
+        return None
+
+    recheck = None        # the dashboard's "Check again": how far it is, and what the last one found
+
+    def recheck_all(self, sync=None, rounds=6, pause=3.0):
+        """"Check again", to the end: every listed piece is looked at, and the ones that could not be asked
+        about (Discord was busy) or whose upload failed are tried again, until a round changes nothing.
+        `sync()` applies what was repaired (the journal). Progress is in `self.recheck`."""
+        st = self.recheck = {"running": True, "started": time.time(), "total": 0, "checked": 0, "readable": 0,
+                             "repaired": 0, "left": None, "round": 0}
+        try:
+            fixed_before = set()
+            for n in range(rounds):
+                pending = [m for m in self._lost() if self.index.is_referenced(m) and m not in fixed_before]
+                st.update(round=n + 1, total=len(pending), checked=0)
+                if not pending:
+                    break
+                retry = 0
+                for mid in pending:
+                    how = None
+                    try:
+                        how = self._recheck_one(mid)
+                    except DiscordError as e:
+                        retry += 1                    # not an answer: ask again in the next round
+                        log.debug("checking piece %s again: %s", mid, e)
+                    st["checked"] += 1
+                    if how:
+                        st[how] += 1
+                        fixed_before.add(mid)
+                if not self._running:
+                    self.drain()
+                end = time.time() + 600               # uploads of the repaired pieces, at Discord's pace
+                while self._queued and time.time() < end:
+                    time.sleep(0.2)
+                with self._lock:                      # an upload that failed: its piece is tried again
+                    failed = {m for m in fixed_before if m not in self._done and m in self._lost()
+                              and self.index.is_referenced(m) and self.cache is not None and self.cache.peek(m) is not None}
+                if failed:
+                    st["repaired"] -= len(failed)
+                    fixed_before -= failed
+                    retry += len(failed)
+                if sync is not None:
+                    try:
+                        sync()
+                    except Exception as e:
+                        log.debug("after re-checking: %s", e)
+                if not retry:
+                    break                             # everything got an answer: nothing a further round would change
+                time.sleep(pause)
+            self._lost_list = (0.0, [])
+            st["left"] = len(self.lost_files())
+            log.info("Parts listed as lost were checked again: %d can be read after all, %d uploaded again from this "
+                     "computer, %d file(s) or copies still have a missing part.", st["readable"], st["repaired"], st["left"])
+        finally:
+            st.update(running=False, finished=time.time())
+        return st
+
+    def recheck_start(self, sync=None):
+        """Run recheck_all in the background (once at a time). False when one is already running."""
+        with self._lock:
+            if self.recheck and self.recheck.get("running"):
+                return False
+            self.recheck = {"running": True, "started": time.time(), "total": 0, "checked": 0, "readable": 0, "repaired": 0,
+                            "left": None, "round": 0}
+        threading.Thread(target=self.recheck_all, kwargs={"sync": sync}, name=tname("CheckAgain"), daemon=True).start()
+        return True
+
     def recheck_lost(self, limit=20, now=None, force=False, report=None):
         """Look again at pieces noted as lost: one that can be read after all (the request that failed was a
         passing problem) is taken off the list, one this computer still holds is uploaded again. Each piece
@@ -225,27 +311,13 @@ class Healer:
                 continue
             self._rechecked[mid] = (times + 1, now + min(6 * 3600, 300 * 2 ** (times + 1)))
             try:
-                if self._read_again(mid) is not None:
-                    current = self._lost()
-                    current.pop(mid, None)
-                    self.index.kv_set("lost_pieces", json.dumps(current, separators=(",", ":")))
-                    with self._lock:
-                        self._lost_logged.discard(mid)
-                    self._lost_list = (0.0, [])
-                    self._rechecked.pop(mid, None)
-                    use = self.index.piece_users(mid)
-                    names = list(dict.fromkeys(use["files"] + [v["path"] for v in use["versions"]]))[:5]
-                    log.info("Piece %s can be read after all%s: it is no longer listed as damaged.", mid,
-                             f" ({', '.join(names)})" if names else "")
-                    done += 1
-                    report["readable"] += 1
-                elif self._from_this_computer(mid) is not None:
-                    self._lost_list = (0.0, [])
-                    done += 1
-                    report["repaired"] += 1
+                how = self._recheck_one(mid)
             except DiscordError as e:
                 log.debug("re-checking lost pieces: %s", e)
                 break
+            if how:
+                done += 1
+                report[how] += 1
         for mid in [m for m in self._rechecked if m not in lost]:
             self._rechecked.pop(mid, None)
         return done

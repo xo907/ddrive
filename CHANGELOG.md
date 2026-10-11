@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.1.1 (2026-10-11)
+
+- Health, **Check again**, now finishes the job with one click. It used to stop at the first part
+  Discord was too busy to answer for, so it took several clicks to get through a long list. It now
+  runs on the drive in the background, tries again what got no answer or failed to upload, and goes
+  on until nothing more can be fixed. The button shows how far it is, you can leave the page
+  meanwhile, and it says what it found when it is done.
+
 ## 2.1.0 (2026-10-11)
 
 - **Accounts survive the loss of the computer that serves them.** Until now the list of accounts was
