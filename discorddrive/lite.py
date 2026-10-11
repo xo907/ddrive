@@ -194,7 +194,11 @@ try:
     Operations, FuseOSError = fuse.Operations, fuse.FuseOSError
 except Exception as e:                       # no FUSE on this system: everything but `mount` still works
     FUSE_ERROR, fuse, unmount = str(e), None, None
-    Operations, FuseOSError = object, OSError
+    Operations = object
+
+    class FuseOSError(OSError):
+        def __init__(self, code):
+            super().__init__(code, os.strerror(code))
 
 _ERRNO = {404: errno.ENOENT, 409: errno.EEXIST, 403: errno.EACCES, 400: errno.EINVAL, 507: errno.ENOSPC, 413: errno.EFBIG}
 

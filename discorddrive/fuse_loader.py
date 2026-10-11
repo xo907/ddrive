@@ -107,9 +107,16 @@ class _DummyOperations:
     pass
 
 
+class _DummyFuseOSError(OSError):
+    """Like the real one: made from an error number alone, which it then carries."""
+
+    def __init__(self, errno):
+        super().__init__(errno, os.strerror(errno))
+
+
 class _DummyFuseModule:
     Operations = _DummyOperations
-    FuseOSError = OSError
+    FuseOSError = _DummyFuseOSError
 
     def __init__(self, err_msg: str):
         self._err_msg = err_msg
