@@ -3,6 +3,16 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.1 (2026-10-10)
+
+- Windows: files that are already on the drive can be changed in place (appending to a file, a
+  program that edits its file instead of writing a new one). Until now Windows allowed new files but
+  answered "Access is denied" for these, because it took the files to be somebody else's. Restart the
+  drive for this to take effect.
+- Lite: `lite autostart on|off` shows the host's drive by itself when the computer starts; `lite menu`
+  (and option 13 of the main menu) offers everything as a menu; and releases now also carry
+  lite-only downloads, DiscordDriveLite.exe and discorddrive-lite_*.deb.
+
 ## 1.4.0 (2026-10-10)
 
 - DiscordDrive Lite: use a drive that runs on another computer, on Windows and Linux. `lite connect

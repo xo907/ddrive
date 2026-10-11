@@ -76,3 +76,49 @@ chmod 755 "$PKG/DEBIAN/postinst"
 mkdir -p dist
 dpkg-deb --build --root-owner-group "$PKG" "dist/discorddrive_${VERSION}_all.deb"
 echo "Built dist/discorddrive_${VERSION}_all.deb"
+
+# The lite-only package: a computer that uses a drive running on another computer.
+LITE="build/deb/discorddrive-lite_${VERSION}_all"
+rm -rf "$LITE"
+mkdir -p "$LITE/DEBIAN" "$LITE/opt/discorddrive-lite/discorddrive/_vendor" "$LITE/usr/bin"
+for f in __init__.py lite.py config.py secretbox.py crypto.py fuse_loader.py runtime.py; do
+    cp "discorddrive/$f" "$LITE/opt/discorddrive-lite/discorddrive/"
+done
+cp discorddrive/_vendor/*.py "$LITE/opt/discorddrive-lite/discorddrive/_vendor/"
+cp LICENSE "$LITE/opt/discorddrive-lite/"
+find "$LITE/opt/discorddrive-lite" -type d -exec chmod 755 {} +
+find "$LITE/opt/discorddrive-lite" -type f -exec chmod 644 {} +
+
+cat > "$LITE/opt/discorddrive-lite/run.sh" <<'EOF'
+#!/bin/sh
+# DiscordDrive Lite - Made by XO.ST. "run.sh lite <command>", as the autostart entry calls it.
+[ "$1" = "lite" ] && shift
+exec /usr/bin/discorddrive-lite "$@"
+EOF
+cat > "$LITE/usr/bin/discorddrive-lite" <<'EOF'
+#!/bin/sh
+# DiscordDrive Lite - Made by XO.ST. With no arguments: the menu.
+export PYTHONPATH="/opt/discorddrive-lite${PYTHONPATH:+:$PYTHONPATH}" DISCORDDRIVE_LITE_ONLY=1
+[ $# -eq 0 ] && set -- menu
+exec python3 -c 'import sys; from discorddrive.lite import main; sys.exit(main(sys.argv[1:]) or 0)' "$@"
+EOF
+chmod 755 "$LITE/usr/bin/discorddrive-lite" "$LITE/opt/discorddrive-lite/run.sh"
+
+SIZE="$(du -sk "$LITE" | cut -f1)"
+cat > "$LITE/DEBIAN/control" <<EOF
+Package: discorddrive-lite
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.9), python3-cryptography, libfuse2t64 | libfuse2, fuse3 | fuse
+Installed-Size: ${SIZE}
+Maintainer: XO.ST <https://github.com/xo907/discord-drive>
+Homepage: https://github.com/xo907/discord-drive
+Description: Use a DiscordDrive that runs on another computer
+ DiscordDrive Lite shows the drive of a computer that runs DiscordDrive (the
+ host) as a folder here, and streams, downloads and uploads through it. It
+ keeps no bot, key or copy of the drive. Run "discorddrive-lite" for the menu.
+EOF
+dpkg-deb --build --root-owner-group "$LITE" "dist/discorddrive-lite_${VERSION}_all.deb"
+echo "Built dist/discorddrive-lite_${VERSION}_all.deb"

@@ -870,6 +870,7 @@ MAIN_OPTIONS = [
     ("10", "Approve a new device (send it the key)"),
     ("11", "Web dashboard (browse, preview and share files; works on your phone)"),
     ("12", "Sync and back up folders (e.g. Downloads -> the drive)"),
+    ("13", "Lite: use a drive that runs on another computer (nothing is set up here)"),
 ]
 PAGE_TITLES = {"1": "Start the drive", "2": "Stop the drive", "3": "Status", "4": "Update DiscordDrive",
                "5": "Setup", "8": "Copy files onto the drive", "10": "Approve a new device",
@@ -897,6 +898,11 @@ def main():
             continue
         if pick == "12":
             sync_menu()
+            continue
+        if pick == "13":
+            clear()
+            banner()
+            cli("lite", "menu")
             continue
         if pick not in PAGE_TITLES:
             continue

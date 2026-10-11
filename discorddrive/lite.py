@@ -3,7 +3,8 @@
     lite connect <address>      sign in to the host's dashboard address (asks for its user name and password)
     lite mount [-m X:] [-b]     show the host's drive as a drive letter / folder on this computer
     lite stop                   take it away again
-    lite status | ls | get | put | disconnect
+    lite autostart on|off       show it by itself when this computer starts
+    lite status | ls | get | put | disconnect, and lite menu for all of this as a menu
 
 Nothing of the drive lives on this computer: no bot token, no encryption key, no index, no cache on
 disk. Files are read from the host a part at a time as programs ask for them (so video plays and
@@ -513,6 +514,30 @@ class LiteFS(Operations):
 
 
 # ---------------------------------------------------------------------- settings and commands
+SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AUTOSTART_TAG = "# DiscordDrive Lite autostart"
+
+
+def me():
+    """How this program is run here, for messages: 'run.bat lite', or the name of the lite-only program."""
+    from .runtime import FROZEN
+    if FROZEN:
+        name = os.path.splitext(os.path.basename(sys.executable))[0]
+        return name if "lite" in name.lower() else name + " lite"
+    return ("discorddrive-lite" if os.environ.get("DISCORDDRIVE_LITE_ONLY") else launcher() + " lite")
+
+
+def _logging(verbose=False):
+    handlers = [logging.StreamHandler(sys.stderr)] if sys.stderr is not None else []
+    try:
+        os.makedirs(default_data_dir(), exist_ok=True)
+        handlers.append(logging.FileHandler(os.path.join(default_data_dir(), "discorddrive.log"), mode="a", encoding="utf-8"))
+    except OSError:
+        pass
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=handlers or None, force=True,
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+
+
 def settings_path():
     return os.environ.get("DISCORDDRIVE_LITE_CONFIG") or os.path.join(default_config_dir(), "lite.json")
 
@@ -537,12 +562,12 @@ def save_settings(s):
 
 def client_from(s):
     if not s.get("host"):
-        raise HostError(0, f"Not connected to a host yet. Run '{launcher()} lite connect <address>' first.")
+        raise HostError(0, f"Not connected to a host yet. Run '{me()} connect <address>' first.")
     try:
         secret = json.loads(secretbox.unprotect(s.get("protected") or ""))
     except (secretbox.ProtectError, ValueError):
         raise HostError(0, "The saved sign-in can't be read on this computer or account. Run "
-                           f"'{launcher()} lite connect {s['host']}' again.") from None
+                           f"'{me()} connect {s['host']}' again.") from None
     return HostClient(s["host"], s.get("user", ""), secret.get("password", ""), secret.get("cookie", ""))
 
 
@@ -572,7 +597,7 @@ def cmd_connect(args):
           f"{st['stats']['files']} files ({format_size(st['stats']['bytes'])}).")
     if not client.secure and client.hostname not in ("localhost", "127.0.0.1", "::1"):
         print("          This address is plain http: fine on your own network; over the internet use the host's https address.")
-    print(f"          Next: '{launcher()} lite mount' shows it as {s['mount_point']} on this computer.")
+    print(f"          Next: '{me()} mount' shows it as {s['mount_point']} on this computer.")
     return 0
 
 
@@ -590,15 +615,16 @@ def cmd_mount(args):
         print(f"[INFO] Something is already mounted on {mp}.")
         return 0
     if args.background:
-        from .runtime import command
+        from .runtime import FROZEN, command
         cmd = command("lite", "mount", "-m", mp, windowless=True)
+        cwd = None if FROZEN else SOURCE_ROOT        # from source, the program is found from its own folder
         os.makedirs(default_data_dir(), exist_ok=True)
         if sys.platform == "win32":
-            proc = subprocess.Popen(cmd, close_fds=True, creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            proc = subprocess.Popen(cmd, cwd=cwd, close_fds=True, creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                                     | getattr(subprocess, "DETACHED_PROCESS", 0))
         else:
             with open(os.path.join(default_data_dir(), "lite.log"), "a") as out:
-                proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                proc = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                         start_new_session=True, close_fds=True)
         deadline = time.time() + 30
         while time.time() < deadline and not _is_mounted(mp) and proc.poll() is None:
@@ -608,8 +634,7 @@ def cmd_mount(args):
             return 0
         print(f"[ERROR] It did not come up. See {os.path.join(default_data_dir(), 'discorddrive.log')}")
         return 1
-    from .cli import setup_logging
-    setup_logging(getattr(args, "verbose", False))
+    _logging(getattr(args, "verbose", False))
     client.status()                          # fails here, with a clear message, rather than inside the mount
     if sys.platform != "win32":
         os.makedirs(mp, exist_ok=True)
@@ -669,7 +694,7 @@ def cmd_stop(args):
 def cmd_status(args):
     s = load_settings()
     if not s.get("host"):
-        print(f"Not connected to a host. Run '{launcher()} lite connect <address>'.")
+        print(f"Not connected to a host. Run '{me()} connect <address>'.")
         return 0
     mp = normalize_mount_point(s.get("mount_point") or "")
     print(f"Host:        {s['host']} (signed in as {s.get('user')})")
@@ -749,6 +774,124 @@ def cmd_put(args):
     return 0
 
 
+def autostart_enabled():
+    if sys.platform == "win32":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+                winreg.QueryValueEx(k, "DiscordDriveLite")
+                return True
+        except OSError:
+            return False
+    try:
+        return AUTOSTART_TAG in subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+def cmd_autostart(args):
+    """Show the host's drive by itself when this computer starts (Windows: when you log in)."""
+    from .runtime import FROZEN
+    action = args.state or "status"
+    if action == "status":
+        print(f"[OK] Lite autostart is {'ON' if autostart_enabled() else 'OFF'}.")
+        return 0
+    on = action == "on"
+    if on:
+        client_from(load_settings())             # only when there is a host to connect to
+    if sys.platform == "win32":
+        import winreg
+        if FROZEN:
+            start = f'"{sys.executable}" lite mount -b'
+        else:
+            # No window: Python's windowless program runs the mount itself, from wherever Windows starts it.
+            exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            exe = exe if os.path.exists(exe) else sys.executable
+            start = (f'"{exe}" -c "import sys; sys.path.insert(0, r\'{SOURCE_ROOT}\'); '
+                     f'from discorddrive.lite import main; main([\'mount\'])"')
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            if on:
+                winreg.SetValueEx(k, "DiscordDriveLite", 0, winreg.REG_SZ, start)
+            else:
+                try:
+                    winreg.DeleteValue(k, "DiscordDriveLite")
+                except OSError:
+                    pass
+    else:
+        try:
+            current = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+        except OSError:
+            print("[ERROR] crontab is not available. Install it: sudo apt install -y cron")
+            return 1
+        lines = [line for line in current.splitlines() if AUTOSTART_TAG not in line]
+        if on:
+            lines.append(f'@reboot sleep 20 && "{SOURCE_ROOT}/run.sh" lite mount -b >/dev/null 2>&1 {AUTOSTART_TAG}')
+        r = subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n" if lines else "", text=True, capture_output=True)
+        if r.returncode != 0:
+            print(f"[ERROR] Could not update crontab: {r.stderr.strip()}")
+            return 1
+    print("[OK] Lite autostart is now " + ("ON: the host's drive appears when this computer starts." if on else "OFF."))
+    return 0
+
+
+def cmd_menu(args):
+    """Everything above as a small menu (what the lite-only program shows when it is just opened)."""
+    def run(*argv):
+        print()
+        try:
+            main(list(argv), getattr(args, "verbose", False))
+        except SystemExit:
+            pass
+        try:
+            input("\n  Press Enter to go back...")
+        except EOFError:
+            raise SystemExit(0) from None
+    while True:
+        s = load_settings()
+        mp = normalize_mount_point(s.get("mount_point") or "")
+        shown = bool(s.get("host")) and _is_mounted(mp)
+        print("\n  DiscordDrive Lite: a drive that runs on another computer\n")
+        print(f"  Host:  {s['host'] + ' (as ' + str(s.get('user')) + ')' if s.get('host') else 'not connected yet'}")
+        if s.get("host"):
+            print(f"  Here:  {mp + ' is showing the drive' if shown else 'not shown'}"
+                  f"{' · starts with this computer' if autostart_enabled() else ''}")
+        print("\n   1  Connect to a host" + (" (another one, or sign in again)" if s.get("host") else ""))
+        if s.get("host"):
+            print(f"   2  {'Take the drive away from this computer' if shown else 'Show the drive on ' + mp}")
+            print("   3  Choose another drive letter or folder")
+            print("   4  Status of the host")
+            print(f"   5  Start with this computer: turn {'off' if autostart_enabled() else 'on'}")
+            print("   6  Forget the host")
+        print("   0  Exit\n")
+        try:
+            pick = input("  Choose an option: ").strip()
+        except EOFError:
+            return 0
+        if pick in ("0", "q", "exit"):
+            return 0
+        if pick == "1":
+            run("connect")
+        elif not s.get("host"):
+            continue
+        elif pick == "2":
+            run("stop") if shown else run("mount", "-b")
+        elif pick == "3":
+            where = input("  Drive letter (Windows) or folder (Linux): ").strip()
+            if where:
+                s["mount_point"] = normalize_mount_point(where)
+                save_settings(s)
+        elif pick == "4":
+            run("status")
+        elif pick == "5":
+            run("autostart", "off" if autostart_enabled() else "on")
+        elif pick == "6":
+            if shown:
+                main(["stop"])
+            if autostart_enabled():
+                main(["autostart", "off"])
+            run("disconnect")
+
+
 def cmd_disconnect(args):
     try:
         os.remove(settings_path())
@@ -759,6 +902,8 @@ def cmd_disconnect(args):
 
 
 def main(argv, verbose=False):
+    if argv[:1] == ["lite"]:                 # how the lite-only program starts itself again in the background
+        argv = argv[1:]
     parser = argparse.ArgumentParser(prog="discorddrive lite", description="Use a DiscordDrive that runs on another computer "
                                      "(the host): its files as a drive here, without a bot, a key or a copy of the drive on this one.")
     sub = parser.add_subparsers(dest="action")
@@ -780,6 +925,9 @@ def main(argv, verbose=False):
     p.add_argument("local")
     p.add_argument("remote", nargs="?", default="/", help="Folder on the host to put it in (default: the top)")
     sub.add_parser("disconnect", help="Forget the host and the sign-in")
+    p = sub.add_parser("autostart", help="Show the drive by itself when this computer starts: on, off or status")
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"])
+    sub.add_parser("menu", help="All of this as a menu")
     args = parser.parse_args(argv)
     args.verbose = verbose
     if not args.action:
@@ -787,7 +935,8 @@ def main(argv, verbose=False):
         return 0
     try:
         return {"connect": cmd_connect, "mount": cmd_mount, "stop": cmd_stop, "status": cmd_status, "ls": cmd_ls,
-                "get": cmd_get, "put": cmd_put, "disconnect": cmd_disconnect}[args.action](args)
+                "get": cmd_get, "put": cmd_put, "disconnect": cmd_disconnect, "autostart": cmd_autostart,
+                "menu": cmd_menu}[args.action](args)
     except HostError as e:
         print(f"[ERROR] {e}")
         return 1

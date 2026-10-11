@@ -23,11 +23,15 @@ jobs:
         shell: pwsh
         run: packaging\build_exe.ps1
       - name: Check it starts
-        run: dist\DiscordDrive.exe --help
+        run: |
+          dist\DiscordDrive.exe --help
+          dist\DiscordDriveLite.exe --help
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/DiscordDrive.exe
+          path: |
+            dist/DiscordDrive.exe
+            dist/DiscordDriveLite.exe
 
   deb:
     runs-on: ubuntu-latest
@@ -44,6 +48,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y ./dist/*.deb
           discorddrive --help
+          discorddrive-lite --help
       - uses: actions/upload-artifact@v4
         with:
           name: deb
@@ -63,4 +68,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "DiscordDrive $GITHUB_REF_NAME" \
-            --notes "Windows: DiscordDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./discorddrive_*.deb"
+            --notes "Windows: DiscordDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./discorddrive_*.deb. Lite (uses a drive that runs on another computer): DiscordDriveLite.exe, or sudo apt install ./discorddrive-lite_*.deb"

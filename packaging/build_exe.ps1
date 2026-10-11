@@ -13,3 +13,11 @@ python -m PyInstaller --noconfirm --clean --onefile --console `
     --collect-submodules discorddrive `
     packaging\entry.py
 Write-Host "Built dist\DiscordDrive.exe"
+
+# The lite-only program: uses a drive that runs on another computer (no dashboard, no bot, no key).
+python -m PyInstaller --noconfirm --clean --onefile --console `
+    --name DiscordDriveLite `
+    --paths . `
+    --icon docs\images\logo-128.png `
+    packaging\lite_entry.py
+Write-Host "Built dist\DiscordDriveLite.exe"

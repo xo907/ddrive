@@ -295,6 +295,10 @@ class DiscordDrive:
             "foreground": foreground,
             "fsname": "DiscordDrive",
         }
+        if sys.platform == "win32":
+            # The files belong to whoever uses the drive. Without this Windows sees them as somebody
+            # else's and lets programs create files but not change one that exists (append, edit in place).
+            fuse_kwargs.update(uid=-1, gid=-1)
         if sys.platform in ("win32", "darwin"):
             fuse_kwargs["volname"] = volname
         else:

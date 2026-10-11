@@ -675,10 +675,14 @@ letter (Windows) or a folder (Linux) and streams, downloads and uploads through 
 run.bat lite connect http://192.168.1.20:8765     sign in to the host (asks for user name and password)
 run.bat lite mount                                the host's drive appears as Z: (or: -m Y:, -b for the background)
 run.bat lite stop                                 take it away again
+run.bat lite autostart on                         show it by itself when this computer starts
 run.bat lite status | ls [folder] | get <file or folder> [to] | put <file or folder> [folder] | disconnect
+run.bat lite menu                                 all of this as a menu (also option 13 of the main menu)
 ```
 
-(`./run.sh lite ...` on Linux.)
+(`./run.sh lite ...` on Linux.) A lite computer doesn't need the whole program: each release also has
+**DiscordDriveLite.exe** for Windows (open it for the menu) and **discorddrive-lite_*.deb** for Debian,
+Ubuntu and Raspberry Pi OS (`discorddrive-lite`), which contain only this.
 
 - **On the host**: the full DiscordDrive, running, with its dashboard reachable from the lite computer
   (Settings → *On your network*, or your https domain) and a dashboard **password** (Settings →
