@@ -1362,6 +1362,22 @@ function tidyRow(title, text, label, body, done, off, sure) {
   return h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, title), h("div", { class: "s" }, text)), h("div", { class: "set-ctl" }, b));
 }
 
+function renderHealthKeep() { keepScroll = true; try { renderHealth(true); } finally { keepScroll = false; } }
+
+// Damaged files that still have an intact older copy (in a snapshot or an earlier version) can be put back from it.
+const healPicked = new Set();
+async function repairFromCopies(paths, all) {
+  const n = paths.length;
+  if (!await ask({ title: `Bring back ${plural(n, "file")} from an intact copy?`, ok: "Bring back",
+                   text: "Each damaged file is replaced by its newest copy that has no missing part, from a snapshot or an earlier version. "
+                     + "That copy can be older than the file was. The damaged file is kept as an earlier version, so this can be undone." })) return;
+  const r = await attempt(() => api("/api/repair", all ? { all: true } : { paths }));
+  if (!r) return;
+  for (const x of r.repaired) healPicked.delete(x.path);
+  toast(`${plural(r.repaired.length, "file")} brought back${r.without.length ? `; ${r.without.length} had no intact copy` : ""}`);
+  await refreshStatus();
+}
+
 function renderHealth(quiet) {
   if (!status) { if (!quiet) page(h("h1", {}, "Health"), h("p", { class: "lede" }, "Connecting to the drive…")); return; }
   const st = status.stats, hl = status.health, sc = hl.scrub || {}, sv = status.saved || {};
@@ -1375,6 +1391,9 @@ function renderHealth(quiet) {
       h("span", { class: "name" }, icon(kind(u.path)), h("span", { class: "label" }, u.path)),
       h("span", { class: "size" }, `${Math.floor((u.done / u.total) * 100)}% of ${size(u.size)}`))));
   const saved = (sv.compressed_saved || 0) + (sv.reused_bytes || 0);
+  const fixable = (hl.lost || []).filter((e) => e.kind === "file" && e.fix);
+  for (const p of [...healPicked]) if (!fixable.some((e) => e.path === p)) healPicked.delete(p);
+  const chosen = fixable.filter((e) => healPicked.has(e.path)).map((e) => e.path);
   page(
     h("h1", {}, "Health"),
     h("p", { class: "lede" }, lede),
@@ -1388,12 +1407,20 @@ function renderHealth(quiet) {
     (hl.lost || []).length ? [
       h("h2", { class: "warn-text" }, "Parts that can't be repaired"),
       h("p", { class: "muted", style: "margin:0 0 12px;max-width:680px" }, "A part of these is gone from Discord (or unreadable) and there were not enough spare pieces to rebuild it. A damaged file can be replaced by an earlier version or a snapshot copy if one is intact, or by putting it on the drive again from another copy."),
+      fixable.length ? h("div", { class: "heal-fix" },
+        h("span", {}, `${plural(fixable.length, "damaged file")} ${fixable.length === 1 ? "has" : "have"} an intact older copy in a snapshot or an earlier version.`),
+        h("button", { class: "btn ghost small", type: "button", disabled: !chosen.length, onclick: () => repairFromCopies(chosen, false) },
+          chosen.length ? `Bring back the ${chosen.length} selected` : "Bring back selected"),
+        h("button", { class: "btn small", type: "button", onclick: () => repairFromCopies(fixable.map((e) => e.path), true) }, `Bring back all ${fixable.length}`)) : null,
       h("div", { class: "list rows-simple" }, hl.lost.map((e) => {
         const what = { file: "This file is damaged", version: `An earlier version (${e.at ? when(e.at) : "older"}) can't be brought back in full`,
                        snapshot: `Its copy in a snapshot (${e.at ? when(e.at) : "older"}) is damaged`, spare: "Still fully readable, with less protection" }[e.kind];
-        return h("a", { class: "row", href: "#/files" + enc(parent(e.path)), style: "grid-template-columns:minmax(0,1fr) auto auto" },
-          h("span", { class: "name" }, icon(e.kind === "spare" ? "info" : kind(e.path) === "pdf" ? "text" : kind(e.path)),
-            h("span", { style: "min-width:0" }, h("span", { class: "label" }, base(e.path)), h("div", { class: "where" }, `${parent(e.path)} · ${what}`))),
+        const fix = e.kind === "file" ? (e.fix ? `An intact copy from ${fmtFull.format(e.fix.at * 1000)} is in ${e.fix.source === "snapshot" ? "a snapshot" : "its earlier versions"}`
+                                               : "No intact older copy: put the file on the drive again from another copy") : "";
+        return h("div", { class: "row", style: "grid-template-columns:22px minmax(0,1fr) auto auto" },
+          e.kind === "file" && e.fix ? checkbox(healPicked.has(e.path), (on) => { if (on) healPicked.add(e.path); else healPicked.delete(e.path); renderHealthKeep(); }, `Select ${base(e.path)}`) : h("span", {}),
+          h("a", { class: "name", href: "#/files" + enc(parent(e.path)) }, icon(e.kind === "spare" ? "info" : kind(e.path) === "pdf" ? "text" : kind(e.path)),
+            h("span", { style: "min-width:0" }, h("span", { class: "label" }, base(e.path)), h("div", { class: "where" }, `${parent(e.path)} · ${what}${fix ? " · " + fix : ""}`))),
           h("span", { class: "size" }, plural(e.pieces, "part")),
           h("span", { class: "date" }, `found ${ago(e.found)}`));
       }))] : null,

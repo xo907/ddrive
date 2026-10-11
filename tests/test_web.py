@@ -74,6 +74,52 @@ class WebTest(helpers.DriveTest):
                          (["cache", "index", "messages", "staging", "thumbs"], True, True))
         self.assertGreater(r["sizes"]["index"], 0)
 
+    def test_damaged_files_come_back_from_an_intact_copy(self):
+        self.login()
+        d = self.d
+        post = lambda body: json.loads(self.req("POST", "/api/repair", body)[2])
+        lost = lambda: {(e["kind"], e["path"]): e for e in json.loads(self.req("GET", "/api/status")[2])["health"]["lost"]}
+        d.cfg.parity_enabled, d.cfg.dedup = False, False
+        for name in ("a", "b", "c"):
+            self.write(d, f"/Docs/{name}.txt", f"{name} as it was in the snapshot".encode() * 300)
+        self.upload(d)
+        self.assertEqual(self.req("POST", "/api/snapshots/create", {"label": "before"})[0], 200)
+        self.write(d, "/Docs/a.txt", b"a, changed after the snapshot" * 300)                # its older copy: an earlier version too
+        self.write(d, "/Docs/new.txt", b"made after the snapshot, never changed" * 300)     # no older copy anywhere
+        self.upload(d)
+        mids = lambda path: [c["message_id"] for c in d.index.get_chunks(d.index.resolve(path)["id"])]
+        for path in ("/Docs/a.txt", "/Docs/b.txt", "/Docs/new.txt"):
+            mid = mids(path)[0]
+            d.backend.delete(mid)                                                             # Discord loses a part
+            self.assertIsNone(d.healer.recover(mid))
+        d.healer._lost_list = (0.0, [])
+        found = lost()
+        self.assertEqual((found[("file", "/Docs/a.txt")]["fix"]["source"], found[("file", "/Docs/new.txt")]["fix"]), ("version", None))
+        self.assertIsNone(found[("file", "/Docs/b.txt")]["fix"])       # unchanged since the snapshot: that copy has the same lost part
+        self.assertNotIn(("file", "/Docs/c.txt"), found)
+
+        r = post({"paths": ["/Docs/a.txt", "/Docs/new.txt", "/Docs/c.txt"]})                 # c is not damaged: left alone
+        self.assertEqual(([x["path"] for x in r["repaired"]], r["without"]), (["/Docs/a.txt"], ["/Docs/new.txt"]))
+        self.assertEqual(self.read(d, "/Docs/a.txt"), b"a as it was in the snapshot" * 300)
+        self.assertNotIn(("file", "/Docs/a.txt"), lost())                                     # it is whole again
+        self.assertEqual(self.read(d, "/Docs/c.txt"), b"c as it was in the snapshot" * 300)
+        versions = json.loads(self.req("GET", "/api/versions?path=%2FDocs%2Fa.txt")[2])["versions"]
+        self.assertGreaterEqual(len(versions), 2)                      # the damaged one is kept, so this can be undone
+
+        # a file changed after a snapshot and then damaged comes back from the snapshot when it has no version left
+        self.write(d, "/Docs/c.txt", b"c, changed" * 300)
+        self.upload(d)
+        d.index.gc_versions(0.0000001, 0)                              # its earlier versions have expired
+        mid = mids("/Docs/c.txt")[0]
+        d.backend.delete(mid)
+        self.assertIsNone(d.healer.recover(mid))
+        d.healer._lost_list = (0.0, [])
+        self.assertEqual(lost()[("file", "/Docs/c.txt")]["fix"]["source"], "snapshot")
+        r = post({"all": True})
+        self.assertEqual(([(x["path"], x["source"]) for x in r["repaired"]], sorted(r["without"])),
+                         ([("/Docs/c.txt", "snapshot")], ["/Docs/b.txt", "/Docs/new.txt"]))
+        self.assertEqual(self.read(d, "/Docs/c.txt"), b"c as it was in the snapshot" * 300)
+
     def test_tidying_up(self):
         self.login()
         post = lambda what: json.loads(self.req("POST", "/api/resources/clean", {"what": what})[2])

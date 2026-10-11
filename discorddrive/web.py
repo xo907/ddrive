@@ -30,7 +30,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
-from .actions import default_restore_folder, snapshot_restore_ops, undelete_ops, version_put_op
+from .actions import default_restore_folder, intact_copy, repair_op, snapshot_restore_ops, undelete_ops, version_put_op
 from .config import Config, config_path, launcher as _launcher
 from .crypto import check_password, hash_password
 from .index import ROOT_ID, new_uid
@@ -742,7 +742,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "parity": bool(d.cfg.parity_enabled),
                 "group": d.cfg.parity_group, "pieces": d.cfg.parity_pieces,
                 "scrub": scrub, "healer": dict(d.healer.stats) if d.healer else {},
-                "lost": [e for e in (d.healer.lost_files(max_age=20) if d.healer else []) if self._shown(e["path"])][:500],
+                "lost": self._lost(),
                 "leader": d.maintenance.leader() if d.maintenance else False,
             },
             "devices": devices,
@@ -753,6 +753,42 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "fetches": self._fetch_list(),
             "resources": resources.snapshot(d),
         })
+
+    def _lost(self):
+        """Parts that can't be repaired; a damaged file also says whether an intact older copy exists ("fix")."""
+        d = self.drive
+        entries = [e for e in (d.healer.lost_files(max_age=20) if d.healer else []) if self._shown(e["path"])][:500]
+        lost = None
+        for e in entries:
+            if e["kind"] == "file" and "fix" not in e:      # worked out once per list (the list is kept for a while)
+                lost = d.healer._lost() if lost is None else lost
+                copy = intact_copy(d.index, lost, e["path"])
+                e["fix"] = {"source": copy["source"], "at": copy["at"], "size": copy["size"]} if copy else None
+        return entries
+
+    def _post_api_repair(self):
+        """Put the newest intact copy (from a snapshot or an earlier version) in the place of damaged files:
+        the ones in `paths`, or with `all` every damaged file that has such a copy."""
+        body = self._body_json()
+        d = self.drive
+        lost = d.healer._lost() if d.healer else {}
+        damaged = [e["path"] for e in (d.healer.lost_files() if d.healer else []) if e["kind"] == "file" and self._shown(e["path"])]
+        want = damaged if body.get("all") else [p for p in map(str, body.get("paths") or []) if p in damaged]
+        ops, done, without = [], [], []
+        for path in want:
+            copy = intact_copy(d.index, lost, path)
+            if copy is None:
+                without.append(path)
+                continue
+            ops.append(repair_op(d.index, path, copy))
+            done.append({"path": path, "source": copy["source"], "at": copy["at"]})
+            log.info("Web dashboard: %s is replaced by its intact copy from %s (a %s)", path,
+                     time.strftime("%Y-%m-%d %H:%M", time.localtime(copy["at"])), "snapshot" if copy["source"] == "snapshot" else "earlier version")
+        if ops:
+            self._publish(ops)
+            d.journal.sync_once()                    # apply it here right away, so the list is up to date
+            d.healer._lost_list = (0.0, [])
+        self._json({"ok": True, "repaired": done, "without": without})
 
     def _post_api_resources_clean(self):
         """The buttons on the Resources page."""

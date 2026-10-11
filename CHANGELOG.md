@@ -3,6 +3,14 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.4.5 (2026-10-11)
+
+- Health, "Parts that can't be repaired": damaged files that still have an intact older copy, in a
+  snapshot or an earlier version, say so (with the copy's date) and can be brought back from it:
+  tick the ones you want and "Bring back selected", or "Bring back all". The newest copy without a
+  missing part is used; it can be older than the file was. The damaged file is kept as an earlier
+  version, so it can be undone. Files with no intact copy say that instead.
+
 ## 1.4.4 (2026-10-11)
 
 - Resources has a "Tidy up" section with buttons: clear the read cache (files kept offline stay),

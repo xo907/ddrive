@@ -1191,3 +1191,8 @@ main::-webkit-scrollbar-thumb { background: var(--line); }
 .ch-fold.show { flex: none; align-self: center; margin: 0 4px 12px -6px; padding: 0 4px 0 8px; border: 1px solid var(--line); }
 .ch-fold.show svg { transform: rotate(180deg); }
 .ch-fold[hidden] { display: none; }
+
+/* Health: bringing damaged files back from an intact copy */
+.heal-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line);
+            border-radius: var(--radius); background: var(--panel); font-size: 13px; }
+.heal-fix span { flex: 1; min-width: 200px; }

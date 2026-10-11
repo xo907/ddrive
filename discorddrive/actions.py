@@ -78,5 +78,40 @@ def snapshot_restore_ops(idx, snap_id, prefix="/", target=None, in_place=False):
     return ops, files
 
 
+def intact_copy(idx, lost, path):
+    """The newest copy of the file at `path` that has none of the pieces in `lost` (ids of pieces that are
+    gone for good): from a snapshot or from its earlier versions. None when there is no such copy.
+    {"source": "snapshot" | "version", "at", "size", "mtime", "chunks": [[piece id, size, sha256]]}"""
+    node = idx.resolve(path)
+    if node is None or node["is_dir"]:
+        return None
+    best = None
+    for s in idx.snapshots():
+        if best is not None and s["at"] <= best["at"]:
+            break                                    # newest first: nothing later in the list beats what we have
+        for e in idx._all("SELECT id, size, mtime FROM snapshot_entries WHERE snap_id=? AND is_dir=0 AND path=? COLLATE NOCASE",
+                          (s["id"], path)):
+            chunks = [[r["message_id"], r["size"], r["sha256"]] for r in idx._all(
+                "SELECT message_id, size, sha256 FROM snapshot_chunks WHERE entry_id=? ORDER BY idx", (e["id"],))]
+            if not any(c[0] in lost for c in chunks):
+                best = {"source": "snapshot", "at": s["at"], "size": e["size"], "mtime": e["mtime"], "chunks": chunks}
+    for v in idx.versions_for(node["uid"]):          # newest first
+        if best is not None and v["superseded"] <= best["at"]:
+            break
+        chunks = [[c["message_id"], c["size"], c["sha256"]] for c in idx.version_chunks(v["id"])]
+        if not any(c[0] in lost for c in chunks):
+            best = {"source": "version", "at": v["superseded"], "size": v["size"], "mtime": v["mtime"], "chunks": chunks}
+            break
+    return best
+
+
+def repair_op(idx, path, copy):
+    """The operation that puts an intact copy (see intact_copy) in the place of the damaged file. What is
+    there now is kept as an earlier version, so this can be undone."""
+    node = idx.resolve(path)
+    return {"t": "put", "u": node["uid"], "p": idx.get(node["parent"])["uid"], "n": node["name"], "s": copy["size"],
+            "m": copy["mtime"] or time.time(), "c": copy["chunks"], "r": 1}
+
+
 def default_restore_folder(snap):
     return "/Restored " + time.strftime("%Y-%m-%d %H.%M", time.localtime(snap["at"]))
