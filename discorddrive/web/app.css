@@ -1166,3 +1166,21 @@ a.ch-file:hover { background: var(--hover); }
   .nav-head, #nav-toggle { display: none; }
   .nav-group { display: contents; }
 }
+
+/* Scroll bars: thin and quiet, showing a little more when the pointer is over what scrolls */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+*:hover { scrollbar-color: var(--line) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { border-radius: 4px; background: transparent; }
+*:hover::-webkit-scrollbar-thumb { background: var(--line); }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+::-webkit-scrollbar-button { display: none; }
+main { scrollbar-color: var(--line) transparent; }
+main::-webkit-scrollbar-thumb { background: var(--line); }
+.side a, .nav-group { flex: none; }
+
+/* Live logger with its options hidden: the messages take the whole width */
+.ch-cols.solo { grid-template-columns: minmax(0, 1fr); }
+.ch-cols.solo .ch-side { display: none; }
+#ch-actions { align-items: center; }

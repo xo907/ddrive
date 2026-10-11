@@ -3518,7 +3518,20 @@ function drawLive(body) {
     const waiting = chat.totals ? chat.totals.waiting : 0;
     captured.textContent = `${plural(lg.captured, "message")} recorded since the drive started${waiting ? ` · ${waiting.toLocaleString()} waiting to be written to the drive` : ""}`;
   }
-  if (act) act.replaceChildren(pill, toggle);
+  const optionsShown = () => { try { return localStorage.getItem("dd-live-options") !== "hidden"; } catch { return true; } };
+  const options = h("button", { class: "icon-btn", type: "button", onclick: () => {
+    try { localStorage.setItem("dd-live-options", optionsShown() ? "hidden" : "shown"); } catch { /* private mode */ }
+    fold();
+  } }, icon("settings"));
+  function fold() {
+    const on = optionsShown();
+    options.title = on ? "Hide the options: more room for the messages" : "Show what is recorded";
+    options.setAttribute("aria-label", options.title);
+    options.setAttribute("aria-expanded", String(on));
+    const cols = body.querySelector(".ch-cols");
+    if (cols) cols.classList.toggle("solo", !on);
+  }
+  if (act) act.replaceChildren(pill, toggle, options);
   const opt = (label, hint, key) => h("div", { class: "ch-opt" }, h("div", { class: "t" }, label, hint && h("div", { class: "s" }, hint)),
     switchEl(rules[key], (on) => save({ [key]: on }), label));
   const words = h("input", { class: "ch-input", value: rules.keywords.join(", "), placeholder: "e.g. my name, project x", spellcheck: "false",
@@ -3540,7 +3553,7 @@ function drawLive(body) {
   }
   body.replaceChildren(problem,
     h("div", { class: "ch-cols" },
-      h("div", {},
+      h("div", { class: "ch-side" },
         h("div", { class: "ch-card" }, h("h3", {}, "What to record"),
           segmented([["all", "Everything I can see"], ["custom", "Only what I pick"]], rules.scope, async (scope) => { await save({ scope }); drawLive(body); }),
           h("div", { class: "ch-opts" },
@@ -3553,6 +3566,7 @@ function drawLive(body) {
       h("div", {},
         h("div", { class: "ch-feed-top" }, h("h3", {}, "Live feed"), captured),
         chipRow(MSG_KINDS.slice(0, 4), chatView.live, (k) => { chatView.live = k; feed(); }), list, none)));
+  fold();
   state();
   feed();
   chatTimer = setInterval(async () => {

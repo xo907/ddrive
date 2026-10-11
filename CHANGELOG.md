@@ -3,6 +3,14 @@
 Every change to DiscordDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 1.3.4 (2026-10-10)
+
+- Scroll bars are thin and blend in (in the menu, the lists and the pages); the ones inside a panel
+  only show while the pointer is over it. The menu's first entries are no longer squeezed together
+  when the menu is taller than the window.
+- Live logger: the gear button at the top hides "What to record" and the picker, so the messages take
+  the whole width. Remembered per browser.
+
 ## 1.3.3 (2026-10-10)
 
 - Messages: attachments are shown and opened from Discord itself while they are still there. Previews
