@@ -40,6 +40,7 @@ from .crypto import hash_password
 from .index import ROOT_ID, new_uid
 from . import legal, passkeys, resources, words
 from .shares import Shares
+from .syncdevices import Gone, LiteDevices, Offline
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
 from .logbuf import QUIET
@@ -55,18 +56,21 @@ MAX_FAILURES = 5          # wrong phrases (or passwords of a lock) from one addr
 LOCKOUT = 60.0            # seconds, doubled for every further wrong one (up to an hour)
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
 _BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
-                      "/api/chat")
+                      "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report")
 _MEDIA_EXT = ("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "mp4", "m4v", "webm", "mov", "mkv", "avi")
 NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave ("Save" uploads right away)
 
 # What somebody signed in to an account (not the owner) may ask for: their own files and tools.
 # Anything not listed here answers 403 for them, so a new route is the owner's until it is added.
 ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
-    contacts contacts/export locks starred recent history home insights bookmarks changelog""".split())
+    contacts contacts/export locks starred recent history home insights bookmarks changelog
+    sync sync/tree sync/browse""".split())
 ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
-    bookmarks/save bookmarks/refresh bookmarks/delete""".split())
+    bookmarks/save bookmarks/refresh bookmarks/delete
+    sync/save sync/remove sync/pause sync/run sync/stop
+    lite/sync/hello lite/sync/poll lite/sync/report lite/sync/answer lite/sync/bye""".split())
 
 
 def account_may(method, route):
@@ -144,6 +148,7 @@ class WebServer:
         self.challenges = passkeys.Challenges()
         self._book = (None, [])           # (mtime, size) of the address book file, its contacts
         self.accounts = Accounts(drive)   # other people's accounts, each with a drive of its own
+        self.lite = LiteDevices()         # computers running DDrive Lite that sync folders with this drive
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -168,6 +173,7 @@ class WebServer:
             log.debug("thumbnail clean-up: %s", e)
 
     def stop(self):
+        self.lite.close()
         try:
             self.httpd.shutdown()
             self.httpd.server_close()
@@ -1210,6 +1216,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._node(parent, want_dir=True)
         fs = self.drive.fs
         remaining = int(self.headers.get("Content-Length") or 0)
+        # mtime: the time the file has where it comes from (a folder sync on another computer, which
+        # tells its copies apart by size and time)
+        try:
+            mtime = float(self._query()["mtime"]) if self._query().get("mtime") else None
+        except ValueError:
+            raise ApiError(400, "bad mtime") from None
+        new = self.drive.index.resolve(path) is None
         fh = fs.create(path, 0o644)
         offset = 0
         try:
@@ -1220,9 +1233,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 fs.write(path, data, offset, fh)
                 offset += len(data)
                 remaining -= len(data)
+            if mtime is not None and not remaining:
+                _, _, on = fs._handle(fh)
+                with on.lock:
+                    on.mtime = mtime
         finally:
             fs.release(path, fh)
         if remaining:
+            if mtime is not None and new:        # half a copy is not left behind looking like the file
+                try:
+                    fs.unlink(path)
+                except OSError:
+                    pass
             raise ApiError(400, "upload was cut off")
         save = self._query().get("save")
         node = self.drive.index.resolve(path)
@@ -1759,22 +1781,44 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         sync.save_jobs(jobs, self.drive)
         m.reload(jobs)
 
+    def _lite(self, fn, *args, **kw):
+        """Ask something about the DDrive Lite computers of whoever is signed in (syncdevices.py)."""
+        from . import sync
+        try:
+            return fn(self._who() or "", *args, **kw)
+        except Gone:
+            raise ApiError(404, "That computer no longer syncs folders with this drive. Turn folder syncing on "
+                                "again in DDrive Lite there.") from None
+        except Offline as e:
+            raise ApiError(409, str(e)) from None
+        except sync.SyncError as e:
+            raise ApiError(400, str(e)) from None
+
     def _get_api_sync(self):
         from . import sync
-        m = self._sync_mgr()
-        cfg = self.drive.cfg
-        self._json({"jobs": m.snapshot(), "running": m.running, "can_edit": self._sync_can_edit(),
-                    "local": self._local_request(), "remote_edit": bool(cfg.sync_remote_edit),
-                    "host": socket.gethostname(), "mount": cfg.mount_point, "windows": os.name == "nt",
-                    "home": os.path.expanduser("~") if self._sync_can_edit() else "",
-                    "modes": [{"id": k, "label": v[0], "direction": v[1], "text": v[2]} for k, v in sync.MODES.items()],
-                    "triggers": [{"id": k, "label": v} for k, v in sync.TRIGGERS.items()],
-                    "default_exclude": sync.DEFAULT_EXCLUDE})
+        out = {"jobs": [], "running": None, "can_edit": False, "local": False, "remote_edit": False, "host": "",
+               "mount": "", "windows": os.name == "nt", "home": "", "account": self._acct is not None,
+               "devices": self._lite(self.server.app.lite.listing),
+               "modes": [{"id": k, "label": v[0], "direction": v[1], "text": v[2]} for k, v in sync.MODES.items()],
+               "triggers": [{"id": k, "label": v} for k, v in sync.TRIGGERS.items()],
+               "default_exclude": sync.DEFAULT_EXCLUDE}
+        if self._acct is None:                   # the folders of this computer itself: the owner's
+            m = self._sync_mgr()
+            cfg = self.drive.cfg
+            out.update(jobs=m.snapshot(), running=m.running, can_edit=self._sync_can_edit(), local=self._local_request(),
+                       remote_edit=bool(cfg.sync_remote_edit), host=socket.gethostname(), mount=cfg.mount_point,
+                       home=os.path.expanduser("~") if self._sync_can_edit() else "")
+        self._json(out)
 
+    # With `device`, each of these is about a pair of that DDrive Lite computer instead of this one.
     def _post_api_sync_save(self):
         from . import sync
+        body = self._body_json()
+        new = body.get("job") or {}
+        if body.get("device"):
+            return self._json({"ok": True, "job": self._lite(self.server.app.lite.save, body["device"], new)})
         m = self._sync_mgr(edit=True)
-        body = self._body_json().get("job") or {}
+        body = new
         jobs = [dict(j) for j in m.jobs]
         old = self._sync_job(m, body["id"]) if body.get("id") else None
         try:
@@ -1791,15 +1835,22 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"ok": True, "job": job})
 
     def _post_api_sync_remove(self):
+        body = self._body_json()
+        if body.get("device"):
+            self._lite(self.server.app.lite.remove, body["device"], body.get("id"))
+            return self._json({"ok": True})
         m = self._sync_mgr(edit=True)
-        job = self._sync_job(m, self._body_json().get("id"))
+        job = self._sync_job(m, body.get("id"))
         m.cancel(job["id"])
         self._sync_store(m, [j for j in m.jobs if j["id"] != job["id"]])
         self._json({"ok": True})
 
     def _post_api_sync_pause(self):
-        m = self._sync_mgr()
         body = self._body_json()
+        if body.get("device"):
+            self._lite(self.server.app.lite.pause, body["device"], body.get("id"), bool(body.get("paused")))
+            return self._json({"ok": True})
+        m = self._sync_mgr()
         job = self._sync_job(m, body.get("id"))
         on = not bool(body.get("paused"))
         if not on:
@@ -1808,16 +1859,73 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"ok": True})
 
     def _post_api_sync_run(self):
-        m = self._sync_mgr()
         body = self._body_json()
+        if body.get("device"):
+            queued = self._lite(self.server.app.lite.run, body["device"], body.get("id"), bool(body.get("again")))
+            return self._json({"ok": True, "queued": queued})
+        m = self._sync_mgr()
         job = self._sync_job(m, body.get("id"))
         m.run_now(job["id"], again=bool(body.get("again")))
         self._json({"ok": True, "queued": m.running not in (None, job["id"])})
 
     def _post_api_sync_stop(self):
+        body = self._body_json()
+        if body.get("device"):
+            self._lite(self.server.app.lite.stop, body["device"], body.get("id"))
+            return self._json({"ok": True})
         m = self._sync_mgr()
-        m.cancel(self._sync_job(m, self._body_json().get("id"))["id"])
+        m.cancel(self._sync_job(m, body.get("id"))["id"])
         self._json({"ok": True})
+
+    # ---------- what a DDrive Lite computer with folder syncing on asks (litesync.py)
+    def _post_api_lite_sync_hello(self):
+        body = self._body_json()
+        self._json(dict(self._lite(self.server.app.lite.hello, body.get("device"), body), ok=True, version=__version__))
+
+    def _post_api_lite_sync_poll(self):
+        body = self._body_json()
+        try:
+            wait = float(body.get("wait") or 0)
+        except (TypeError, ValueError):
+            wait = 0.0
+        self._json(self._lite(self.server.app.lite.poll, body.get("device"), body.get("rev"), wait))
+
+    def _post_api_lite_sync_report(self):
+        body = self._body_json()
+        self._lite(self.server.app.lite.report, body.get("device"), body.get("status"), body.get("running"))
+        self._json({"ok": True})
+
+    def _post_api_lite_sync_answer(self):
+        body = self._body_json()
+        self._lite(self.server.app.lite.answer, body.get("device"), body.get("req"), body.get("result"))
+        self._json({"ok": True})
+
+    def _post_api_lite_sync_bye(self):
+        self._lite(self.server.app.lite.bye, self._body_json().get("device"))
+        self._json({"ok": True})
+
+    def _get_api_sync_tree(self):
+        """Everything under a folder of the drive in one answer: what a folder sync on another computer
+        compares its own folder with. files: [path inside the folder, size, time, state]."""
+        path = "/" + (self._query().get("path") or "").strip("/")
+        idx, fs = self.drive.index, self.drive.fs
+        root = idx.resolve(path)
+        if root is None or fs._hidden(path):
+            return self._json({"exists": False, "dir": False, "files": [], "dirs": []})
+        files, dirs = [], []
+        todo = [(root, "")] if root["is_dir"] else []
+        while todo:
+            node, rel_dir = todo.pop()
+            for c in idx.children(node["id"]):
+                rel = f"{rel_dir}/{c['name']}" if rel_dir else c["name"]
+                if fs._hidden(posixpath.join(path, rel)):
+                    continue
+                if c["is_dir"]:
+                    dirs.append(rel)
+                    todo.append((c, rel))
+                else:
+                    files.append([rel, c["size"], c["mtime"], c["state"]])
+        self._json({"exists": True, "dir": bool(root["is_dir"]), "files": files, "dirs": dirs})
 
     def _post_api_sync_remote_edit(self):
         if not self._local_request():
@@ -1831,42 +1939,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"ok": True})
 
     def _get_api_sync_browse(self):
-        """Folders on this computer, for choosing one to sync."""
-        from .sync import _is_link
+        """Folders on this computer (or, with `device`, on a DDrive Lite one), for choosing one to sync."""
+        from . import sync
+        q = self._query()
+        if q.get("device"):
+            return self._json(self._lite(self.server.app.lite.browse, q["device"], q.get("path") or ""))
         self._sync_mgr(edit=True)
-        path = (self._query().get("path") or "").strip()
-        mount = (self.drive.cfg.mount_point or "")[:2].upper()
-        roots = []
-        if os.name == "nt":
-            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                if f"{c}:" != mount and os.path.isdir(f"{c}:\\"):
-                    roots.append({"name": f"{c}:", "path": f"{c}:\\"})
-        else:
-            roots = [{"name": "Home", "path": os.path.expanduser("~")}, {"name": "/", "path": "/"}]
-            for media in ("/media", "/mnt"):
-                if os.path.isdir(media):
-                    roots.append({"name": media, "path": media})
-        if not path:
-            return self._json({"path": "", "parent": None, "dirs": roots, "roots": roots})
-        path = os.path.abspath(os.path.expanduser(path))
-        if not os.path.isdir(path):
-            raise ApiError(404, f"Folder not found: {path}")
-        dirs = []
         try:
-            with os.scandir(path) as it:
-                for e in it:
-                    try:
-                        if e.is_dir() and not e.name.startswith((".", "$")) and not _is_link(e):
-                            dirs.append({"name": e.name, "path": e.path})
-                    except OSError:
-                        continue
-        except OSError as e:
-            raise ApiError(403, f"Can't open {path}: {e.strerror or e}") from None
-        dirs.sort(key=lambda d: d["name"].lower())
-        up = os.path.dirname(path.rstrip("\\/")) if path.rstrip("\\/") else None
-        if os.name == "nt" and len(path.rstrip("\\")) == 2:
-            up = ""                                                     # a disk: back to the list of disks
-        self._json({"path": path, "parent": up if up != path else None, "dirs": dirs[:2000], "roots": roots})
+            self._json(sync.browse(q.get("path"), self.drive.cfg.mount_point))
+        except FileNotFoundError as e:
+            raise ApiError(404, str(e)) from None
+        except PermissionError as e:
+            raise ApiError(403, str(e)) from None
 
     # ------------------------------------------------------------ settings
     # name -> (type, needs a restart, check)

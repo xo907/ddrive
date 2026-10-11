@@ -9,7 +9,7 @@ let route = { name: "", args: [] };
 // Somebody signed in to an account (not the owner) has files and tools of their own, and none of the
 // pages that manage the drive or the computer. The drive refuses those requests anyway; this hides them.
 const isAccount = () => !!status && status.role === "account";
-const OWNER_PAGES = ["sync", "log", "health", "resources", "check"];
+const OWNER_PAGES = ["log", "health", "resources", "check"];
 
 // ------------------------------------------------------------------ helpers
 function h(tag, attrs, ...children) {
@@ -2570,6 +2570,8 @@ function lightbox(g, start) {
 // ------------------------------------------------------------------ sync folders
 // Folders on the computer running the drive, kept in step with folders on the drive. The jobs and
 // the copying live in the drive process (sync.py); this page shows them and changes them.
+// Computers that run DDrive Lite with folder syncing turned on are listed below it, each with its
+// own folders (`dev` in the functions here): those do their copying themselves, told from this page.
 let syncTimer = null;
 let syncData = null;
 const ARROW = { up: "→", down: "←", both: "⇄" };
@@ -2588,9 +2590,9 @@ function syncSummary(r, j) {
                       : `Everything was already in step (${plural(r.files || 0, "file")})`;
 }
 
-function syncNext(j) {
+function syncNext(j, dev) {
   const s = j.status;
-  if (!j.enabled) return "";
+  if (!j.enabled || (dev && !dev.online)) return "";
   if (j.trigger === "manual") return "Runs when you start it";
   if (j.trigger === "live") return s.watching ? "Watching for changes" : "Checking every few seconds";
   if (!s.next) return "";
@@ -2598,29 +2600,31 @@ function syncNext(j) {
   return sec <= 30 ? "Next run in a moment" : `Next run ${sec < 3600 ? "in " + Math.round(sec / 60) + " min" : when(s.next)}`;
 }
 
-function syncCard(j) {
+function syncCard(j, dev) {
   const s = j.status, p = s.progress, last = s.last || {};
   const running = s.state === "running";
-  const state = !j.enabled ? ["Paused", ""] : running ? ["Syncing", "busy"] : s.state === "error" ? ["Problem", "warn"]
-              : s.last_run ? ["Up to date", "ok"] : ["Waiting", ""];
+  const canEdit = dev ? true : syncData.can_edit;
+  const act = (what, ok, extra = {}) => syncAction(what, j, ok, dev ? { ...extra, device: dev.id } : extra);
+  const state = !j.enabled ? ["Paused", ""] : dev && !dev.online ? ["Not connected", ""] : running ? ["Syncing", "busy"]
+              : s.state === "error" ? ["Problem", "warn"] : s.last_run ? ["Up to date", "ok"] : ["Waiting", ""];
   const menu = () => [
-    running ? { label: "Stop", icon: "close", run: () => syncAction("stop", j, "Stopping") }
-            : { label: "Sync now", icon: "refresh", run: () => syncAction("run", j, "Syncing") },
+    running ? { label: "Stop", icon: "close", run: () => act("stop", "Stopping") }
+            : { label: "Sync now", icon: "refresh", run: () => act("run", "Syncing") },
     j.mode === "backup" && !running && { label: "Copy everything again", icon: "upload", run: async () => {
       if (await ask({ title: "Copy everything again?", ok: "Copy again",
                       text: "The backup normally copies each file once, so copies you moved, renamed or deleted on the drive are not put back. This copies every file that is not in the drive folder again." }))
-        syncAction("run", j, "Syncing", { again: true });
+        act("run", "Syncing", { again: true });
     } },
     { label: j.enabled ? "Pause" : "Resume", icon: j.enabled ? "minus" : "restore",
-      run: () => syncAction("pause", j, j.enabled ? "Paused" : "Resumed", { paused: j.enabled }) },
+      run: () => act("pause", j.enabled ? "Paused" : "Resumed", { paused: j.enabled }) },
     { label: "Open the drive folder", icon: "enter", run: () => go("#/files" + enc(j.remote)) },
-    syncData.can_edit && { label: "Change…", icon: "settings", run: () => syncForm(j) },
+    canEdit && { label: "Change…", icon: "settings", run: () => syncForm(j, dev) },
     (s.history || []).length && { label: "Recent runs", icon: "history", run: () => syncHistory(j) },
-    syncData.can_edit && "-",
-    syncData.can_edit && { label: "Stop syncing this folder", icon: "trash", danger: true, run: async () => {
+    canEdit && "-",
+    canEdit && { label: "Stop syncing this folder", icon: "trash", danger: true, run: async () => {
       if (await ask({ title: `Stop syncing “${j.name}”?`, ok: "Stop syncing", danger: true,
-                      text: "Nothing is deleted: the files stay on this computer and on the drive." })
-          && await attempt(() => api("/api/sync/remove", { id: j.id }), "No longer synced")) renderSync();
+                      text: `Nothing is deleted: the files stay on ${dev ? dev.name : "this computer"} and on the drive.` })
+          && await attempt(() => api("/api/sync/remove", { id: j.id, device: dev ? dev.id : undefined }), "No longer synced")) renderSync();
     } },
   ];
   let line;
@@ -2647,13 +2651,13 @@ function syncCard(j) {
         h("div", { class: "t" }, h("span", { class: "label" }, j.name), h("span", { class: "tag" }, j.label), h("span", { class: "tag" }, j.when)),
         h("div", { class: "sync-paths" },
           h("code", { title: j.local }, j.local), h("span", { class: "a" }, ARROW[j.direction]),
-          h("a", { href: "#/files" + enc(j.remote), title: "Open on the drive" }, h("code", {}, drivePathShown(j.remote))))),
+          h("a", { href: "#/files" + enc(j.remote), title: "Open on the drive" }, h("code", {}, dev ? j.remote : drivePathShown(j.remote))))),
       h("span", { class: "sync-state" }, h("span", { class: "dot " + state[1] }), state[0]),
-      running ? h("button", { class: "btn ghost small", onclick: () => syncAction("stop", j, "Stopping") }, "Stop")
-              : h("button", { class: "btn ghost small", onclick: () => syncAction("run", j, "Syncing") }, "Sync now"),
+      running ? h("button", { class: "btn ghost small", onclick: () => act("stop", "Stopping") }, "Stop")
+              : h("button", { class: "btn ghost small", disabled: !!(dev && !dev.online), onclick: () => act("run", "Syncing") }, "Sync now"),
       menuButton(menu, j.name, j.label)),
     line,
-    h("div", { class: "sync-foot" }, syncNext(j)),
+    h("div", { class: "sync-foot" }, syncNext(j, dev)),
     (s.problems || []).length ? h("details", { class: "sync-problems" },
       h("summary", {}, plural(s.problems.length, "note")), h("ul", {}, s.problems.map((t) => h("li", {}, t)))) : null);
   bindMenu(card, menu, j.name, j.label, (e) => !!e.target.closest("button, a, summary"));
@@ -2680,18 +2684,38 @@ async function renderSync(quiet) {
   if (data) syncData = data;
   if (!syncData) { page(h("h1", {}, "Sync"), h("p", { class: "lede" }, "Connecting to the drive…")); return; }
   const d = syncData;
+  const devices = d.devices || [];
+  // A computer that runs DDrive Lite and has folder syncing turned on: its folders are chosen here.
+  const liteSection = (dev) => [
+    h("div", { class: "bar sync-dev" },
+      h("h2", {}, dev.name, h("span", { class: "sync-state" }, h("span", { class: "dot " + (dev.online ? "ok" : "") }),
+        dev.online ? "Connected · DDrive Lite" : `Not connected · last heard from ${ago(dev.seen)}`)),
+      h("div", { class: "actions" }, h("button", { class: "btn ghost", onclick: () => syncForm(null, dev) }, icon("plus"), "Add a folder"))),
+    dev.jobs.length ? h("div", { class: "sync-list" }, dev.jobs.map((j) => syncCard(j, dev)))
+      : h("div", { class: "empty small" }, h("b", {}, `No folders of ${dev.name} synced yet`),
+          `Add one, e.g. its Documents folder: ${dev.name} then copies it to the drive by itself.`),
+  ];
+  const liteHint = h("p", { class: "muted sync-hint" }, devices.length ? "More computers: " : "Other computers: ",
+    "one that uses this drive through DDrive Lite shows up here once folder syncing is turned on there (",
+    h("code", {}, "lite sync on"), ", or in its menu). Its folders are then added and changed on this page.");
   if (!(quiet && (ctxEl || document.querySelector("dialog.modal[open]")))) {
     keepScroll = !!quiet;
     try {
-      page(h("div", { class: "bar" }, h("h1", { style: "margin:0" }, "Sync"),
+      if (d.account) {                           // an account has no computer here, only its own lite ones
+        page(h("div", { class: "bar" }, h("h1", { style: "margin:0" }, "Sync")),
+             h("p", { class: "lede" }, "Folders on your computers kept in step with folders in your storage: backups, mirrors and two-way sync. "
+               + "The computers do the copying themselves, through DDrive Lite."),
+             devices.flatMap(liteSection), liteHint);
+      } else page(h("div", { class: "bar" }, h("h1", { style: "margin:0" }, "Sync"),
              d.can_edit && h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => syncForm(null) }, icon("plus"), "Add a folder"))),
            h("p", { class: "lede" }, `Folders on ${d.host} kept in step with folders on the drive: backups, mirrors and two-way sync. `
              + "Copies keep each file's date, so nothing is copied twice, and files still being written wait until they are finished."),
            !d.can_edit && h("div", { class: "notice" }, `Adding or changing folders works on ${d.host} itself (or with `, h("code", {}, "sync add"),
              " in its terminal), because it reads and writes files outside the drive. Syncing now and pausing work from here."),
-           d.jobs.length ? h("div", { class: "sync-list" }, d.jobs.map(syncCard))
-             : h("div", { class: "empty" }, h("b", {}, "No folders synced yet"),
+           d.jobs.length ? h("div", { class: "sync-list" }, d.jobs.map((j) => syncCard(j)))
+             : h("div", { class: "empty" + (devices.length ? " small" : "") }, h("b", {}, "No folders synced yet"),
                  d.can_edit ? "Add one, e.g. your Downloads folder, and it is backed up to the drive by itself." : "Add one on the computer running the drive."),
+           devices.flatMap(liteSection), liteHint,
            d.local && h("div", { class: "settings", style: "margin-top:40px" }, h("div", { class: "set-row" },
              h("div", { class: "set-text" }, h("div", { class: "t" }, "Let other devices choose folders here"),
                h("div", { class: "s" }, `Off: only ${d.host} itself can add or change synced folders. On: anyone signed in to this dashboard from elsewhere can make it copy any folder of this computer.`)),
@@ -2700,21 +2724,21 @@ async function renderSync(quiet) {
              }, "Let other devices choose folders here")))));
     } finally { keepScroll = false; }
   }
-  syncTimer = setTimeout(() => renderSync(true), d.running ? 1500 : 5000);
+  syncTimer = setTimeout(() => renderSync(true), d.running || devices.some((x) => x.running) ? 1500 : 5000);
 }
 
-/** Choose a folder on the computer running the drive. */
-function pickLocalFolder(start) {
+/** Choose a folder on the computer running the drive, or on a DDrive Lite computer (`dev`). */
+function pickLocalFolder(start, dev) {
   return new Promise((resolve) => {
     let cur = start || "", chosen = null;
     const list = h("div", { class: "picker-list" });
     const where = h("input", { class: "picker-path", spellcheck: "false", placeholder: "Type a path, or pick below",
                                onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); load(where.value.trim()); } } });
     const here = h("button", { class: "btn", onclick: () => { chosen = cur; m.close(); } }, "Use this folder");
-    const m = modal("Folder on " + (syncData ? syncData.host : "this computer"), where, list, h("div", { class: "modal-actions" }, here));
+    const m = modal("Folder on " + (dev ? dev.name : syncData ? syncData.host : "this computer"), where, list, h("div", { class: "modal-actions" }, here));
     m.dlg.addEventListener("close", () => resolve(chosen));
     async function load(path) {
-      const data = await api("/api/sync/browse" + q({ path })).catch((e) => { toast(e.message); return null; });
+      const data = await api("/api/sync/browse" + q(dev ? { path, device: dev.id } : { path })).catch((e) => { toast(e.message); return null; });
       if (!data) return;
       cur = data.path;
       where.value = data.path;
@@ -2729,15 +2753,17 @@ function pickLocalFolder(start) {
   });
 }
 
-function syncForm(j) {
+function syncForm(j, dev) {
   const d = syncData;
+  const windows = dev ? dev.windows : d.windows, where = dev ? dev.name : d.host;
   const v = j ? { ...j, exclude: (j.exclude || []).join(", ") }
               : { name: "", local: "", remote: "", mode: "backup", trigger: "live", every: 60, at: "03:00", exclude: "" };
   const inp = (key, attrs = {}) => h("input", { value: v[key] ?? "", spellcheck: "false", autocomplete: "off", ...attrs,
                                                  oninput: (e) => { v[key] = e.target.value; } });
-  const local = inp("local", { placeholder: d.windows ? "C:\\Users\\you\\Downloads" : "/home/you/Documents" });
-  const remote = inp("remote", { placeholder: d.windows ? `${d.mount}\\Downloads` : "/Downloads" });
-  if (v.remote) remote.value = drivePathShown(v.remote);
+  const local = inp("local", { placeholder: windows ? "C:\\Users\\you\\Downloads" : "/home/you/Documents" });
+  const shown = (p) => dev ? p : drivePathShown(p);          // a lite computer may show the drive under any letter, or not at all
+  const remote = inp("remote", { placeholder: !dev && d.windows ? `${d.mount}\\Downloads` : "/Downloads" });
+  if (v.remote) remote.value = shown(v.remote);
   const pickRow = (input, onPick) => h("div", { class: "pick-row" }, input, h("button", { class: "btn ghost", type: "button", onclick: onPick }, "Browse…"));
   const modes = h("div", { class: "modes", role: "radiogroup" }, d.modes.map((mo) => {
     const b = h("button", { type: "button", role: "radio", class: "mode", "aria-checked": String(v.mode === mo.id),
@@ -2765,15 +2791,22 @@ function syncForm(j) {
                   every: Math.max(1, Math.round(Number(every.value || 1) * Number(unit.value))), at: at.value || "03:00" };
     if (j) job.id = j.id;
     save.disabled = true;
-    const r = await attempt(() => api("/api/sync/save", { job }));
+    const r = await attempt(() => api("/api/sync/save", dev ? { job, device: dev.id } : { job }));
     save.disabled = false;
-    if (r) { m.close(); toast(j ? "Saved" : "Added. The first sync starts now."); renderSync(); }
+    if (r) {
+      m.close();
+      toast(j ? "Saved" : dev && !dev.online ? `Added. It starts when ${dev.name} is connected.` : "Added. The first sync starts now.");
+      renderSync();
+    }
   } }, j ? "Save" : "Add and sync");
   const m = modal(j ? `Change “${j.name}”` : "Sync a folder",
-    field(`Folder on ${d.host}`, pickRow(local, async () => { const p = await pickLocalFolder(local.value.trim() || d.home); if (p) { local.value = p; v.local = p; } })),
+    field(`Folder on ${where}`, pickRow(local, async () => {
+      const p = await pickLocalFolder(local.value.trim() || (dev ? dev.home : d.home), dev);
+      if (p) { local.value = p; v.local = p; }
+    })),
     field("Folder on the drive", pickRow(remote, async () => {
       const p = await pickFolder("Folder on the drive", (remote.value.trim().replace(/^[A-Za-z]:/, "").replace(/\\/g, "/")) || "/", [], "Use this folder");
-      if (p) { remote.value = drivePathShown(p); v.remote = p; }
+      if (p) { remote.value = shown(p); v.remote = p; }
     }), "It is created if it isn't there yet."),
     field("What to do", modes),
     field("When", h("div", {}, seg, extra)),

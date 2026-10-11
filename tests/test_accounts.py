@@ -281,19 +281,25 @@ class AccountsTest(helpers.DriveTest):
     def test_nothing_that_manages_the_drive(self):
         self.d.cfg.signup_mode = "public"
         cookie, _ = self.sign_up()
-        for path in ("/api/settings", "/api/log", "/api/activity", "/api/sync", "/api/sync/browse?path=/", "/api/signin",
+        for path in ("/api/settings", "/api/log", "/api/activity", "/api/signin",
                      "/api/accounts", "/api/check", "/api/nonsense"):
             self.assertEqual(self.get(path, cookie)[0], 403, path)
         for path, body in (("/api/settings", {"signup_mode": "public"}), ("/api/settings", {"web_lan": True}),
                            ("/api/log/clear", {}), ("/api/resources/clean", {"what": "cache"}), ("/api/repair", {"all": True}), ("/api/repair/recheck", {}),
                            ("/api/pin", {"path": "/", "on": True}), ("/api/check/start", {"path": "/"}),
-                           ("/api/sync/save", {"job": {}}), ("/api/sync/remote-edit", {"on": True}),
+                           ("/api/sync/remote-edit", {"on": True}),
                            ("/api/signin/phrase", {}), ("/api/signin/passkey/options", {}), ("/api/webdav/password", {"password": "12345678"}),
                            ("/api/accounts/invite", {"uses": 0}), ("/api/accounts/delete", {"id": "x"}), ("/api/accounts/restore", {"id": "1"}),
                            ("/api/accounts/disable", {"id": "x", "off": True})):
             self.assertEqual(self.post(path, body, cookie)[0], 403, path)
         self.assertEqual(self.d.cfg.signup_mode, "public")
         self.assertFalse(self.d.cfg.web_lan)
+        # Sync: an account has its own DDrive Lite computers there (test_litesync); this computer's folders stay the owner's
+        status, page = self.get("/api/sync", cookie)
+        self.assertEqual((status, page["jobs"], page["host"], page["home"], page["can_edit"]), (200, [], "", "", False))
+        self.assertEqual(self.get("/api/sync/browse?path=/", cookie)[0], 503)
+        self.assertEqual(self.post("/api/sync/save", {"job": {"local": self.tmp, "remote": "/X"}}, cookie)[0], 503)
+        self.assertEqual(self.d.sync.jobs, [])
         self.d.cfg.webdav_enabled = True                               # other apps: the owner's, with the owner's password
         self.assertEqual(self.req("PROPFIND", "/dav/", cookie=cookie)[0], 401)
         self.assertEqual(self.get("/api/status", self.owner)[1]["accounts"], 1)

@@ -766,6 +766,7 @@ run.bat lite connect http://192.168.1.20:8765     sign in to the host (asks for 
 run.bat lite mount                                the host's drive appears as Z: (or: -m Y:, -b for the background)
 run.bat lite stop                                 take it away again
 run.bat lite autostart on                         show it by itself when this computer starts
+run.bat lite sync on                              let folders of this computer be synced (chosen on the host's Sync page)
 run.bat lite status | ls [folder] | get <file or folder> [to] | put <file or folder> [folder] | disconnect
 run.bat lite menu                                 all of this as a menu (also option 13 of the main menu)
 ```
@@ -785,6 +786,18 @@ Ubuntu and Raspberry Pi OS (`ddrive-lite`), which contain only this.
 - **Writing** goes to a temporary file that is handed to the host when the file is closed and then
   removed. The host stores it on the drive like any other file (encrypted, uploaded to Discord,
   versioned). Changing part of an existing file fetches it first and sends it back whole.
+- **Folder syncing**: `lite sync on` (or the menu) is all you do on the lite computer. It then shows
+  up on the host's dashboard, on the Sync page, and everything else is done there: add its folders
+  (with a folder browser that looks at that computer), choose the mode and when it runs, start, stop,
+  pause, change and remove them, and watch how they are doing. The lite computer does the copying
+  itself, with the modes and rules of [Sync and back up folders](#sync-and-back-up-folders), and
+  needs no drive letter for it (no WinFsp or FUSE). It runs in the program that shows the drive, or
+  by itself; `lite autostart on` starts either with the computer. `lite sync off` stops it and takes
+  the computer off the page, `lite sync status` says how it is. The lite computer keeps its own list
+  of folders; the host only holds it in memory. Turning it on lets whoever is signed in to the
+  host's dashboard with the same 24 words choose any folder of that computer, so it is off until
+  you turn it on. With an account's words it syncs with that account's storage and is run from that
+  account's Sync page.
 - The 24 words are stored encrypted for that computer and account, like the full drive's secrets.
   Over plain `http` they travel unencrypted when signing in: fine at home, use `https` elsewhere.
 - Everything the host's dashboard account may see is on the drive. Password-locked folders stay
@@ -866,6 +879,9 @@ the drive at once, elsewhere and for changes on the drive it checks every few se
   itself**, because that means reading and writing files outside the drive. Syncing now and pausing
   work from everywhere. To allow it from other devices too, turn on "Let other devices choose folders
   here" at the bottom of Sync (on that computer), or `config sync_remote_edit true`.
+- Computers that use the drive through [DDrive Lite](#ddrive-lite) can sync their folders too. Turn
+  it on there (`lite sync on`); each such computer is then listed on this Sync page under the host's
+  folders, and its folders are added and run from here.
 
 ## Snapshots
 

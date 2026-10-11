@@ -81,7 +81,7 @@ echo "Built dist/ddrive_${VERSION}_all.deb"
 LITE="build/deb/ddrive-lite_${VERSION}_all"
 rm -rf "$LITE"
 mkdir -p "$LITE/DEBIAN" "$LITE/opt/ddrive-lite/ddrive/_vendor" "$LITE/usr/bin"
-for f in __init__.py lite.py config.py secretbox.py crypto.py fuse_loader.py runtime.py; do
+for f in __init__.py lite.py litesync.py sync.py locks.py config.py legacy.py secretbox.py crypto.py fuse_loader.py runtime.py; do
     cp "ddrive/$f" "$LITE/opt/ddrive-lite/ddrive/"
 done
 cp ddrive/_vendor/*.py "$LITE/opt/ddrive-lite/ddrive/_vendor/"
@@ -118,7 +118,8 @@ Homepage: https://github.com/xo907/ddrive
 Description: Use a DDrive that runs on another computer
  DDrive Lite shows the drive of a computer that runs DDrive (the
  host) as a folder here, and streams, downloads and uploads through it. It
- keeps no bot, key or copy of the drive. Run "ddrive-lite" for the menu.
+ keeps no bot, key or copy of the drive, and can sync folders of this
+ computer with the drive. Run "ddrive-lite" for the menu.
 EOF
 dpkg-deb --build --root-owner-group "$LITE" "dist/ddrive-lite_${VERSION}_all.deb"
 echo "Built dist/ddrive-lite_${VERSION}_all.deb"

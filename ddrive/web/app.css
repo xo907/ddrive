@@ -777,6 +777,11 @@ button.link { padding: 0; border: 0; background: none; color: var(--ink); text-d
 .notice { padding: 12px 14px; margin: -8px 0 24px; border: 1px solid var(--line); border-radius: var(--radius);
           color: var(--muted); font-size: 13px; background: var(--panel); }
 .sync-list { display: flex; flex-direction: column; gap: 10px; }
+.sync-dev { margin: 40px 0 12px; }
+.sync-dev h2 { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; margin: 0; font-size: 15px; }
+.sync-dev h2 .sync-state { font-weight: 400; }
+.sync-hint { max-width: 620px; margin: 28px 0 0; font-size: 13px; }
+.empty.small { padding: 28px 0; }
 .sync-card { padding: 14px 14px 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .sync-card.off { opacity: .7; }
 .sync-head { display: flex; align-items: center; gap: 12px; min-width: 0; }

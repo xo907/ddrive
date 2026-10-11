@@ -3,6 +3,34 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.2.0 (2026-10-11)
+
+- **DDrive Lite can sync folders, and you run it all from the dashboard.** On the lite computer you
+  only turn it on: `lite sync on` (or **Folder syncing** in its menu). That computer then shows up on
+  the host's dashboard, on the **Sync** page, under the host's own folders, with its name and whether
+  it is connected. There you add a folder of it (with a folder browser that looks at the lite
+  computer), pick the drive folder, the mode (back up, mirror, two-way, move, download, download
+  mirror) and when it runs, and later change it, start it, stop it, pause it or remove it, and see
+  its progress, its last result and its recent runs. Nothing else is done on the lite computer.
+- The lite computer does the copying itself, with the same rules as folders synced by the host: copies
+  keep each file's date so nothing is copied twice, files still being written wait, unfinished
+  downloads are skipped, and nothing is deleted on one side because the other is suddenly empty.
+  It needs no drive letter for it: syncing works on a lite computer without WinFsp or FUSE.
+- It runs in the program that shows the host's drive (`lite mount`) and by itself when that isn't
+  running; `lite autostart on` covers both after a restart. `lite sync off` stops it and takes the
+  computer off the Sync page; `lite sync status` says how it is; `lite sync run` does it in a window.
+- The lite computer keeps its list of folders (in its data folder) and tells the host when it
+  connects, so it survives a restart of either. The host keeps another computer's folders in memory
+  only: nothing about them is written to its disk.
+- Turning it on lets whoever is signed in to the host's dashboard with the same 24 words choose any
+  folder of that computer, which is why it is off until you turn it on there. A lite computer signed
+  in with an **account**'s words syncs with that account's storage and is steered from that
+  account's Sync page (accounts now have one, for their own lite computers only); the owner doesn't
+  see it, and an account still can't touch the folders of the host.
+- For this the dashboard's upload takes a file's own date, a copy that is cut off half-way is not left
+  on the drive as a new file, and a whole folder tree can be asked for in one request.
+- Fixed: the lite-only Debian package was missing a file it needs since 2.0.0 and did not start.
+
 ## 2.1.1 (2026-10-11)
 
 - Health, **Check again**, now finishes the job with one click. It used to stop at the first part

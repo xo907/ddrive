@@ -4,6 +4,8 @@
     lite mount [-m X:] [-b]     show the host's drive as a drive letter / folder on this computer
     lite stop                   take it away again
     lite autostart on|off       show it by itself when this computer starts
+    lite sync on|off            let folders of this computer be synced with the drive; which ones is
+                                chosen on the host's dashboard, on its Sync page (litesync.py)
     lite status | ls | get | put | disconnect, and lite menu for all of this as a menu
 
 Nothing of the drive lives on this computer: no bot token, no encryption key, no index, no cache on
@@ -26,7 +28,9 @@ import json
 import logging
 import os
 import posixpath
+import secrets
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -175,9 +179,25 @@ class HostClient:
             if progress:
                 progress(done)
 
-    def upload(self, path, src, size):
-        return json.loads(self.request("POST", "/api/upload" + self._q(path=path), src,
+    def upload(self, path, src, size, mtime=None):
+        """mtime: the file's own modification time, which a folder sync keeps (it tells copies apart by it)."""
+        q = self._q(path=path) if mtime is None else self._q(path=path, mtime=repr(float(mtime)))
+        return json.loads(self.request("POST", "/api/upload" + q, src,
                                        {"Content-Length": str(size), "Content-Type": "application/octet-stream"}))
+
+    def tree(self, path):
+        """Everything under a folder of the drive: {exists, dir, files: [[path in it, size, time, state]], dirs}."""
+        return self._json("/api/sync/tree" + self._q(path=path))
+
+    def sync_call(self, what, **body):
+        """Folder syncing on this computer, as said to the host (litesync.py)."""
+        return self._json("/api/lite/sync/" + what, body)
+
+    def drop(self):
+        """Close this thread's connection (after a request that was given up half-way)."""
+        conn, self._local.conn = getattr(self._local, "conn", None), None
+        if conn is not None:
+            conn.close()
 
     def mkdir(self, path):
         self._json("/api/mkdir", {"path": path})
@@ -582,6 +602,38 @@ def _pid_file():
     return os.path.join(default_data_dir(), "lite.pid")
 
 
+def device_name():
+    return (socket.gethostname() or "A computer").split(".")[0]
+
+
+def _spawn(*argv):
+    """Start `lite <argv>` as a program of its own that goes on after this one ends."""
+    from .runtime import FROZEN, command
+    if os.environ.get("DDRIVE_LITE_ONLY") and not FROZEN:        # the lite-only package has no `python -m ddrive`
+        cmd = [sys.executable, "-c", "import sys; from ddrive.lite import main; sys.exit(main(sys.argv[1:]) or 0)", *argv]
+    else:
+        cmd = command("lite", *argv, windowless=True)
+    cwd = None if FROZEN else SOURCE_ROOT        # from source, the program is found from its own folder
+    os.makedirs(default_data_dir(), exist_ok=True)
+    if sys.platform == "win32":
+        return subprocess.Popen(cmd, cwd=cwd, close_fds=True, creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                                | getattr(subprocess, "DETACHED_PROCESS", 0))
+    with open(os.path.join(default_data_dir(), "lite.log"), "a") as out:
+        return subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                start_new_session=True, close_fds=True)
+
+
+def _mount_pid():
+    """The program showing the host's drive on this computer, if one is running."""
+    from .litesync import alive
+    try:
+        with open(_pid_file()) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return pid if alive(pid) else None
+
+
 def _is_mounted(mp):
     if sys.platform == "win32":
         return os.path.exists(mp.rstrip(":\\") + ":\\")
@@ -616,6 +668,9 @@ def cmd_mount(args):
     if args.mount and mp != s.get("mount_point"):
         s["mount_point"] = mp
         save_settings(s)
+    if FUSE_ERROR and s.get("sync"):         # nothing to show the drive with, but folders sync without that
+        print(f"[INFO] The drive can't be shown here ({FUSE_ERROR.splitlines()[0]}). Folder syncing runs without it.")
+        return cmd_sync(argparse.Namespace(state="run", background=args.background, verbose=getattr(args, "verbose", False)))
     if FUSE_ERROR:
         print(f"[ERROR] The drive can't be shown here yet:\n{FUSE_ERROR}\n        ('lite ls', 'lite get' and 'lite put' work without it.)")
         return 1
@@ -623,17 +678,7 @@ def cmd_mount(args):
         print(f"[INFO] Something is already mounted on {mp}.")
         return 0
     if args.background:
-        from .runtime import FROZEN, command
-        cmd = command("lite", "mount", "-m", mp, windowless=True)
-        cwd = None if FROZEN else SOURCE_ROOT        # from source, the program is found from its own folder
-        os.makedirs(default_data_dir(), exist_ok=True)
-        if sys.platform == "win32":
-            proc = subprocess.Popen(cmd, cwd=cwd, close_fds=True, creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                                    | getattr(subprocess, "DETACHED_PROCESS", 0))
-        else:
-            with open(os.path.join(default_data_dir(), "lite.log"), "a") as out:
-                proc = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                        start_new_session=True, close_fds=True)
+        proc = _spawn("mount", "-m", mp)
         deadline = time.time() + 30
         while time.time() < deadline and not _is_mounted(mp) and proc.poll() is None:
             time.sleep(0.3)
@@ -656,9 +701,12 @@ def cmd_mount(args):
         # and lets programs create files but not change one that exists.
         kwargs.update(uid=-1, gid=-1)
     log.info("Showing the drive of %s on %s", client.address, mp)
+    from .litesync import Supervisor
+    syncing = Supervisor().start()           # folder syncing, when it is on, runs in here too
     try:
         fuse.FUSE(LiteFS(client), mp, **kwargs)
     finally:
+        syncing.stop()
         try:
             os.remove(_pid_file())
         except OSError:
@@ -696,7 +744,96 @@ def cmd_stop(args):
             break
         time.sleep(0.25)
     print(f"[SUCCESS] {mp} is gone from this computer." if not _is_mounted(mp) else f"[ERROR] {mp} is still there.")
+    if load_settings().get("sync") and not _is_mounted(mp):
+        _sync_ensure()                       # the folder syncing ran in the program that showed the drive
     return 0 if not _is_mounted(mp) else 1
+
+
+# ---------------------------------------------------------------------- folder syncing (litesync.py)
+def _sync_ensure():
+    """Have something on this computer doing the folder syncing; True when it had to be started."""
+    from .litesync import running_pid
+    if running_pid() or _mount_pid():        # (the program showing the drive takes it up by itself)
+        return False
+    _spawn("sync", "run")
+    return True
+
+
+def _sync_running():
+    from .litesync import running_pid
+    for _ in range(25):
+        if running_pid():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def cmd_sync(args):
+    """Folders of this computer kept in step with the host's drive; they are chosen on the host's dashboard."""
+    from . import litesync
+    s = load_settings()
+    action = args.state or "status"
+    if action == "status":
+        on = bool(s.get("sync"))
+        print(f"[OK] Folder syncing is {'ON' if on else 'OFF'}"
+              + (f" and {'running' if litesync.running_pid() else 'not running (start it: ' + me() + ' sync on)'}." if on else "."))
+        if on:
+            print(f"     Folders are added and changed on the Sync page of {s.get('host')}, where this computer is "
+                  f"listed as {device_name()}.")
+        return 0
+    if action == "off":
+        had = bool(s.get("sync"))
+        if had:
+            s["sync"] = False
+            save_settings(s)
+            try:
+                client_from(s).sync_call("bye", device=s.get("device"))
+            except HostError:
+                pass                         # an unreachable host forgets by itself
+        pid = litesync.running_pid()
+        if pid and pid != _mount_pid():      # the program that only did the syncing ends by itself
+            for _ in range(40):
+                if not litesync.running_pid():
+                    break
+                time.sleep(0.25)
+        print("[OK] Folder syncing is now OFF. This computer is off the host's Sync page; the folders it synced are kept "
+              "in mind here and come back when it is turned on again." if had else "[OK] Folder syncing is OFF.")
+        return 0
+    client = client_from(s)                  # on and run: only when there is a host
+    if action == "on":
+        s.setdefault("device", secrets.token_hex(8))
+        agent = litesync.Agent(client, s["device"], device_name(), mount_point=s.get("mount_point") or "")
+        agent.hello()                        # fails here, with a clear message, when the host can't do this
+        s["sync"] = True
+        save_settings(s)
+        _sync_ensure()
+        ok = _sync_running()
+        print(f"[OK] Folder syncing is now ON{'' if ok else ', but it did not start (see ' + os.path.join(default_data_dir(), 'ddrive.log') + ')'}.")
+        print(f"     Open {client.address}, go to Sync, and add folders of {device_name()} there: everything about them\n"
+              "     is done on that page. It lets whoever is signed in there with these 24 words choose any folder of\n"
+              f"     this computer; '{me()} sync off' ends that.")
+        if not autostart_enabled():
+            print(f"     It runs until this computer is restarted. To have it start with the computer: '{me()} autostart on'.")
+        return 0 if ok else 1
+    # run: do the syncing in this program, until it is turned off or this is closed
+    if not s.get("sync"):
+        print(f"[INFO] Folder syncing is OFF. Turn it on first: '{me()} sync on'.")
+        return 1
+    if getattr(args, "background", False):
+        started = _sync_ensure()
+        print("[OK] Folder syncing " + ("started in the background." if started else "is already running."))
+        return 0
+    if litesync.running_pid() or _mount_pid():
+        print("[INFO] Folder syncing is already running on this computer.")
+        return 0
+    _logging(getattr(args, "verbose", False))
+    sup = litesync.Supervisor()
+    try:
+        while sup.check():
+            time.sleep(2.0)
+    finally:
+        sup._release()
+    return 0
 
 
 def cmd_status(args):
@@ -707,6 +844,10 @@ def cmd_status(args):
     mp = normalize_mount_point(s.get("mount_point") or "")
     print(f"Host:        {s['host']} (signed in as {s.get('user')})")
     print(f"On this PC:  {mp} ({'shown' if _is_mounted(mp) else 'not shown; lite mount'})")
+    if s.get("sync"):
+        from .litesync import running_pid
+        print(f"Folders:     syncing is on{'' if running_pid() else ', but not running (lite sync on starts it)'}; "
+              "they are chosen on the host's Sync page")
     st = client_from(s).status()
     busy = len(st.get("uploads") or []) + (st.get("queued") or 0)
     print(f"Drive:       DDrive {st.get('version')}, {st['stats']['files']} files, {format_size(st['stats']['bytes'])}"
@@ -862,14 +1003,16 @@ def cmd_menu(args):
         print(f"  Host:  {s['host'] + ' (as ' + str(s.get('user')) + ')' if s.get('host') else 'not connected yet'}")
         if s.get("host"):
             print(f"  Here:  {mp + ' is showing the drive' if shown else 'not shown'}"
-                  f"{' · starts with this computer' if autostart_enabled() else ''}")
+                  f"{' · starts with this computer' if autostart_enabled() else ''}"
+                  f"{' · syncs folders' if s.get('sync') else ''}")
         print("\n   1  Connect to a host" + (" (another one, or sign in again)" if s.get("host") else ""))
         if s.get("host"):
             print(f"   2  {'Take the drive away from this computer' if shown else 'Show the drive on ' + mp}")
             print("   3  Choose another drive letter or folder")
             print("   4  Status of the host")
             print(f"   5  Start with this computer: turn {'off' if autostart_enabled() else 'on'}")
-            print("   6  Forget the host")
+            print(f"   6  Folder syncing: turn {'off' if s.get('sync') else 'on (its folders are then chosen on the host, under Sync)'}")
+            print("   7  Forget the host")
         print("   0  Exit\n")
         try:
             pick = input("  Choose an option: ").strip()
@@ -893,6 +1036,8 @@ def cmd_menu(args):
         elif pick == "5":
             run("autostart", "off" if autostart_enabled() else "on")
         elif pick == "6":
+            run("sync", "off" if s.get("sync") else "on")
+        elif pick == "7":
             if shown:
                 main(["stop"])
             if autostart_enabled():
@@ -901,6 +1046,8 @@ def cmd_menu(args):
 
 
 def cmd_disconnect(args):
+    if load_settings().get("sync"):
+        cmd_sync(argparse.Namespace(state="off"))
     try:
         os.remove(settings_path())
     except OSError:
@@ -934,6 +1081,10 @@ def main(argv, verbose=False):
     sub.add_parser("disconnect", help="Forget the host and the sign-in")
     p = sub.add_parser("autostart", help="Show the drive by itself when this computer starts: on, off or status")
     p.add_argument("state", nargs="?", choices=["on", "off", "status"])
+    p = sub.add_parser("sync", help="Sync folders of this computer with the drive (chosen on the host's Sync page): "
+                                    "on, off, status, or run to do it in this window")
+    p.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
+    p.add_argument("-b", "--background", action="store_true", help="With run: in the background")
     sub.add_parser("menu", help="All of this as a menu")
     args = parser.parse_args(argv)
     args.verbose = verbose
@@ -943,7 +1094,7 @@ def main(argv, verbose=False):
     try:
         return {"connect": cmd_connect, "mount": cmd_mount, "stop": cmd_stop, "status": cmd_status, "ls": cmd_ls,
                 "get": cmd_get, "put": cmd_put, "disconnect": cmd_disconnect, "autostart": cmd_autostart,
-                "menu": cmd_menu}[args.action](args)
+                "sync": cmd_sync, "menu": cmd_menu}[args.action](args)
     except HostError as e:
         print(f"[ERROR] {e}")
         return 1

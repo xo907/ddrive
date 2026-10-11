@@ -339,6 +339,7 @@ class PlusHandlers:
         d = self.drive
         st = d.index.stats(max_age=5)
         jobs = d.sync.snapshot() if d.sync else []
+        jobs += [j for dev in self.server.app.lite.listing(self._who() or "") for j in dev["jobs"]]   # DDrive Lite computers
         self._json({
             "host": self._host_name(), "mount": d.cfg.mount_point, "version": __version__,
             "stats": {k: st.get(k) for k in ("files", "dirs", "bytes", "versions", "version_bytes", "chunks",

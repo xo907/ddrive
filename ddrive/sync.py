@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import posixpath
+import re
 import secrets
 import shutil
 import socket
@@ -123,9 +124,10 @@ def _inside(path, folder):
         return False
 
 
-def normalize_job(job, cfg, existing=()):
+def normalize_job(job, cfg, existing=(), elsewhere=False):
     """Check a job (dict from the config, the dashboard or the command line) and fill in defaults.
-    Raises SyncError with a message meant for people."""
+    Raises SyncError with a message meant for people. elsewhere: the folder is on another computer
+    (one that runs DDrive Lite, see litesync.py), so nothing about it can be looked at from here."""
     out = dict(JOB_DEFAULTS)
     out.update({k: v for k, v in (job or {}).items() if k in JOB_DEFAULTS or k == "id"})
     out["id"] = str(out.get("id") or secrets.token_hex(3))
@@ -135,6 +137,9 @@ def normalize_job(job, cfg, existing=()):
         raise SyncError(f"Unknown mode '{out['mode']}'. Use one of: {', '.join(MODES)}")
     if out["trigger"] not in TRIGGERS:
         raise SyncError(f"Unknown trigger '{out['trigger']}'. Use one of: {', '.join(TRIGGERS)}")
+    if elsewhere:
+        return _normalize_rest(dict(out, local=str(out["local"] or "").strip().strip('"')[:1000],
+                                    remote=drive_path(out["remote"])), existing, elsewhere)
     out["local"] = local_path(out["local"])
     letter = str(out["remote"] or "").strip()[:2]
     mp = getattr(cfg, "mount_point", "") or ""
@@ -146,11 +151,7 @@ def normalize_job(job, cfg, existing=()):
     if sys.platform != "win32" and mp and str(out["remote"]).startswith(mp.rstrip("/") + "/"):
         out["remote"] = out["remote"][len(mp.rstrip("/")):]       # /mnt/ddrive/Photos -> /Photos
     out["remote"] = drive_path(out["remote"])
-    if not out["local"]:
-        raise SyncError("Choose a folder on this computer.")
-    if not out["remote"] or (out["remote"] == "/" and out["mode"] in ("mirror", "two-way")):
-        raise SyncError("Choose a folder on the drive (not the whole drive) for mirror and two-way sync."
-                        if out["remote"] == "/" else "Choose a folder on the drive.")
+    _check_folders(out)
     direction = MODES[out["mode"]][1]
     if direction != "down" and not os.path.isdir(out["local"]):
         raise SyncError(f"Folder not found on this computer: {out['local']}")
@@ -169,6 +170,23 @@ def normalize_job(job, cfg, existing=()):
     if out["local"] in (os.path.abspath(os.sep), os.path.splitdrive(out["local"])[0] + os.sep) \
             and out["mode"] in ("download-mirror", "two-way", "move"):
         raise SyncError("Choose a folder, not a whole disk, for this mode.")
+    return _normalize_rest(out, existing)
+
+
+def _check_folders(out, where="this"):
+    if not out["local"]:
+        raise SyncError(f"Choose a folder on {where} computer.")
+    if not out["remote"] or (out["remote"] == "/" and out["mode"] in ("mirror", "two-way")):
+        raise SyncError("Choose a folder on the drive (not the whole drive) for mirror and two-way sync."
+                        if out["remote"] == "/" else "Choose a folder on the drive.")
+
+
+def _normalize_rest(out, existing, elsewhere=False):
+    """The part of normalize_job that doesn't look at this computer's folders."""
+    if elsewhere:
+        _check_folders(out, "that")
+        if re.fullmatch(r"[A-Za-z]:[\\/]*|[\\/]+", out["local"]) and out["mode"] in ("download-mirror", "two-way", "move"):
+            raise SyncError("Choose a folder, not a whole disk, for this mode.")
     try:
         out["every"] = max(1, int(float(out["every"])))
     except (TypeError, ValueError):
@@ -188,10 +206,11 @@ def normalize_job(job, cfg, existing=()):
     out["exclude"] = [str(x).strip() for x in ex or [] if str(x).strip()]
     out["enabled"] = bool(out["enabled"]) if not isinstance(out["enabled"], str) \
         else out["enabled"].lower() in ("1", "true", "yes", "on")
-    out["name"] = str(out["name"] or "").strip()[:80] or os.path.basename(out["local"].rstrip("\\/")) or out["local"]
+    out["name"] = str(out["name"] or "").strip()[:80] or re.split(r"[\\/]", out["local"].rstrip("\\/"))[-1] or out["local"]
+    here = (lambda p: str(p or "").strip()) if elsewhere else (lambda p: os.path.normcase(local_path(p)))
     for other in existing:
-        if other.get("id") != out["id"] and os.path.normcase(local_path(other.get("local"))) == \
-                os.path.normcase(out["local"]) and drive_path(other.get("remote")) == out["remote"]:
+        if other.get("id") != out["id"] and here(other.get("local")) == here(out["local"]) \
+                and drive_path(other.get("remote")) == out["remote"]:
             raise SyncError("Those two folders are already paired.")
     return out
 
@@ -210,6 +229,43 @@ def when_text(job):
     if t == "daily":
         return f"daily at {job['at']}"
     return {"live": "live", "manual": "manual"}[t]
+
+
+def browse(path, mount=""):
+    """Folders on this computer, for choosing one to sync: {path, parent, dirs, roots}. Without a
+    path: the places to start from. mount: the drive's own letter, which is left out."""
+    roots = []
+    if os.name == "nt":
+        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            if f"{c}:" != (mount or "")[:2].upper() and os.path.isdir(f"{c}:\\"):
+                roots.append({"name": f"{c}:", "path": f"{c}:\\"})
+    else:
+        roots = [{"name": "Home", "path": os.path.expanduser("~")}, {"name": "/", "path": "/"}]
+        for media in ("/media", "/mnt"):
+            if os.path.isdir(media):
+                roots.append({"name": media, "path": media})
+    path = (path or "").strip()
+    if not path:
+        return {"path": "", "parent": None, "dirs": roots, "roots": roots}
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f"Folder not found: {path}")
+    dirs = []
+    try:
+        with os.scandir(path) as it:
+            for e in it:
+                try:
+                    if e.is_dir() and not e.name.startswith((".", "$")) and not _is_link(e):
+                        dirs.append({"name": e.name, "path": e.path})
+                except OSError:
+                    continue
+    except OSError as e:
+        raise PermissionError(f"Can't open {path}: {e.strerror or e}") from None
+    dirs.sort(key=lambda d: d["name"].lower())
+    up = os.path.dirname(path.rstrip("\\/")) if path.rstrip("\\/") else None
+    if os.name == "nt" and len(path.rstrip("\\")) == 2:
+        up = ""                                                     # a disk: back to the list of disks
+    return {"path": path, "parent": up if up != path else None, "dirs": dirs[:2000], "roots": roots}
 
 
 def sync_dir(cfg):
@@ -370,6 +426,8 @@ def scan_local(root, excluded, problems):
 
 def scan_remote(drive, root_path, excluded):
     """{rel: (size, mtime, node)} of the files and the set of folders under drive folder `root_path`."""
+    if hasattr(drive, "scan_tree"):          # a drive on another computer answers this in one go
+        return drive.scan_tree(root_path, excluded)
     idx, fs = drive.index, drive.fs
     files, dirs = {}, set()
     root = idx.resolve(root_path)
@@ -561,6 +619,9 @@ class Run:
     # -------------------------------------------------- the pass
     def run(self):
         direction = MODES[self.mode][1]
+        refused = getattr(self.d, "refuse", None)
+        if refused is not None and refused(self.job):
+            raise SyncError(refused(self.job))
         if direction != "down" and not os.path.isdir(self.local):
             raise SyncError(f"The folder {self.local} isn't there (a disk that isn't connected?). "
                             "Nothing was changed.")
