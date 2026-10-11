@@ -22,6 +22,7 @@ list under the account menu, "What's new".
   account is kept for this.
 - The privacy policy says that this copy exists. README: the Accounts section no longer asks you to
   back up `accounts.json` yourself and describes getting accounts back.
+
 ## 2.0.2 (2026-10-11)
 
 - Health, "Parts that can't be repaired", has a **Check again** button: it asks Discord for every
