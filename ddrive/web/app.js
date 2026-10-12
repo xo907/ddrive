@@ -430,8 +430,51 @@ function render() {
 window.addEventListener("hashchange", render);
 
 let keepScroll = false;
+/** What an expandable part (<details>) is known by from one drawing of a page to the next: the name it
+ *  was given (data-keep), or else its kind, its label without the numbers in it, and which one of
+ *  those it is on the page. */
+function keepKeys(root) {
+  const seen = new Map(), out = new Map();
+  for (const d of root.querySelectorAll("details")) {
+    let key = d.dataset.keep;
+    if (!key) {
+      const sum = d.querySelector("summary");
+      const kind = `${d.className}|${(sum ? sum.textContent : "").replace(/[\d.,]+/g, "#")}`;
+      const n = seen.get(kind) || 0;
+      seen.set(kind, n + 1);
+      key = `${kind}|${n}`;
+    }
+    out.set(key, d);
+  }
+  return out;
+}
+
+/** Show a page. A page that draws itself again while it is being looked at (the ones that refresh
+ *  every few seconds call this with keepScroll set) leaves alone what the reader did with it: a part
+ *  that was opened stays open, scrolled to where it was, and nothing is replaced under a selection
+ *  that is being made to copy something. */
 function page(...children) {
-  main.replaceChildren(h("div", { class: "page" }, ...children));
+  const next = h("div", { class: "page" }, ...children);
+  const old = main.firstElementChild;
+  if (keepScroll && old) {
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed && sel.anchorNode && old.contains(sel.anchorNode)) return;
+    const now = keepKeys(next), carry = [];
+    for (const [key, was] of keepKeys(old)) {
+      const d = now.get(key);
+      if (!d || !was.open) continue;
+      d.open = true;
+      const from = [was, ...was.querySelectorAll("*")].filter((el) => el.scrollTop > 0);
+      if (from.length) carry.push([d, was, from]);
+    }
+    main.replaceChildren(next);
+    for (const [d, was, from] of carry) {            // scrolled lists inside it (they have a size only once shown)
+      const olds = [was, ...was.querySelectorAll("*")], news = [d, ...d.querySelectorAll("*")];
+      for (const el of from) { const to = news[olds.indexOf(el)]; if (to && to.tagName === el.tagName) to.scrollTop = el.scrollTop; }
+    }
+    return;
+  }
+  main.replaceChildren(next);
   if (!keepScroll) main.scrollTop = 0;
 }
 
@@ -2630,7 +2673,7 @@ function syncCard(j, dev) {
       menuButton(menu, j.name, j.label)),
     line,
     h("div", { class: "sync-foot" }, syncNext(j, dev)),
-    (s.problems || []).length ? h("details", { class: "sync-problems" },
+    (s.problems || []).length ? h("details", { class: "sync-problems", "data-keep": `notes-${dev ? dev.id : ""}-${j.id}` },
       h("summary", {}, plural(s.problems.length, "note")), h("ul", {}, s.problems.map((t) => h("li", {}, t)))) : null);
   bindMenu(card, menu, j.name, j.label, (e) => !!e.target.closest("button, a, summary"));
   return card;

@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.4.2 (2026-10-11)
+
+- An opened part of a page no longer closes by itself. Pages that keep themselves up to date (Sync,
+  Health, Resources) draw themselves again every few seconds, and each time closed whatever had been
+  opened on them, such as a folder's notes on the Sync page. What was opened now stays open, scrolled
+  to where it was.
+- Such a page also waits with drawing itself again while text on it is selected, so something can be
+  selected and copied without the selection disappearing.
+
 ## 2.4.1 (2026-10-11)
 
 - The one upload card at the bottom right now says everything the cards per file used to: how many
