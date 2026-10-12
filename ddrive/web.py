@@ -1100,6 +1100,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True, "e2e": self._e2e,
                 "admin": self.server.app.accounts.admin_ok(d.id),     # it may also manage the drive (ADMIN_GET)
                 "retired": self._retired,                              # of the earlier kind: read and move out only
+                "move": self.server.app.moves.current(d.id) if self._e2e else None,       # moving into or out of another account
                 "stats": st, "uploads": self._uploads(), "downloads": len(d.cache.active), "queued": len(d.uploader._pending),
                 "quota": {"bytes": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]},
                 "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},

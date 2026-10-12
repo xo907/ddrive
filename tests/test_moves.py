@@ -71,17 +71,28 @@ class MoveTest(helpers.DriveTest):
     def test_a_whole_account_moves(self):
         big = self.fill()
         before = {o for o in self.objects(self.sid)}
+        # each account's page is told of the move it is in, wherever it is looked at (the card that follows it)
+        told = lambda v: v.client._json("/api/status")["move"]
+        self.assertEqual((told(self.src), told(self.dst)), (None, None))
         opened = self.dst.move_open()
         self.assertRegex(opened["code"], r"^[A-Z2-7]{4}-[A-Z2-7]{4}$")
+        self.assertEqual((told(self.dst)["state"], told(self.dst)["side"], told(self.dst)["code"], told(self.src)),
+                         ("open", "to", opened["code"], None))
         check = self.src.move_send(opened["id"], code=opened["code"])
         st = self.dst.move_status()
         self.assertEqual((st["state"], st["from"], st["check"]), ("copying", self.sid, check))
+        for v, side in ((self.dst, "to"), (self.src, "from")):
+            m = told(v)
+            self.assertEqual((m["id"], m["side"], m["state"], m["from"], m["to"], m["check"]),
+                             (opened["id"], side, "copying", self.sid, self.tid, check))
+            self.assertIn("objects", m)
         # the account that moves out can't change anything now, nor be deleted
         with self.assertRaises(lite.HostError) as e:
             self.src.put("/late.txt", b"too late")
         self.assertEqual(e.exception.status, 423)
         self.run_copy(opened["id"])
         self.assertEqual(self.dst.move_status()["state"], "ready")
+        self.assertEqual((told(self.dst)["state"], told(self.src)["state"]), ("ready", "ready"))
         name = self.dst.move_take(check=check)
         self.assertEqual(name, f"From account {self.sid}")
         # everything is in the new folder, with its earlier versions and what was deleted
@@ -96,6 +107,7 @@ class MoveTest(helpers.DriveTest):
         self.upload_all(self.tid)
         self.run_copy(opened["id"])
         self.assertEqual(self.moves.status(opened["id"], None)["state"], "done")
+        self.assertIsNone(told(self.dst))                   # done: nothing to follow any more
         self.assertIsNone(self.acc._recs.get(self.sid))
         with self.assertRaises(lite.HostError):
             self.device(self.skey)

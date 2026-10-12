@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.20.0 (2026-10-12)
+
+- **A move between two accounts can be followed from any page.** Once its window was closed, there
+  was no way to see how far a move was: the account that moves out could only start again from the
+  code. Now, while an account is in a move, on either side, a card at the bottom right (on a phone:
+  above the menu) says how far it is: waiting for the code, how many pieces and bytes are copied,
+  copied and waiting to be taken in, or taken in. It is there on every page, also after signing in
+  again or on another device of the account, until the move is done or cancelled.
+- Clicking the card opens the move's own window again, with its codes and "Cancel the move". Your
+  account has the same as a row, "Show the move".
+- On the account that receives, a browser other than the one the move was started in can follow and
+  cancel it, but not take it in: the key for that is kept in the browser it was started in, and the
+  window says so.
+
 ## 2.19.0 (2026-10-12)
 
 - **Discord messages: only the attachment itself is saved.** Until now a small preview of every

@@ -109,7 +109,8 @@
   }
 
   // ------------------------------------------------------------ T: receive
-  async function receive() {
+  /** `cur`: the move this account is in already, as its status says (the card that follows a move opens this). */
+  async function receive(cur) {
     if (!usable()) return;
     const body = h("div", { class: "move" });
     const dlg = modal("Move another account into this one", body);
@@ -119,6 +120,8 @@
     if (m) {
       try { await status(m.id); } catch (e) { await pending.drop().catch(() => null); m = null; }
     }
+    // Started in another browser, which has the key for it: here it can be followed and cancelled.
+    if (cur && cur.side === "to" && (!m || m.id !== cur.id)) m = { id: cur.id, remote: true };
     if (!m) {
       body.replaceChildren(P("Everything in another end-to-end encrypted account of yours — files, folders, earlier versions, deleted files — comes into a new folder here. "
                              + "The other account is deleted afterwards. The server copies the sealed files and can open none of them."),
@@ -138,16 +141,17 @@
     }
 
     async function follow(m) {
-      const mycode = await keyCode(m.tpub);
+      const mine = m.tpub ? await keyCode(m.tpub) : "";
       while (alive) {
         let st;
         try { st = await status(m.id); } catch (e) {
           body.replaceChildren(P(e.message, "err"), actions(h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Close")));
-          await pending.drop().catch(() => null);
+          if (!m.remote) await pending.drop().catch(() => null);
           return;
         }
+        const mycode = mine || st.code;
         const cancel = h("button", { class: "btn ghost", type: "button", onclick: async () => {
-          if (await attempt(() => DDV.call("/api/vault/move/cancel", { method: "POST", json: { id: m.id } }), "The move was cancelled")) { await pending.drop().catch(() => null); dlg.close(); }
+          if (await attempt(() => DDV.call("/api/vault/move/cancel", { method: "POST", json: { id: m.id } }), "The move was cancelled")) { if (!m.remote) await pending.drop().catch(() => null); dlg.close(); }
         } }, "Cancel the move");
         if (st.state === "open") {
           body.replaceChildren(P("On the account that moves out, open Settings → “Move everything into another account” and type this:"),
@@ -161,6 +165,9 @@
                                P(`Check that the other page shows ${st.check}.`),
                                h("div", { class: "meter" }, h("i", { style: `width:${pct}%` })),
                                P(`${st.copied || 0} of ${st.objects || "?"} pieces · ${size(st.done_bytes || 0)} of ${size(st.bytes || 0)}`), actions(cancel));
+        } else if (st.state === "ready" && m.remote) {
+          body.replaceChildren(P("Everything is copied. It is taken in from the browser the move was started in, which keeps the key for it: open this account there and choose Your account → “Receive…”."),
+                               P(`The other page shows the code ${st.check}.`), actions(cancel));
         } else if (st.state === "ready") {
           const ok = h("button", { class: "btn", type: "button", onclick: async () => {
             ok.disabled = true;
@@ -178,11 +185,11 @@
                                P("If it is different, something other than your account sent this: cancel."), actions(cancel, ok));
           return;
         } else if (st.state === "finishing" || st.state === "done") {
-          await pending.drop().catch(() => null);
+          if (!m.remote) await pending.drop().catch(() => null);
           body.replaceChildren(P(h("b", {}, "This move is done.")), actions(h("button", { class: "btn", type: "button", onclick: () => dlg.close() }, "Close")));
           return;
         } else {
-          await pending.drop().catch(() => null);
+          if (!m.remote) await pending.drop().catch(() => null);
           body.replaceChildren(P(`The move was ${st.state}${st.error ? ": " + st.error : "."}`, "err"),
                                actions(h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Close")));
           return;
@@ -193,12 +200,14 @@
   }
 
   // ------------------------------------------------------------ S: move out
-  async function send() {
+  /** `cur`: the move this account is in already (the card that follows a move opens this): straight to how it is going. */
+  async function send(cur) {
     if (!usable()) return;
     const body = h("div", { class: "move" });
     const dlg = modal("Move everything into another account", body);
     let alive = true;
     dlg.dlg.addEventListener("close", () => { alive = false; });
+    if (cur && cur.side === "from") { body.replaceChildren(P("Looking at how the move is going…")); watch(cur.id, cur.check); return; }
     const input = h("input", { placeholder: "The code the other account shows", spellcheck: "false", autocomplete: "off", style: "font-family:ui-monospace,monospace" });
     const look = h("button", { class: "btn", type: "button", onclick: lookUp }, "Next");
     body.replaceChildren(P("Everything in this account — files, folders, earlier versions, deleted files — moves into another end-to-end encrypted account, into a new folder there. "
@@ -275,6 +284,9 @@
     }
   }
 
-  window.accountMove = { receive, send, pending: () => pending.get().catch(() => null),
+  /** Show how the move this account is in is going (`move`: what its status says of it). */
+  const show = (move) => (move && move.side === "from" ? send(move) : receive(move));
+
+  window.accountMove = { receive, send, show, pending: () => pending.get().catch(() => null),
                          crypto: { keyCode, checkCode, agree, keypair, movedId, movedFolder } };      // (checked against vault.py in the tests)
 })();

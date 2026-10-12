@@ -408,6 +408,7 @@ async function refreshStatus() {
   $("#usage").textContent = `${plural(st.files, "file")} · ${size(quota ? status.quota.used : st.bytes)}${quota ? " of " + size(quota) : ""}`;
   showDiscordUploads(status.uploads, status.queued);
   showFetches(status.fetches);
+  showMove(status.move);
   if (note && route.name === "notes") noteUploadState();
   const lk = $("#locks");
   lk.hidden = !(status.locks && status.locks.count);
@@ -1154,6 +1155,38 @@ function uploadFile(file, dir) {
  *  closed, and then stays away until the uploads are over. */
 let discordCard = null, discordHidden = false;
 let discordMini = (() => { try { return localStorage.getItem("dd-uploads-mini") === "1"; } catch { return false; } })();
+// A move between two end-to-end encrypted accounts (accountmove.js) runs on the server for as long as it
+// takes, whatever page is open and also after the window it was started in is closed. So while this
+// account is in one, on either side, a card says how far it is, on every page; clicking it opens the
+// move's own window again.
+let moveCard = null;
+function moveText(m) {
+  const into = m.side === "to";
+  if (m.state === "open") return "Waiting for the other account to type the code";
+  if (m.state === "copying") return m.objects ? `Copying: ${m.copied || 0} of ${m.objects} pieces · ${size(m.done_bytes || 0)} of ${size(m.bytes || 0)}`
+                                              : "Copying: looking at what there is to copy…";
+  if (m.state === "ready") return into ? "Everything is copied. Click to check the code and take it in." : "Everything is copied. Waiting for the other account to take it in.";
+  return into ? "Taken in. The files are being stored as this account's." : "Taken in. This account is deleted once the files are stored.";
+}
+function showMove(m) {
+  if (!m || !window.accountMove) {
+    if (moveCard) { moveCard.el.remove(); moveCard = null; }
+    return;
+  }
+  if (!moveCard) {
+    const c = moveCard = { bar: h("i", { style: "width:0%" }), title: h("span", {}), pct: h("span", { class: "pct" }), sub: h("div", { class: "sub" }) };
+    const open = () => { if (!document.querySelector("dialog.modal .move")) window.accountMove.show(status && status.move); };
+    c.el = h("div", { class: "item discord", role: "button", tabindex: "0", title: "Show the move", onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
+             h("div", { class: "n" }, c.title, c.pct), h("div", { class: "meter" }, c.bar), c.sub);
+    tray.prepend(c.el);
+  }
+  const pct = m.state === "open" ? 0 : m.state === "copying" ? (m.bytes ? Math.min(100, (m.done_bytes || 0) / m.bytes * 100) : 0) : 100;
+  moveCard.title.textContent = m.side === "to" ? (m.from ? `Receiving account ${m.from}` : "Receiving another account") : `Moving into account ${m.to}`;
+  moveCard.pct.textContent = m.state === "copying" ? Math.floor(pct) + "%" : m.state === "ready" ? "Copied" : "";
+  moveCard.bar.style.width = pct + "%";
+  moveCard.sub.textContent = moveText(m);
+}
+
 function showDiscordUploads(list, queued) {
   list = list || [];
   const files = list.length + (queued || 0);
@@ -3370,6 +3403,8 @@ async function renderAccount() {
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
          a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         status && status.move && window.accountMove && row(status.move.side === "to" ? "Another account is moving into this one" : "This account is moving into another one",
+             moveText(status.move), h("button", { class: "btn small", onclick: () => window.accountMove.show(status.move) }, "Show the move")),
          status && status.e2e && window.accountMove && row("Move another account into this one", "Everything in another end-to-end encrypted account of yours comes into a new folder here, and that account is deleted. The server copies the sealed files; the keys are agreed between your two screens.",
              h("button", { class: "btn ghost small", onclick: () => window.accountMove.receive() }, "Receive…")),
          status && status.e2e && window.accountMove && row("Move everything into another account", "This account's files, folders, earlier versions and deleted files go into another end-to-end encrypted account; then this account is deleted.",
@@ -4253,7 +4288,8 @@ refreshStatus().then(render);          // who is signed in decides which pages t
 // at all while it is in the background: it is asked again the moment it is looked at.
 (function poll() {
   const busy = status && (status.uploads.length || status.downloads || status.queued || (status.fetches || []).some((f) => f.state === "running")
-                          || (status.health && status.health.recheck && status.health.recheck.running));
+                          || (status.health && status.health.recheck && status.health.recheck.running)
+                          || (status.move && status.move.state === "copying"));
   setTimeout(async () => {
     if (document.hidden) await new Promise((r) => document.addEventListener("visibilitychange", r, { once: true }));
     await refreshStatus();

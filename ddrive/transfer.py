@@ -150,6 +150,18 @@ class Moves:
                     return m["id"]
         return None
 
+    def current(self, aid):
+        """The move account `aid` takes part in right now, as status() tells it, with which side it is on
+        ("to": it receives, "from": it moves out), or None. Its page shows this wherever it is, so the
+        move can be followed without the window it was started in."""
+        with self._lock:
+            for m in sorted(self._moves.values(), key=lambda m: -(m.get("created") or 0)):
+                if m["state"] in ACTIVE and aid in (m.get("to"), m.get("from")):
+                    if m["state"] == "open" and time.time() > m["created"] + OPEN_MINUTES * 60:
+                        continue                         # ran out; tidy() clears it away
+                    return dict(self.status(m["id"], aid), side="to" if m["to"] == aid else "from")
+        return None
+
     def _get(self, mid):
         m = self._moves.get(str(mid or ""))
         if m is None:
