@@ -14,6 +14,12 @@ interface Progress {
     fun plan(total: Int, totalBytes: Long) {}
     fun file(rel: String, action: String, size: Long) {}
     fun done(bytes: Long) {}
+
+    /** That much more of the file being copied is there. */
+    fun part(bytes: Long) {}
+
+    /** What the copy is waiting for ("" = nothing any more). */
+    fun note(text: String) {}
 }
 
 /**
@@ -23,7 +29,8 @@ interface Progress {
 class SyncRun(private val client: HostClient, private val job: Job, private val stateDir: File, private val trashRoot: File,
               private val device: String, private val settle: Double = SETTLE, private val keepFree: Long = 0,
               private val stop: () -> Boolean = { false }, private val progress: Progress = object : Progress {},
-              private val touched: (File) -> Unit = {}) {       // a file of this device appeared, changed or went (a phone's gallery wants to know)
+              private val touched: (File) -> Unit = {},         // a file of this device appeared, changed or went (a phone's gallery wants to know)
+              private val parts: Int = 0) {                     // > 0: the host takes files in parts (2.4.0 on), of this size
     val r = linkedMapOf("up" to 0L, "down" to 0L, "deleted_remote" to 0L, "deleted_local" to 0L, "moved" to 0L, "conflicts" to 0L,
                         "bytes" to 0L, "busy" to 0L, "waiting" to 0L, "errors" to 0L, "skipped_deletes" to 0L, "kept_away" to 0L,
                         "files" to 0L, "remote_files" to 0L)
@@ -136,7 +143,8 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
             ensureRemoteDir(rel.substringBeforeLast('/', ""))
             if (rel in knownDirs) throw IOException("the drive has a folder with that name")
             size = src.length()
-            client.upload(rp(rel), size, src.lastModified() / 1000.0, stop) { FileInputStream(src) }
+            if (parts > 0) client.uploadParts(rp(rel), src, size, src.lastModified() / 1000.0, stop, parts, { progress.part(it) }, { progress.note(it) })
+            else client.upload(rp(rel), size, src.lastModified() / 1000.0, stop) { FileInputStream(src) }
         } catch (e: HostError) {
             if (!oneFile(e)) throw e
             problem(rel, e.message)

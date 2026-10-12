@@ -826,6 +826,10 @@ uploaded. Each release has **DDriveLite.apk**; install it by opening the file on
 - A *live* folder is looked at once a minute; when something in it changed it is synced, and every
   15 minutes anyway (which is how changes on the drive reach the phone). Android may hold the app
   back while the phone sleeps; it catches up when the phone is used or charging.
+- Big files (videos) go to the host in parts of 8 MB: one that was cut off goes on where it stopped,
+  and when the host has to catch up with its own uploads first, the folder's card on the Sync page
+  says what it is waiting for. A file that can't fit on the host's disk at all is listed as a problem
+  and the rest goes on.
 - **Only on Wi-Fi** is on at first, so a photo library doesn't go over mobile data. The Sync page
   then shows "Waiting for Wi-Fi" for the phone's folders.
 - Files a sync removes from the phone (download mirror, two-way) are moved to `DDrive Lite/Removed by

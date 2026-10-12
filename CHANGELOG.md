@@ -3,6 +3,32 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.4.0 (2026-10-11)
+
+- **A folder sync on a phone or a lite computer no longer gets stuck on a big file.** It used to send
+  each file as one request and wait a minute for the answer. A big video could not make that when
+  the host sits behind a reverse proxy that stores the whole request first, or when the host had to
+  wait for room on its own disk: the sync failed with a timeout, started again with the same file,
+  and stayed at "0 of N files" for good. Files now go to the host **in parts of 8 MB**:
+  - each part is a short request, so a proxy's limits and waiting times no longer matter;
+  - a file that was cut off (the connection dropped, the phone went to sleep) **goes on where it
+    stopped** instead of starting over;
+  - a host that has to catch up first (its upload backlog or its disk is full) says so at once, and
+    the folder's card on the Sync page shows it, e.g. "Waiting for the host: upload backlog is 2.0 GiB
+    (limit 2.0 GiB)", and goes on by itself when there is room;
+  - a file that can never fit on the host (bigger than what its disk may take, see
+    `min_free_disk_bytes`) is reported as that file's problem, with the numbers, and the sync goes on
+    with the next one;
+  - the progress bar moves while a big file is being sent, not only when it is finished.
+  The parts are collected on the host next to the drive's own files and become the file by being
+  moved, so a big file is not on the host's disk twice. Needs the host and the phone app (or the lite
+  computer) on 2.4.0; with an older host the new app sends files the old way.
+- **The upload popups at the bottom right are one small card now.** There used to be a card per file
+  going to Discord; during a big copy they came and went constantly and sat on top of buttons. Now one
+  card says how many files are uploading and how far they are, it can be put away with its ×
+  (it stays away until the uploads are over), and clicking it opens the page that lists them.
+  Clicks next to the card go through to the page under it.
+
 ## 2.3.0 (2026-10-11)
 
 - **DDrive Lite for Android.** A new app (`DDriveLite.apk` in each release, Android 8 or later) that

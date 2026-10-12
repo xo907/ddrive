@@ -104,6 +104,8 @@ class RemoteDrive:
         self.change_listeners = []
         self.scope = types.SimpleNamespace(unlocked=None)
         self.refuse = None
+        self.parts = False                   # the host takes files in parts (2.4.0 on)
+        self._hear = None
         self._lock = threading.Lock()
         self._lists = {}                     # folder -> (when, {name: node})
 
@@ -189,11 +191,18 @@ class RemoteDrive:
             elif not node["is_dir"]:
                 raise OSError(errno.ENOTDIR, f"{made} on the drive is a file")
 
+    def listen(self, hear):
+        """Have a pass told how far a big file is and what it is waiting for (sync.Run)."""
+        self._hear = hear
+
     @_host
     def put_file(self, path, src, mtime=None, stop=None):
         size = os.fstat(src.fileno()).st_size
         try:
-            self.client.upload(path, _Body(src, size, stop), size, mtime=mtime)
+            if self.parts:
+                self.client.upload_parts(path, src, size, mtime=mtime, stop=stop, hear=self._hear)
+            else:
+                self.client.upload(path, _Body(src, size, stop), size, mtime=mtime)
         except _Stopped:
             self.client.drop()               # the host sees a copy that was cut off and doesn't keep it
             raise InterruptedError("stopped") from None
@@ -302,6 +311,10 @@ class Agent(sync.SyncManager):
                                      "lite computers (2.2.0). Update it there first.") from None
             raise
         self._greeted = True
+        try:
+            self.d.parts = tuple(int(x) for x in str(got.get("version") or "0").split(".")[:3]) >= (2, 4, 0)
+        except ValueError:
+            self.d.parts = False
         self._take(got)
         return got
 

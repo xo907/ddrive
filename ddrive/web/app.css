@@ -298,8 +298,18 @@ dialog input[hidden] { display: none; }
          padding: 10px 14px; border-radius: var(--radius); background: var(--ink); color: var(--bg); font-size: 13px;
          opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 40; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
-.tray { position: fixed; right: 20px; bottom: 20px; width: 300px; display: flex; flex-direction: column; gap: 6px;
-        z-index: 30; }
+.tray { position: fixed; right: 20px; bottom: 20px; width: 280px; display: flex; flex-direction: column; gap: 6px;
+        z-index: 30; pointer-events: none; }
+.tray .item { pointer-events: auto; }
+.tray .item:nth-child(n+5) { display: none; }      /* a big batch of uploads from this browser: the first few show */
+.tray .item.discord { cursor: pointer; padding: 8px 8px 8px 12px; }
+.tray .item.discord .n { align-items: center; }
+.tray .item.discord .n span:first-child { font-weight: 500; }
+.tray-x { display: grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px;
+          background: none; color: var(--muted); cursor: pointer; }
+.tray-x:hover { background: var(--hover); color: var(--ink); }
+.tray-x svg { width: 14px; height: 14px; }
+.sync-note { margin-top: 8px; }
 .tray .item { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
               box-shadow: var(--shadow); font-size: 12.5px; }
 .tray .item .n { display: flex; justify-content: space-between; gap: 8px; }

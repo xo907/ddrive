@@ -482,6 +482,8 @@ class Run:
         self.problems = []
         self.settled_at = None        # when the newest file held back because it was just written can go
         self.trash = None
+        if hasattr(drive, "listen"):  # a drive on another computer says how far a big file is, and when it waits
+            drive.listen(lambda **kw: self.progress(**kw))
         self.host = (socket.gethostname() or "this computer").split(".")[0]
 
     # -------------------------------------------------- helpers
@@ -1194,15 +1196,26 @@ class SyncManager:
         self._cancel = None
         self._save(force=True)
         prog = s["progress"]
+        within = [0]                  # bytes of the file being copied that are counted already
 
-        def progress(file=None, action=None, size=None, total=None, total_bytes=None, done_bytes=None):
+        def progress(file=None, action=None, size=None, total=None, total_bytes=None, done_bytes=None,
+                     part_bytes=None, note=None):
+            """part_bytes: that much more of the current file was copied; note: what it is waiting for ('' = nothing)."""
             if total is not None:
                 prog["total"], prog["total_bytes"] = total, total_bytes or 0
             if file is not None:
                 prog["file"], prog["action"] = file, action
+                prog.pop("note", None)
+                within[0] = 0
+            if part_bytes:
+                prog["bytes"] += part_bytes
+                within[0] += part_bytes
+            if note is not None:
+                prog["note"] = note
             if done_bytes is not None:
                 prog["done"] += 1
-                prog["bytes"] += done_bytes
+                prog["bytes"] += done_bytes - within[0]
+                within[0] = 0
             self._save()
 
         run = Run(self.d, job, self.dir, settle=settle, stop=lambda: self._cancel == jid or self._stop.is_set(),

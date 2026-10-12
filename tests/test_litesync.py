@@ -240,6 +240,56 @@ class LiteSyncTest(helpers.DriveTest):
         self.assertEqual((tree["dir"], [f[:3] for f in tree["files"]]), (True, [["whole.bin", 10, 1700000000.5]]))
         self.assertEqual(self.page.tree("/nothing"), {"exists": False, "dir": False, "files": [], "dirs": []})
 
+    def test_a_big_file_goes_in_parts_and_goes_on_where_it_stopped(self):
+        data = os.urandom(300_000)
+        src = self.put("film.mp4", data)
+        mtime = os.path.getmtime(src)
+        part = 64 * 1024
+        q = urllib.parse.urlencode({"path": "/film.mp4", "size": len(data), "mtime": repr(mtime)})
+        self.page.status()
+        # two parts arrive, then the connection is lost
+        for off in (0, part):
+            got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={off}", data[off:off + part]))
+            self.assertEqual((got["ok"], got["offset"]), (True, off + part))
+        self.assertIsNone(self.host.index.resolve("/film.mp4"))            # not a file before all of it is there
+        self.assertEqual(json.loads(self.page.request("GET", f"/api/upload/part?{q}"))["offset"], 2 * part)
+        # a part that isn't the next one is answered with where the host is
+        got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={3 * part}", b"x"))
+        self.assertEqual((got["ok"], got["offset"]), (False, 2 * part))
+        # the sender goes on from there; meanwhile the host has to catch up once and says so
+        heard, real = [], self.host.fs.holding_back
+        holds = iter(["upload backlog is 2.0 GiB (limit 2.0 GiB)"])
+        self.host.fs.holding_back = lambda *a, **kw: next(holds, None)
+        keep, lite.time.sleep = lite.time.sleep, lambda s: None
+        try:
+            with open(src, "rb") as f:
+                got = self.page.upload_parts("/film.mp4", f, len(data), mtime=mtime, hear=lambda **kw: heard.append(kw), part=part)
+        finally:
+            lite.time.sleep, self.host.fs.holding_back = keep, real
+        self.assertTrue(got["done"])
+        self.assertEqual(heard[0], {"part_bytes": 2 * part})               # what was there already
+        self.assertIn("backlog", heard[1]["note"])
+        self.assertEqual(sum(h.get("part_bytes", 0) for h in heard), len(data))
+        self.assertEqual(self.remote("/film.mp4"), data)
+        self.assertAlmostEqual(self.host.index.resolve("/film.mp4")["mtime"], mtime, delta=0.001)
+        self.assertEqual(os.listdir(os.path.join(self.host.cfg.resolved_data_dir, "partials")), [])
+        # a changed file starts over; an empty one is one empty part
+        self.put("film.mp4", data[:1000])
+        with open(src, "rb") as f:
+            self.page.upload_parts("/film.mp4", f, 1000, mtime=mtime + 5, part=part)
+        self.assertEqual(self.remote("/film.mp4"), data[:1000])
+        self.page.upload_parts("/empty.txt", __import__("io").BytesIO(b""), 0, mtime=mtime)
+        self.assertEqual(self.host.index.resolve("/empty.txt")["size"], 0)
+        # no room on the host for it: said at once, and nothing is left lying there
+        self.upload(self.host)                   # (nothing is waiting to go to Discord, so waiting would not help)
+        self.host.cfg.min_free_disk_bytes = 1 << 60
+        with self.assertRaises(lite.HostError) as e:
+            self.page.upload_parts("/huge.bin", __import__("io").BytesIO(data), len(data), part=part)
+        self.assertEqual(e.exception.status, 507)
+        self.assertIn("no room", str(e.exception))
+        self.assertEqual(os.listdir(os.path.join(self.host.cfg.resolved_data_dir, "partials")), [])
+        self.assertIsNone(self.host.index.resolve("/huge.bin"))
+
     def test_the_commands(self):
         os.environ["DDRIVE_LITE_CONFIG"] = os.path.join(self.tmp, "lite.json")
         self.addCleanup(os.environ.pop, "DDRIVE_LITE_CONFIG")

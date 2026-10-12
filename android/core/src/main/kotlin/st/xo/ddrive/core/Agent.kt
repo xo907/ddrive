@@ -49,6 +49,7 @@ private class Signal {
 class Agent(private val client: HostClient, val device: String, val name: String, private val dir: File,
             private val trashRoot: File, private val home: String, private val platform: String = "android",
             private val livePoll: Double = 60.0, private val liveFull: Double = 900.0, private val keepFree: Long = 1L shl 30,
+            private val partSize: Int = HostClient.PART,
             private val browse: (String) -> JSONObject = { JSONObject().put("error", "Folders can't be listed here") },
             private val mayRun: () -> String? = { null },
             private val refuse: (Job) -> String? = { null },
@@ -70,6 +71,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
     private var raw = JSONArray()                    // the pairs as the host and we keep them
     private var rev = 0L                             // the number of the pairs' last change that we know of
     @Volatile private var greeted = false
+    @Volatile private var hostTakesParts = false     // a host from 2.4.0 on: big files go in parts
     @Volatile private var stopping = false
     @Volatile private var cancel: String? = null
     private val wake = Signal()
@@ -158,6 +160,8 @@ class Agent(private val client: HostClient, val device: String, val name: String
             throw e
         }
         greeted = true
+        val v = got.optString("version").split(".").map { it.toIntOrNull() ?: 0 }
+        hostTakesParts = (v.getOrElse(0) { 0 } * 10000 + v.getOrElse(1) { 0 } * 100 + v.getOrElse(2) { 0 }) >= 20400
         take(got)
         return got
     }
@@ -353,17 +357,38 @@ class Agent(private val client: HostClient, val device: String, val name: String
                 save()
             }
 
+            private var within = 0L              // bytes of the file being copied that are counted already
+
             override fun file(rel: String, action: String, size: Long) {
-                lock.withLock { prog.put("file", rel).put("action", action) }
+                within = 0
+                lock.withLock {
+                    prog.put("file", rel).put("action", action)
+                    prog.remove("note")
+                }
                 save()
             }
 
             override fun done(bytes: Long) {
-                lock.withLock { prog.put("done", prog.optInt("done") + 1).put("bytes", prog.optLong("bytes") + bytes) }
+                lock.withLock { prog.put("done", prog.optInt("done") + 1).put("bytes", prog.optLong("bytes") + bytes - within) }
+                within = 0
                 save()
             }
+
+            override fun part(bytes: Long) {
+                within += bytes
+                lock.withLock { prog.put("bytes", prog.optLong("bytes") + bytes) }
+                save()
+                onChange()
+            }
+
+            override fun note(text: String) {
+                lock.withLock { prog.put("note", text) }
+                save(force = true)
+                onChange()
+            }
         }
-        val run = SyncRun(client, job, dir, trashRoot, name, settle, keepFree, { cancel == id || stopping }, progress, touched)
+        val run = SyncRun(client, job, dir, trashRoot, name, settle, keepFree, { cancel == id || stopping }, progress, touched,
+                          if (hostTakesParts) partSize else 0)
         var error = ""
         try {
             refuse(job)?.let { throw SyncError(it) }
@@ -445,6 +470,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
         if (id != null) {
             val p = lock.withLock { status[id]?.optJSONObject("progress")?.let { JSONObject(it.toString()) } }
             val what = job(id)?.name ?: "a folder"
+            p?.optString("note")?.takeIf { it.isNotEmpty() }?.let { return it }
             return if (p != null && p.optInt("total") > 0) "Syncing $what: ${p.optInt("done")} of ${p.optInt("total")} files" else "Syncing $what"
         }
         if (!online) return lastProblem ?: "Connecting to the host"

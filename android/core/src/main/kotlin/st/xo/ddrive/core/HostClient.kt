@@ -2,6 +2,7 @@ package st.xo.ddrive.core
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -226,6 +227,55 @@ class HostClient(address: String, private val phrase: String, @Volatile var cook
         }) { JSONObject(body(it).toString(Charsets.UTF_8).ifEmpty { "{}" }) }
     }
 
+    /**
+     * Send a file a part at a time (a host from 2.4.0 on). Each part is a short request, so a reverse
+     * proxy in front of the host or a connection that drops doesn't stand in the way of a big file:
+     * it goes on where it stopped, and a host that has to catch up first says so instead of leaving
+     * us waiting. onPart hears how many more bytes are there, onNote what it waits for ("" = nothing).
+     */
+    fun uploadParts(path: String, file: File, size: Long, mtime: Double?, stop: (() -> Boolean)? = null, part: Int = PART,
+                    onPart: (Long) -> Unit = {}, onNote: (String) -> Unit = {}): JSONObject {
+        val args = ArrayList<Pair<String, String>>()
+        args.add("path" to path)
+        args.add("size" to size.toString())
+        if (mtime != null) args.add("mtime" to mtime.toString())
+        var offset = 0L
+        if (size > part) {                       // some of it may be there already
+            offset = getJson("/api/upload/part" + q(*args.toTypedArray())).optLong("offset")
+            if (offset < 0 || offset > size) offset = 0
+            if (offset > 0) onPart(offset)
+        }
+        val buf = ByteArray(part)
+        while (true) {
+            if (stop != null && stop()) throw Stopped()
+            val want = minOf(part.toLong(), size - offset).toInt()
+            try {
+                java.io.RandomAccessFile(file, "r").use { f ->
+                    if (f.length() < offset + want) throw IOException("it changed while it was being copied; trying again next time")
+                    f.seek(offset)
+                    f.readFully(buf, 0, want)
+                }
+            } catch (e: IOException) {
+                throw LocalError(e)
+            }
+            val query = q(*(args + ("offset" to offset.toString())).toTypedArray())
+            val got = exchange("POST", "/api/upload/part$query", mapOf("Content-Type" to "application/octet-stream"), want.toLong(),
+                               { it.write(buf, 0, want) }) { JSONObject(body(it).toString(Charsets.UTF_8).ifEmpty { "{}" }) }
+            if (got.has("wait")) {
+                onNote("Waiting for the host: " + got.optString("wait"))
+                for (i in 0 until 15) {
+                    if (stop != null && stop()) throw Stopped()
+                    Thread.sleep(1000)
+                }
+            } else if (got.optBoolean("ok")) {
+                onNote("")
+                onPart(want.toLong())
+                if (got.optBoolean("done")) return got
+            }
+            offset = got.optLong("offset").coerceIn(0, size)        // where the host is
+        }
+    }
+
     fun mkdir(path: String) {
         postJson("/api/mkdir", JSONObject().put("path", path))
     }
@@ -240,4 +290,8 @@ class HostClient(address: String, private val phrase: String, @Volatile var cook
 
     /** Folder syncing on this device, as said to the host (/api/lite/sync/...). */
     fun syncCall(what: String, data: JSONObject): JSONObject = postJson("/api/lite/sync/$what", data)
+
+    companion object {
+        const val PART = 8 * 1024 * 1024         // files go to the host in parts of this size
+    }
 }

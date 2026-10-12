@@ -56,7 +56,9 @@ MAX_FAILURES = 5          # wrong phrases (or passwords of a lock) from one addr
 LOCKOUT = 60.0            # seconds, doubled for every further wrong one (up to an hour)
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
 _BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
-                      "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report")
+                      "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report", "/api/upload/part")
+PART_MAX = 64 * 1024 * 1024   # the largest part of a file sent in parts (/api/upload/part)
+PART_DAYS = 7.0               # a file of which only some parts came is given up after this long
 _MEDIA_EXT = ("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "mp4", "m4v", "webm", "mov", "mkv", "avi")
 NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave ("Save" uploads right away)
 
@@ -64,12 +66,12 @@ NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave
 # Anything not listed here answers 403 for them, so a new route is the owner's until it is added.
 ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
     contacts contacts/export locks starred recent history home insights bookmarks changelog
-    sync sync/tree sync/browse""".split())
+    sync sync/tree sync/browse upload/part""".split())
 ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
     bookmarks/save bookmarks/refresh bookmarks/delete
-    sync/save sync/remove sync/pause sync/run sync/stop
+    sync/save sync/remove sync/pause sync/run sync/stop upload/part
     lite/sync/hello lite/sync/poll lite/sync/report lite/sync/answer lite/sync/bye""".split())
 
 
@@ -1252,6 +1254,117 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             # notes: autosaves wait until typing pauses; "Save" sends it to Discord right away
             self.drive.uploader.enqueue(node["id"], delay=0 if save == "now" else NOTE_IDLE)
         self._json({"ok": True, "path": path, "size": offset, "mtime": node["mtime"] if node else None})
+
+    # ---------- a file sent in parts
+    # A folder sync on another computer or a phone sends big files a few MB at a time. Each part is a
+    # short request, so nothing between here and there (a reverse proxy that stores a whole request
+    # before passing it on, a limit on a request's size, a connection that drops) gets in the way, and
+    # a file that was cut off goes on where it stopped. The parts are kept next to the drive's own
+    # files (<data dir>/partials) and become the file, by being moved, when the last one is there.
+    # When this computer has to catch up first (its upload backlog or its disk is full) the answer
+    # says so at once ({"wait": why}) instead of keeping the request open.
+    def _partial(self, path, size, mtime):
+        """(the file the parts of `path` are collected in, its note file, how much of it is there)."""
+        folder = os.path.join(self.drive.cfg.resolved_data_dir, "partials")
+        os.makedirs(folder, exist_ok=True)
+        part = os.path.join(folder, hashlib.sha256(path.encode("utf-8")).hexdigest()[:32] + ".part")
+        note = part[:-5] + ".json"
+        try:
+            with open(note, encoding="utf-8") as f:
+                was = json.load(f)
+            same = (was.get("path"), was.get("size"), was.get("mtime")) == (path, size, mtime)
+        except (OSError, ValueError):
+            same = False
+        if not same:                             # parts of another version of the file (or none): start over
+            self._drop_partial(part)
+            return part, note, 0
+        try:
+            return part, note, os.path.getsize(part)
+        except OSError:
+            return part, note, 0
+
+    @staticmethod
+    def _drop_partial(part):
+        for p in (part, part[:-5] + ".json"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    def _part_args(self):
+        q = self._query()
+        path = "/" + (q.get("path") or "").strip("/")
+        try:
+            size = int(q.get("size") or 0)
+            offset = int(q.get("offset") or 0)
+            mtime = float(q["mtime"]) if q.get("mtime") else None
+        except ValueError:
+            raise ApiError(400, "bad size, offset or mtime") from None
+        if not posixpath.basename(path) or size < 0 or offset < 0:
+            raise ApiError(400, "bad path, size or offset")
+        return path, size, offset, mtime
+
+    def _get_api_upload_part(self):
+        """How much of a file sent in parts is here already (where to go on after it was cut off)."""
+        path, size, _, mtime = self._part_args()
+        self._json({"offset": self._partial(path, size, mtime)[2]})
+
+    def _post_api_upload_part(self):
+        path, size, offset, mtime = self._part_args()
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > PART_MAX or offset + n > size:
+            raise ApiError(413 if n > PART_MAX else 400, "that part is too big")
+        self._node(posixpath.dirname(path), want_dir=True)
+        fs = self.drive.fs
+        there = self.drive.index.resolve(path)
+        if there is not None and there["is_dir"]:
+            raise ApiError(400, f"{path} is a folder")
+        fs._refuse_hidden(path)
+        fs._check_size_limit(size, path)
+        part, note, have = self._partial(path, size, mtime)
+        if offset != have:
+            if offset:                           # not where we are: say where that is, and the sender goes on from there
+                return self._json({"ok": False, "offset": have})
+            self._drop_partial(part)             # from the start again
+            have = 0
+        why = fs.holding_back(extra=n)
+        full = None if why else fs.room_for(size - have)
+        if full and (fs._pending_staging_bytes() or not self.drive.uploader.is_idle()):
+            why = f"its uploads have to free room first ({full})"
+        if why:
+            return self._json({"ok": False, "offset": have, "wait": why})
+        if full:
+            self._drop_partial(part)
+            raise ApiError(507, f"There is no room for this file ({size / 2**30:.2f} GiB) on the computer that runs the "
+                                f"drive: {full}.")
+        if not have:
+            now = time.time()
+            for old in os.listdir(os.path.dirname(part)):        # what nobody came back for
+                p = os.path.join(os.path.dirname(part), old)
+                try:
+                    if now - os.path.getmtime(p) > PART_DAYS * 86400:
+                        os.remove(p)
+                except OSError:
+                    pass
+            with open(note, "w", encoding="utf-8") as f:
+                json.dump({"path": path, "size": size, "mtime": mtime}, f)
+        left = n
+        with open(part, "ab") as out:
+            while left > 0:
+                data = self.rfile.read(min(PIECE, left))
+                if not data:
+                    break
+                out.write(data)
+                left -= len(data)
+        if left:
+            raise ApiError(400, "upload was cut off")           # (what came is kept: the sender asks how much)
+        if have + n < size:
+            return self._json({"ok": True, "offset": have + n})
+        fs.adopt_file(path, part, mtime)
+        self._drop_partial(part)
+        node = self.drive.index.resolve(path)
+        self._json({"ok": True, "done": True, "offset": size, "path": path, "size": size,
+                    "mtime": node["mtime"] if node else None})
 
     def _get_api_zip(self):
         q = self._query()

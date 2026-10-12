@@ -346,7 +346,7 @@ async function refreshStatus() {
   else { dot.className = "dot ok"; text.textContent = "Up to date"; }
   const quota = status.quota && status.quota.bytes;
   $("#usage").textContent = `${plural(st.files, "file")} · ${size(quota ? status.quota.used : st.bytes)}${quota ? " of " + size(quota) : ""}`;
-  showDiscordUploads(status.uploads);
+  showDiscordUploads(status.uploads, status.queued);
   showFetches(status.fetches);
   if (note && route.name === "notes") noteUploadState();
   const lk = $("#locks");
@@ -1023,96 +1023,33 @@ function uploadFile(file, dir) {
   });
 }
 
-/** Uploads from the drive to Discord, live (one tray card per file). */
-const discordCards = new Map();
-function showDiscordUploads(list) {
-  const seen = new Set();
-  for (const u of list || []) {
-    seen.add(u.path);
-    let c = discordCards.get(u.path);
-    if (!c) {
-      c = { bar: h("i", { style: "width:0%" }), pct: h("span", {}), sub: h("div", { class: "sub" }) };
-      c.el = h("div", { class: "item discord" }, h("div", { class: "n" }, h("span", { title: u.path }, base(u.path)), c.pct),
-               h("div", { class: "meter" }, c.bar), c.sub);
-      discordCards.set(u.path, c);
-      tray.append(c.el);
-    }
-    c.bar.style.width = u.pct + "%";
-    c.pct.textContent = Math.floor(u.pct) + "%";
-    c.sub.textContent = u.stage === "spare pieces" ? "Adding spare pieces…"
-      : `To Discord · ${size(u.bytes)} of ${size(u.size)}${u.speed ? " · " + speed(u.speed) : ""}${u.eta ? " · " + eta(u.eta) : ""}`;
+/** Uploads from the drive to Discord, live: one small card for all of them. (A card per file, as it
+ *  used to be, came and went all the time during a big copy and sat on top of the page's buttons.)
+ *  It can be put away, and then stays away until the uploads are over. */
+let discordCard = null, discordHidden = false;
+function showDiscordUploads(list, queued) {
+  list = list || [];
+  const files = list.length + (queued || 0);
+  if (!files) discordHidden = false;
+  if (!files || discordHidden) {
+    if (discordCard) { discordCard.el.remove(); discordCard = null; }
+    return;
   }
-  for (const [path, c] of discordCards) {
-    if (seen.has(path)) continue;
-    discordCards.delete(path);
-    c.bar.style.width = "100%";
-    c.pct.textContent = "Done";
-    c.sub.textContent = "Stored in Discord";
-    setTimeout(() => c.el.remove(), 1500);
+  if (!discordCard) {
+    const c = discordCard = { bar: h("i", { style: "width:0%" }), title: h("span", {}), sub: h("div", { class: "sub" }) };
+    const away = h("button", { class: "tray-x", type: "button", title: "Hide until these uploads are done", "aria-label": "Hide the upload progress",
+                               onclick: (e) => { e.stopPropagation(); discordHidden = true; c.el.remove(); discordCard = null; } }, icon("close"));
+    c.el = h("div", { class: "item discord", role: "link", tabindex: "0", title: "Show what is uploading",
+                      onclick: () => go("#/log"), onkeydown: (e) => { if (e.key === "Enter") go("#/log"); } },
+             h("div", { class: "n" }, c.title, away), h("div", { class: "meter" }, c.bar), c.sub);
+    tray.append(c.el);
   }
-}
-
-async function uploadAll(entries, dir) {
-  let n = 0;
-  for (const { file, rel } of entries) {
-    const folders = rel.split("/").slice(0, -1);
-    let cur = dir;
-    for (const f of folders) {
-      cur = join(cur, f);
-      await api("/api/mkdir", { path: cur }).catch(() => null);   // already exists: fine
-    }
-    if (await uploadFile(file, cur)) n++;
-  }
-  if (n) toast(`${plural(n, "file")} added. ${n === 1 ? "It uploads" : "They upload"} to Discord in the background.`);
-  if (route.name === "files") render();
-}
-
-for (const id of ["#pick", "#pick-dir"]) {
-  $(id).addEventListener("change", (e) => {
-    const files = [...e.target.files].map((file) => ({ file, rel: file.webkitRelativePath || file.name }));
-    e.target.value = "";
-    uploadAll(files, currentDir);
-  });
-}
-
-async function readEntries(entry, prefix, out) {
-  if (entry.isFile) {
-    await new Promise((res) => entry.file((file) => { out.push({ file, rel: prefix + file.name }); res(); }, res));
-  } else if (entry.isDirectory) {
-    const reader = entry.createReader();
-    for (;;) {
-      const batch = await new Promise((res) => reader.readEntries(res, () => res([])));
-      if (!batch.length) break;
-      for (const e of batch) await readEntries(e, prefix + entry.name + "/", out);
-    }
-  }
-}
-
-let dragDepth = 0;
-const drop = $("#drop");
-document.addEventListener("dragenter", (e) => {
-  if (route.name !== "files" || ![...(e.dataTransfer?.types || [])].includes("Files")) return;
-  dragDepth++;
-  if (!e.target.closest || !e.target.closest(".drop-into")) $("#drop-to").textContent = currentDir === "/" ? "Drive" : base(currentDir);
-  drop.classList.add("on");
-});
-document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; drop.classList.remove("on"); } });
-document.addEventListener("dragover", (e) => { if (route.name === "files") e.preventDefault(); });
-document.addEventListener("drop", async (e) => {
-  if (route.name !== "files") return;
-  e.preventDefault();
-  dragDepth = 0;
-  drop.classList.remove("on");
-  if (!hasFiles(e)) return;
-  uploadAll(await droppedFiles(e), currentDir);
-});
-
-async function droppedFiles(e) {
-  const out = [];
-  const items = [...(e.dataTransfer.items || [])].map((i) => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
-  if (items.length) for (const entry of items) await readEntries(entry, "", out);
-  else for (const file of e.dataTransfer.files) out.push({ file, rel: file.name });
-  return out;
+  const total = list.reduce((n, u) => n + (u.size || 0), 0), done = list.reduce((n, u) => n + (u.bytes || 0), 0);
+  const bps = list.reduce((n, u) => n + (u.speed || 0), 0);
+  discordCard.title.textContent = `Uploading ${plural(files, "file")} to Discord`;
+  discordCard.bar.style.width = (total ? Math.min(100, (done / total) * 100) : 0).toFixed(1) + "%";
+  discordCard.sub.textContent = list.length === 1 ? `${base(list[0].path)} · ${size(done)} of ${size(total)}${bps ? " · " + speed(bps) : ""}`
+    : list.length ? `${size(done)} of ${size(total)} now${bps ? " · " + speed(bps) : ""}` : "Waiting for their turn";
 }
 
 // ------------------------------------------------------------------ deleted
@@ -2633,7 +2570,8 @@ function syncCard(j, dev) {
     line = [h("div", { class: "sync-line" }, p.total ? `${Number(p.done).toLocaleString()} of ${plural(p.total, "file")}` : "Comparing folders…",
               p.total_bytes ? ` · ${size(p.bytes)} of ${size(p.total_bytes)}` : "",
               p.file && h("span", { class: "sync-file" }, ` · ${p.action === "down" ? "←" : "→"} ${p.file}`)),
-            h("div", { class: "meter" }, h("i", { style: `width:${pct.toFixed(1)}%` }))];
+            h("div", { class: "meter" }, h("i", { style: `width:${pct.toFixed(1)}%` })),
+            p.note && h("div", { class: "sync-line warn sync-note" }, p.note)];
   } else if (s.error) {
     line = h("div", { class: "sync-line warn" }, s.error);
   } else if (s.last_run) {

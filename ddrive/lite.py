@@ -45,6 +45,7 @@ from .config import default_config_dir, default_data_dir, format_size, launcher,
 log = logging.getLogger("ddrive.lite")
 
 BLOCK = 4 * 1024 * 1024          # files are read from the host in parts of this size
+PART = 8 * 1024 * 1024           # a folder sync sends files to the host in parts of this size
 CACHE_BYTES = 128 * 1024 * 1024  # parts kept in memory for re-reading and seeking back
 LIST_SECONDS = 3.0               # how long a folder's listing is trusted
 O_ACCMODE = 3
@@ -184,6 +185,46 @@ class HostClient:
         q = self._q(path=path) if mtime is None else self._q(path=path, mtime=repr(float(mtime)))
         return json.loads(self.request("POST", "/api/upload" + q, src,
                                        {"Content-Length": str(size), "Content-Type": "application/octet-stream"}))
+
+    def upload_parts(self, path, src, size, mtime=None, stop=None, hear=None, part=None):
+        """Send a file a part at a time (a host from 2.4.0 on). Each part is a short request, so a
+        reverse proxy in front of the host or a connection that drops doesn't stand in the way of a
+        big file: it goes on where it stopped, and a host that has to catch up first says so instead
+        of leaving us waiting. hear(part_bytes=n) / hear(note=why) tell how it is going; stop()
+        returning true gives up (InterruptedError)."""
+        part = part or PART
+        args = {"path": path, "size": size}
+        if mtime is not None:
+            args["mtime"] = repr(float(mtime))
+        offset = 0
+        if size > part:                      # some of it may be there already
+            offset = int(self._json("/api/upload/part" + self._q(**args)).get("offset") or 0)
+            offset = offset if 0 < offset <= size else 0
+            if offset and hear:
+                hear(part_bytes=offset)
+        while True:
+            if stop is not None and stop():
+                raise InterruptedError("stopped")
+            want = min(part, size - offset)
+            src.seek(offset)
+            data = src.read(want)
+            if len(data) != want:
+                raise OSError(errno.EAGAIN, "it changed while it was being copied; trying again next time")
+            got = json.loads(self.request("POST", "/api/upload/part" + self._q(offset=offset, **args), data,
+                                          {"Content-Type": "application/octet-stream"}))
+            if got.get("wait"):
+                if hear:
+                    hear(note="Waiting for the host: " + str(got["wait"]))
+                for _ in range(15):
+                    if stop is not None and stop():
+                        raise InterruptedError("stopped")
+                    time.sleep(1.0)
+            elif got.get("ok"):
+                if hear:
+                    hear(part_bytes=len(data), note="")
+                if got.get("done"):
+                    return got
+            offset = min(size, max(0, int(got.get("offset") or 0)))          # where the host is
 
     def tree(self, path):
         """Everything under a folder of the drive: {exists, dir, files: [[path in it, size, time, state]], dirs}."""

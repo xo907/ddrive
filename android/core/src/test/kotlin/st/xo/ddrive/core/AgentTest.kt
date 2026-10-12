@@ -59,7 +59,7 @@ class AgentTest {
     // ------------------------------------------------------------ helpers
     private fun newAgent(start: Boolean = true, livePoll: Double = 3600.0): Agent {
         val a = Agent(HostClient(address, phrase), device, "phone", File(tmp, "state"), File(tmp, "Removed by sync"), home = tmp.path,
-                      livePoll = livePoll, liveFull = 3600.0, keepFree = 0,
+                      livePoll = livePoll, liveFull = 3600.0, keepFree = 0, partSize = 64 * 1024,
                       browse = { path ->
                           val dirs = JSONArray()
                           File(path).listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }
@@ -234,6 +234,38 @@ class AgentTest {
         put("two.jpg", "2".toByteArray())        // a new photo: it goes by itself
         until("the new file going up") { remote("/Live/two.jpg") }
         until("that pass being over") { history(id)!!.length() > passes }       // (the file is on the host before the pass ends)
+    }
+
+    @Test
+    fun aBigFileGoesInPartsAndGoesOnWhereItStopped() {
+        val data = ByteArray(300_000) { (it * 13).toByte() }
+        val f = put("film.mp4", data)
+        val mtime = f.lastModified() / 1000.0
+        val client = HostClient(address, phrase)
+        // the first part arrives, then the connection is lost
+        var parts = 0
+        try {
+            client.uploadParts("/film.mp4", f, f.length(), mtime, stop = { parts >= 1 }, part = 64 * 1024, onPart = { parts++ })
+            fail("it was not stopped")
+        } catch (e: Stopped) {
+            // as meant
+        }
+        assertNull(remote("/film.mp4"))                         // not a file before all of it is there
+        // the next try goes on from there
+        val heard = ArrayList<Long>()
+        val got = client.uploadParts("/film.mp4", f, f.length(), mtime, part = 64 * 1024, onPart = { heard.add(it) })
+        assertTrue(got.getBoolean("done"))
+        assertEquals(64L * 1024, heard[0])                      // what was there already
+        assertEquals(300_000L, heard.sum())
+        assertTrue(data.contentEquals(ByteArrayOutputStream().also { page.download("/film.mp4", it) }.toByteArray()))
+        assertEquals(mtime, remoteMtime("/", "film.mp4")!!, 0.001)
+        // and a pair sends its files that way (several parts for the big one), counting as it goes
+        newAgent()
+        connected()
+        val id = add("backup", "/Films")
+        val res = run(id)
+        assertEquals(1 to 300_000L, res.getInt("up") to res.getLong("bytes"))
+        assertTrue(data.contentEquals(ByteArrayOutputStream().also { page.download("/Films/film.mp4", it) }.toByteArray()))
     }
 
     @Test

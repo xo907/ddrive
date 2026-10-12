@@ -169,28 +169,9 @@ class DDriveFS(Operations):
         """
         if self.uploader is None:
             return
-        limit = int(getattr(self.cfg, "staging_max_bytes", 0) or 0)
-        if min_free is None:
-            min_free = int(getattr(self.cfg, "min_free_disk_bytes", 0) or 0)
 
         def reason():
-            pending = self._pending_staging_bytes()
-            if not pending and self.uploader.is_idle():
-                free = self._free_disk()
-                if min_free > 0 and free is not None and free < min_free and time.time() - self._space_warned > 300:
-                    self._space_warned = time.time()
-                    log.warning("The local disk is almost full (%.2f GiB free), but not because of DDrive: "
-                                "nothing is waiting to upload. Writes may fail with 'No space left on device'; "
-                                "free up space elsewhere (other caches, e.g. rclone's VFS cache, logs, images).",
-                                free / 2**30)
-                return None
-            if limit > 0 and pending >= limit:
-                return f"upload backlog is {pending / 2**30:.1f} GiB (limit {limit / 2**30:.1f} GiB)"
-            free = self._free_disk()
-            if min_free > 0 and free is not None and free < min_free:
-                return (f"only {free / 2**30:.1f} GiB free on the local disk "
-                        f"(keeping {min_free / 2**30:.1f} GiB free); {pending / 2**30:.1f} GiB waiting to upload")
-            return None
+            return self.holding_back(min_free)
 
         start = time.time()
         next_log = start
@@ -206,6 +187,68 @@ class DDriveFS(Operations):
             time.sleep(1.0)
             self._staging_usage = (0.0, 0)
             why = reason()
+
+    def holding_back(self, min_free=None, extra=0):
+        """Why new files have to wait right now (the upload backlog is full, or the disk nearly is and
+        uploads will free it), or None when they don't. extra: bytes the caller is about to add."""
+        if self.uploader is None:
+            return None
+        limit = int(getattr(self.cfg, "staging_max_bytes", 0) or 0)
+        if min_free is None:
+            min_free = int(getattr(self.cfg, "min_free_disk_bytes", 0) or 0)
+        pending = self._pending_staging_bytes()
+        if not pending and self.uploader.is_idle():
+            free = self._free_disk()
+            if min_free > 0 and free is not None and free < min_free and time.time() - self._space_warned > 300:
+                self._space_warned = time.time()
+                log.warning("The local disk is almost full (%.2f GiB free), but not because of DDrive: "
+                            "nothing is waiting to upload. Writes may fail with 'No space left on device'; "
+                            "free up space elsewhere (other caches, e.g. rclone's VFS cache, logs, images).",
+                            free / 2**30)
+            return None
+        if limit > 0 and pending >= limit:
+            return f"upload backlog is {pending / 2**30:.1f} GiB (limit {limit / 2**30:.1f} GiB)"
+        free = self._free_disk()
+        if min_free > 0 and free is not None and free - extra < min_free:
+            return (f"only {free / 2**30:.1f} GiB free on the local disk "
+                    f"(keeping {min_free / 2**30:.1f} GiB free); {pending / 2**30:.1f} GiB waiting to upload")
+        return None
+
+    def room_for(self, nbytes):
+        """None when `nbytes` more fit on this computer's disk without going below what is kept free
+        (min_free_disk_bytes), else a sentence that says why not."""
+        reserve = int(getattr(self.cfg, "min_free_disk_bytes", 0) or 0)
+        free = self._free_disk()
+        if reserve <= 0 or free is None or free - nbytes >= reserve:
+            return None
+        return (f"{free / 2**30:.1f} GiB are free and {reserve / 2**30:.1f} GiB of that are always kept free "
+                "(min_free_disk_bytes)")
+
+    def adopt_file(self, path, src, mtime=None):
+        """Make the local file `src` the content of drive file `path` by moving it there (no second
+        copy on this disk); it then uploads like any other. Returns its size. `src` is gone afterwards."""
+        size = os.path.getsize(src)
+        self._check_size_limit(size, path)
+        fh = self.create(path, 0o644, wait=False)
+        try:
+            _, _, on = self._handle(fh)
+            with on.lock:
+                p = self.staging_path(on.nid)
+                if on.f is not None:
+                    on.f.close()
+                    on.f = None
+                try:
+                    os.replace(src, p)
+                except OSError:              # another disk, or (Windows) the old copy is open elsewhere: copy it
+                    with open(src, "rb") as f, open(p, "wb") as out:
+                        shutil.copyfileobj(f, out, 1 << 20)
+                    os.remove(src)
+                on.f = open(p, "r+b")
+                on.dirty = True
+                on.mtime = mtime if mtime is not None else time.time()
+        finally:
+            self.release(path, fh)
+        return size
 
     def _hidden(self, path):
         """Folders this device doesn't show (hidden_folders): they stay on the drive and on
@@ -507,10 +550,11 @@ class DDriveFS(Operations):
         self.index.delete_node(n["id"])
         return 0
 
-    def create(self, path, mode, fi=None):
+    def create(self, path, mode, fi=None, wait=True):
         self._refuse_hidden(path)
         ppath, name = split_path(path)
-        self._wait_for_staging_space()
+        if wait:
+            self._wait_for_staging_space()
         with self.lock:
             parent = self._get(ppath)
             if not parent["is_dir"]:
