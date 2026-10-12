@@ -161,7 +161,7 @@
       try {
         const info = await DDV.openMessage(v.meta, d.info) || {}, jobs = await DDV.openMessage(v.meta, d.jobs) || [], st = await DDV.openMessage(v.meta, d.status) || {};
         out.push({ id: d.id, rev: d.rev, name: info.name || "A device", windows: info.platform === "win32", home: info.home || "", version: "",
-                   online: d.online, seen: d.seen, running: d.online ? st.running || null : null, raw: Array.isArray(jobs) ? jobs : [],
+                   online: d.online, seen: d.seen, running: d.online ? st.running || null : null, raw: Array.isArray(jobs) ? jobs : [], chat: !!info.chat,
                    fetches: d.online ? (st.fetches || []).map((f) => ({ id: f.id, name: f.name, url: f.url, state: f.state, bytes: f.bytes, total: f.total,
                                                                          folder: f.folder, error: f.error })) : [],
                    jobs: (Array.isArray(jobs) ? jobs : []).map((j) => {
@@ -902,6 +902,49 @@
     return { ok: true };
   };
 
+  // ------------------------------------------------------------ Discord messages: one of the account's computers does the work
+  // Reading Discord and keeping what is said there is done by a computer of the account (DDrive or DDrive
+  // Lite, folder syncing on): the server would otherwise read every message. The page asks that computer
+  // what it would ask a server, through the server in sealed messages, and shows the sealed answers.
+  const NO_COMPUTER = "Messages need one of your own computers to be on: DDrive or DDrive Lite, signed in to this account, with folder syncing turned on. " +
+                      "It reads Discord and seals what it keeps; the server isn't allowed to see any of it.";
+  let chatDevice = "";
+  async function chatCall(method, name, query, body) {
+    const ds = (await devices()).filter((d) => d.online && d.chat);
+    const d = ds.find((x) => x.id === chatDevice) || ds[0];
+    if (!d) return null;
+    chatDevice = d.id;
+    const r = await DDV.call("/api/vault/sync/ask", { method: "POST", json: { device: d.id, wait: 55,
+      sealed: await DDV.sealMessage(v.meta, { do: "chat", method, route: name, query: Object.fromEntries(query || []), body }) } });
+    return DDV.openMessage(v.meta, r.sealed);
+  }
+  async function chatAsk(method, name, query, body) {
+    const r = await chatCall(method, name, query, body);
+    if (!r) {
+      if (name === "chat" && method === "GET") return json({ connected: false, error: NO_COMPUTER, folder: "/Discord", device: "", user: null, counts: { guilds: 0, dms: 0 },
+                                                             logger: null, archive: null, totals: null });
+      throw new Fail(409, NO_COMPUTER);
+    }
+    if (r.redirect) return json({ redirect: r.redirect });
+    if (r.json !== undefined) return json(r.json, r.status || 200);
+    return new Response(DDV.unb64(r.data || ""), { status: r.status || 200, headers: { "Content-Type": r.type || "application/octet-stream" } });
+  }
+  /** Opening an attachment: from Discord while it is still there, else the sealed copy in the account. */
+  async function chatOpen(query) {
+    const r = await chatCall("GET", "chat/open", query, null);
+    if (!r) return E.say(NO_COMPUTER);
+    if (!r.redirect) return E.say("This attachment is gone from Discord and there is no copy of it in your account.");
+    if (/^https?:\/\//.test(r.redirect)) { window.open(r.redirect, "_blank", "noopener"); return; }
+    await v.sync().catch(() => null);
+    E.download(r.redirect);
+  }
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest("a[href^='/api/chat/open']");
+    if (!a || !E.active) return;
+    e.preventDefault();
+    chatOpen(new URL(a.href, location.href).searchParams).catch((err) => E.say(err.message));
+  }, true);
+
   const PASS = /^(account|account\/delete|changelog|vault(\/.*)?)$/;        // about the account itself: the server's to answer
 
   async function answer(url, init) {
@@ -909,9 +952,10 @@
     if (PASS.test(name)) return realFetch(url, init);
     const fn = (method === "GET" ? GET : POST)[name];
     try {
-      if (!fn) throw new Fail(404, "That isn't there for end-to-end encrypted accounts yet.");
       let body = {};
       if (method === "POST" && typeof init.body === "string" && /json/.test((init.headers || {})["Content-Type"] || "")) body = JSON.parse(init.body || "{}");
+      if (!fn && /^chat(\/|$)/.test(name)) return await chatAsk(method, name, url.searchParams, body);
+      if (!fn) throw new Fail(404, "That isn't there for end-to-end encrypted accounts yet.");
       const out = method === "GET" ? await fn(url.searchParams, init) : await fn(body, url.searchParams, init);
       return out instanceof Response ? out : json(out);
     } catch (e) {
@@ -939,6 +983,17 @@
       const paths = url.searchParams.get("paths") ? JSON.parse(url.searchParams.get("paths")) : [url.searchParams.get("path") || "/"];
       E.say("Putting the ZIP together…");
       downloadZip(paths.map(clean), name || "DDrive.zip").then((ok) => { if (ok) E.say(`Downloaded ${name || "DDrive.zip"}`); }, (e) => E.say(e.message || "The download failed"));
+      return true;
+    }
+    if (url.pathname === "/api/chat/export") {
+      chatAsk("GET", "chat/export", url.searchParams).then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "The export failed");
+        const blob = URL.createObjectURL(await r.blob());
+        const a = document.createElement("a");
+        a.href = blob; a.download = name || "discord-messages";
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(blob), 60000);
+      }).catch((e) => E.say(e.message));
       return true;
     }
     if (url.pathname === "/api/contacts/export") {
@@ -986,7 +1041,13 @@
     await E.ready.catch(() => null);
     if (!E.active) return port.postMessage({ pass: true });
     try {
-      const url = new URL(m.url), n = at(url.searchParams.get("path"), "file");
+      const url = new URL(m.url);
+      if (url.pathname === "/api/chat/preview") {
+        const r = await chatAsk("GET", "chat/preview", url.searchParams), body = await r.arrayBuffer();
+        return port.postMessage({ status: r.status, headers: { "Content-Type": r.headers.get("Content-Type") || "image/webp", "Cache-Control": "private, max-age=3600",
+                                                               "X-Content-Type-Options": "nosniff" }, body }, [body]);
+      }
+      const n = at(url.searchParams.get("path"), "file");
       if (url.pathname === "/api/thumb") {
         const r = await GET.thumb(url.searchParams);
         const body = await r.arrayBuffer();

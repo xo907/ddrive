@@ -81,7 +81,7 @@ echo "Built dist/ddrive_${VERSION}_all.deb"
 LITE="build/deb/ddrive-lite_${VERSION}_all"
 rm -rf "$LITE"
 mkdir -p "$LITE/DEBIAN" "$LITE/opt/ddrive-lite/ddrive/_vendor" "$LITE/usr/bin"
-for f in __init__.py lite.py litesync.py vault.py pagepreview.py words.py wordlist.txt sync.py locks.py config.py legacy.py secretbox.py crypto.py fuse_loader.py runtime.py; do
+for f in __init__.py lite.py litesync.py vault.py pagepreview.py vaultchat.py chat.py chatlog.py chatstore.py ws.py logbuf.py webplus.py index.py words.py wordlist.txt sync.py locks.py config.py legacy.py secretbox.py crypto.py fuse_loader.py runtime.py; do
     cp "ddrive/$f" "$LITE/opt/ddrive-lite/ddrive/"
 done
 cp ddrive/_vendor/*.py "$LITE/opt/ddrive-lite/ddrive/_vendor/"

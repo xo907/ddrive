@@ -20,7 +20,7 @@ function ask(client, message) {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin || !event.clientId) return;
-  if (url.pathname !== "/api/file" && url.pathname !== "/api/thumb") return;
+  if (url.pathname !== "/api/file" && url.pathname !== "/api/thumb" && url.pathname !== "/api/chat/preview") return;
   event.respondWith((async () => {
     const client = await self.clients.get(event.clientId);
     if (!client) return fetch(event.request);

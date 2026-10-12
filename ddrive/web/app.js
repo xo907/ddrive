@@ -18,7 +18,7 @@ const isAccount = () => !!status && status.role === "account";
 const OWNER_PAGES = ["log", "health", "resources", "check"];
 // What an end-to-end encrypted account doesn't have yet: each of these needs work done on the device
 // that the server used to do with the files in the clear.
-const E2E_LATER = ["messages"];
+const E2E_LATER = [];
 const notHere = (name) => (isAccount() && OWNER_PAGES.includes(name)) || (!!(status && status.e2e) && E2E_LATER.includes(name));
 
 // ------------------------------------------------------------------ helpers

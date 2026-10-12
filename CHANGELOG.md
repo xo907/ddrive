@@ -3,6 +3,27 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.12.0 (2026-10-11)
+
+- **End-to-end encrypted accounts get Messages**, the last page they were missing: the Discord logger
+  and archiver, with search, the live logger, keyword rules, archiving conversations, attachments
+  and export.
+- For other accounts the server reads Discord and keeps the messages. For these it may not (it would
+  read every message), so **one of your own computers does it**: DDrive or DDrive Lite, signed in to
+  the account, with folder syncing on. It runs the same logger and archiver, and what they keep goes
+  into the account sealed, in `/Discord`, as files every device of the account can open.
+- The Messages page asks that computer what it would otherwise ask the server, through the server in
+  sealed messages, and shows the sealed answers. The server passes them on and can read neither the
+  questions (what you search for) nor the answers (your messages).
+- **The Discord token stays on that computer**, in a file only your user can read. It is typed in the
+  dashboard and goes to the computer sealed; the server never has it. A computer that is logged in
+  carries on logging whenever DDrive Lite runs, with or without the dashboard open.
+- With no such computer on, the page says so; what was saved is still in `/Discord` under Files.
+- The phone app can't do this part (it has no Discord logger); it does previews, saving from links
+  and syncing as before. DDrive Lite's package now carries what Messages needs.
+- With this, an end-to-end account has every page of the dashboard. Still not there for it: file
+  requests, and a drive letter through DDrive Lite.
+
 ## 2.11.0 (2026-10-11)
 
 - **End-to-end encrypted accounts get share links**, and the Shared page with them: a file or a

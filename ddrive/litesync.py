@@ -570,7 +570,43 @@ class VaultAgent(Agent):
         self.fetch_private = False           # only addresses on the internet are fetched (as the host does it)
         self._fetch_lock = threading.Lock()
         data_dir = data_dir or os.path.join(default_data_dir(), "lite")
+        self._key, self._chat, self._chat_lock = key, None, threading.Lock()
+        self._chat_dir = os.path.join(data_dir, "messages-" + device)
         super().__init__(client, device, name, data_dir, mount_point, drive=VaultDrive(self.vault, data_dir))
+
+    # Discord messages (vaultchat.py): the logger and archiver run here, for the account's Messages page.
+    def chat_service(self):
+        with self._chat_lock:
+            if self._chat is None:
+                from .vaultchat import ChatService
+                self._chat = ChatService(self.client, self._key, self._chat_dir, self.name)
+            return self._chat
+
+    def start(self):
+        super().start()
+        if os.path.exists(os.path.join(self._chat_dir, "discord-token")):      # logged in to Discord here: the logger carries on
+            threading.Thread(target=self._chat_carry_on, name="Messages", daemon=True).start()
+        return self
+
+    def _chat_carry_on(self):
+        try:
+            self.chat_service()
+        except Exception as e:
+            log.warning("Discord messages could not be started: %s", e)
+
+    def stop(self):
+        super().stop()
+        with self._chat_lock:
+            chat, self._chat = self._chat, None
+        if chat is not None:
+            chat.stop()
+
+    def _chat_answer(self, c):
+        try:
+            result = self.chat_service().call(str(c.get("method") or "GET"), str(c.get("route") or ""), c.get("query"), c.get("body"))
+        except Exception as e:
+            result = {"status": 500, "json": {"error": f"Messages could not be started on {self.name}: {e}"}}
+        self._reply(c.get("req"), result)
 
     # What the host does for other accounts and may not do for this one, because it would see what is
     # fetched: reading a web page for a bookmark's preview, and saving a file from a web address. One of
@@ -580,6 +616,8 @@ class VaultAgent(Agent):
         if what == "preview":                # (on a thread of its own: a slow site must not hold up the rest)
             threading.Thread(target=lambda: self._reply(c.get("req"), self._preview(str(c.get("url") or ""))),
                              name="Preview", daemon=True).start()
+        elif what == "chat":
+            threading.Thread(target=self._chat_answer, args=(c,), name="Messages", daemon=True).start()
         elif what == "fetch":
             threading.Thread(target=self._fetch, args=(c,), name="Fetch", daemon=True).start()
         elif what == "fetch-cancel":
@@ -694,7 +732,7 @@ class VaultAgent(Agent):
     def _say_hello(self):
         got = self.client._json("/api/vault/sync/hello", {
             "device": self.device, "rev": self.rev, "jobs": self._seal(self.raw),
-            "info": self._seal({"name": self.name, "platform": sys.platform, "home": os.path.expanduser("~")})})
+            "info": self._seal({"name": self.name, "platform": sys.platform, "home": os.path.expanduser("~"), "chat": True})})
         return {"rev": got["rev"], "jobs": self._jobs(got["jobs"]), "version": got.get("version")}
 
     def _ask(self, wait):

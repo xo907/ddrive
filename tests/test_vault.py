@@ -535,6 +535,75 @@ class VaultSyncTest(VaultTest):
                 for needle in (MARK, b"secret report", b"From the web"):
                     self.assertNotIn(needle, data, os.path.join(folder, f))
 
+    def test_messages_are_kept_by_the_device_sealed(self):
+        """Discord messages for an end-to-end account: the account's computer reads Discord (a made-up one
+        here) and seals what it keeps; the page asks it through the host, which learns nothing."""
+        import test_chat
+        fake = test_chat.FakeAccount
+        fake.history, fake.downloads, fake.calls, fake.gone, fake.refreshed = test_chat.history(), 0, 0, False, []
+        svc = self.agent.chat_service()
+        svc.chat.make_api, svc.chat.make_gateway = fake, test_chat.FakeGateway
+
+        def ask(method, route, query=None, body=None):
+            got = self.page._json("/api/vault/sync/ask", {"device": DEVICE, "wait": 30, "sealed": self.seal(
+                {"do": "chat", "method": method, "route": route, "query": query or {}, "body": body})})
+            return self.open(got["sealed"])
+        self.assertTrue(self.open(self.shown()["info"])["chat"])       # the page knows this device can do it
+        state = ask("GET", "chat")["json"]
+        self.assertEqual((state["connected"], state["device"]), (False, "my laptop"))
+        self.assertEqual(ask("POST", "chat/connect", body={"token": "wrong"})["status"], 400)
+        self.assertEqual(ask("POST", "chat/connect", body={"token": "good-token"})["status"], 200)
+        self.assertEqual(ask("GET", "chat")["json"]["user"]["username"], "dennis")
+        self.assertEqual([d["name"] for d in ask("GET", "chat/directory")["json"]["dms"]], ["Anna"])
+        token_file = os.path.join(self.tmp, "lite", "messages-" + DEVICE, "discord-token")
+        with open(token_file) as f:
+            self.assertEqual(f.read(), "good-token")                   # the token stays on the device
+        # a conversation is archived, with its attachment
+        self.assertEqual(ask("POST", "chat/archive/start", body={"targets": [{"kind": "dm", "id": "500"}], "downloadAttachments": True})["status"], 200)
+
+        def archived():
+            a = ask("GET", "chat")["json"]["archive"]
+            return a if a and not a["running"] else None
+        done = self.until(archived, "the archive")
+        self.assertEqual((done["status"], done["stats"]["saved"], done["stats"]["files"]), ("done", 3, 1), done)
+        found = ask("GET", "chat/messages", {"channel": "500"})["json"]
+        self.assertEqual([m["content"] for m in found["messages"]], ["see you 100% soon", "hello Anna", "hi there"])
+        self.assertEqual([m["content"] for m in ask("GET", "chat/messages", {"q": "100%"})["json"]["messages"]], ["see you 100% soon"])
+        self.assertEqual([(x["name"], x["count"]) for x in ask("GET", "chat/places")["json"]["items"]], [("Anna", 3)])
+        out = ask("GET", "chat/export", {"format": "txt", "channel": "500"})
+        self.assertIn(b"hello Anna", base64.b64decode(out["data"]))
+        self.assertIn("text/plain", out["type"])
+        self.assertTrue(ask("GET", "chat/open", {"id": "2", "a": "920"})["redirect"].startswith("https://cdn.example/notes.txt"))
+        fake.gone = True                                               # Discord no longer has it: the sealed copy in the account
+        self.assertEqual(ask("GET", "chat/open", {"id": "2", "a": "920"})["redirect"],
+                         "/api/file?path=/Discord/Direct%20messages/Anna%20%5B500%5D/files/920-notes.txt")
+        # the logger records what arrives, with what an edited message said before
+        self.assertEqual(ask("POST", "chat/logger", body={"on": True})["status"], 200)
+        gw = test_chat.FakeGateway.last
+        gw.emit("MESSAGE_CREATE", test_chat.msg(21, 500, test_chat.ANNA, "pizza tonight?", 5))
+        gw.emit("MESSAGE_UPDATE", {"id": "21", "channel_id": "500", "content": "pasta tonight?", "edited_timestamp": "2024-03-05T11:00:00+00:00"})
+        self.assertGreaterEqual(ask("POST", "chat/flush", body={})["json"]["written"], 2)
+        # another device of the account finds it all in /Discord, as ordinary sealed files
+        v = self.new_device()
+        lines = [json.loads(x) for x in v.read("/Discord/Direct messages/Anna [500]/2024-03-01 to 2024-03-03.jsonl").decode().splitlines()]
+        self.assertEqual([r["content"] for r in lines], ["hi there", "hello Anna", "see you 100% soon"])
+        self.assertEqual(v.read("/Discord/Direct messages/Anna [500]/files/920-notes.txt"), b"hello")
+        live = [n for n in v.files() if n["name"].endswith("my laptop.jsonl")]
+        self.assertEqual(len(live), 1)
+        # and the host has none of it: not a message, not a name, not the token
+        held = json.dumps(self.web.sealed._devs[(next(iter(self.web.accounts._recs)), DEVICE)], default=str)
+        for folder, _, files in os.walk(os.path.join(self.tmp, "aaaa")):
+            for f in files:
+                with open(os.path.join(folder, f), "rb") as fh:
+                    held += fh.read().decode("latin-1")
+        for needle in ("good-token", "hello Anna", "pizza", "Anna", "Direct messages", "dennis", "notes.txt"):
+            self.assertNotIn(needle, held)
+        # logging out forgets the token
+        self.assertEqual(ask("POST", "chat/disconnect", body={})["status"], 200)
+        self.assertFalse(os.path.exists(token_file))
+        self.assertEqual(ask("GET", "chat/nothing")["status"], 404)
+        self.assertEqual(ask("GET", "status")["status"], 404)          # only Messages is answered this way
+
     def test_the_commands(self):
         os.environ["DDRIVE_LITE_CONFIG"] = os.path.join(self.tmp, "lite.json")
         self.addCleanup(os.environ.pop, "DDRIVE_LITE_CONFIG")
