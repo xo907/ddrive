@@ -58,3 +58,15 @@ h1 { font-size: 26px; line-height: 1.25; margin: 4px 0 2px; overflow-wrap: anywh
 .away #view::after { content: "Hidden while this window is not in front."; color: var(--muted); }
 @media print { html.guard body { display: none !important; } }
 @media (max-width: 560px) { .card { padding: 18px 14px; border-radius: 14px; } h1 { font-size: 21px; } .row { flex-wrap: wrap; } }
+/* everything fits in the window: no page scrollbar; a long text or a long list scrolls inside its own box */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+.top { width: 100%; padding-top: 16px; flex: none; }
+main { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; padding: 14px 16px 12px; }
+.card { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#view { flex: 0 1 auto; min-height: 0; margin: 14px 0; }
+#view img, #view video { max-height: calc(100vh - 330px); }
+#view iframe { height: calc(100vh - 330px); }
+#view pre { max-height: calc(100vh - 330px); }
+#files { flex: 0 1 auto; min-height: 52px; overflow: auto; }
+.small { flex: none; margin: 10px 0 0; }

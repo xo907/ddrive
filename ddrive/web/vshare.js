@@ -105,7 +105,7 @@
   async function painted(parts, type, view) {
     const bmp = await createImageBitmap(new Blob(parts, { type }));
     const N = 4, dpr = Math.min(2, window.devicePixelRatio || 1);
-    const scale = Math.min(1, Math.min(view.clientWidth || 800, 1600) / bmp.width, Math.round(window.innerHeight * 0.75) / bmp.height);
+    const scale = Math.min(1, Math.min(view.clientWidth || 800, 1600) / bmp.width, Math.max(120, window.innerHeight - 330) / bmp.height);
     const w = Math.max(N, Math.floor(bmp.width * scale / N) * N), h = Math.max(N, Math.floor(bmp.height * scale / N) * N);
     const box = el("div", { className: "tiles" });
     box.style.width = `${w}px`; box.style.height = `${h}px`;

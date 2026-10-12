@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.15.2 (2026-10-12)
+
+- The share link page (`/v/...`) fits in the window: no page scrollbar. A picture, film or text is
+  sized to what is left of the window; a long text or a long list of files scrolls inside its own
+  box. The "End-to-end encrypted" badge at the top right is gone.
+
 ## 2.15.1 (2026-10-12)
 
 - The share link page of end-to-end encrypted accounts (`/v/...`) got a proper look: a header, a
