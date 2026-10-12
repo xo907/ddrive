@@ -186,8 +186,8 @@ class MoveTest(helpers.DriveTest):
         with self.assertRaises(lite.HostError) as e:
             self.src.client._json("/api/vault/move/peer?id=" + "a" * 16)
         self.assertEqual(e.exception.status, 404)
-        # accounts that aren't end-to-end encrypted, and the owner, don't take part
-        self.assertEqual(self.form("/signup", {"step": "new"})[0], 200)
+        # accounts that aren't end-to-end encrypted aren't made any more, and the owner doesn't take part
+        self.assertEqual(self.form("/signup", {"step": "new"})[0], 400)
         owner = self.sign_in_owner()
         self.assertEqual(self.http("POST", "/api/vault/move/open", {"pub": "x"}, owner)[0], 403)
         # the owner sees the moves and can stop them, but can't delete an account that is moving

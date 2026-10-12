@@ -89,21 +89,47 @@ E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/obj
     vault/sync/hello vault/sync/poll vault/sync/report vault/sync/answer vault/sync/bye""".split())
 
 
-# What an admin account (a co-owner, accounts.py) may not do although it signs in as the owner: change
-# or see how the owner signs in. With these it could make itself a sign-in that switching it off
-# doesn't end.
+# An account of the earlier kind (its key is on this computer: accounts.py) is retired: it reads what
+# it has and moves it into an end-to-end encrypted account (accounts/e2e signs its page in to that
+# one), and changes nothing any more. Tests of what such accounts did while they were made switch
+# this off.
+RETIRE_EARLIER_ACCOUNTS = True
+RETIRED_POST = frozenset("""logout account/delete accounts/e2e locks/unlock locks/lock""".split())
+
+# How the owner signs in: only the owner's to see or change (an answer with one of these is never
+# compressed either).
 OWNER_ONLY = frozenset(("/api/signin/passkey/options", "/api/signin/passkey/register", "/api/signin/passkey/remove",
                         "/api/signin/phrase", "/api/webdav/password"))
 
+# What an admin account (accounts.py) may ask of the drive itself, next to what any end-to-end
+# encrypted account may ask about its own files: the settings, the accounts and other admins, health
+# and the log. Its page says which of the two it means with the header X-DD-Admin: 1 (e2e-api.js).
+# Not here, so not an admin's: the owner's files and everything that lists or opens them, and how the
+# owner signs in (with that it could make itself a sign-in that switching it off doesn't end).
+ADMIN_GET = frozenset("""status signin settings accounts accounts/moves log check changelog""".split())
+ADMIN_POST = frozenset("""logout settings accounts/create accounts/admin accounts/invite accounts/invite/revoke
+    accounts/disable accounts/delete accounts/restore accounts/moves/cancel log/clear
+    repair repair/recheck resources/clean check/start check/stop check/remove""".split())
 
-def account_may(method, route, e2e=False):
-    name = route[5:].strip("/") if route.startswith("/api/") else None
+
+def _api_name(route):
+    return route[5:].strip("/") if route.startswith("/api/") else None
+
+
+def admin_may(method, route):
+    return _api_name(route) in (ADMIN_GET if method == "GET" else ADMIN_POST)
+
+
+def account_may(method, route, e2e=False, retired=False):
+    name = _api_name(route)
     if name is None:
         return False
     if e2e:
         return name in (E2E_GET if method == "GET" else E2E_POST)
     if name == "vault" or name.startswith("vault/"):
         return False
+    if retired and method != "GET":
+        return name in RETIRED_POST
     if name == "chat" or name.startswith("chat/"):          # their own Discord messages
         return True
     return name in (ACCOUNT_GET if method == "GET" else ACCOUNT_POST)
@@ -119,12 +145,10 @@ def owner_key(cfg):
     return hashlib.sha256(b"DiscordDrive-owner:" + cfg.web_token.encode()).hexdigest()
 
 
-def session_cookie(web_token, account="", admin=""):
+def session_cookie(web_token, account=""):
     """A signed session (WebServer.new_session). Whoever has the dashboard's secret (the config file)
     can make one: the command line signs in to the running dashboard that way (accountscli.py)."""
     data = {"a": account, "t": int(time.time()), "n": _b64(os.urandom(9))}
-    if admin and not account:
-        data["m"] = admin
     payload = _b64(json.dumps(data, separators=(",", ":")).encode())
     secret = hashlib.sha256(b"DiscordDrive-web:" + (web_token or "").encode() + b"session").digest()
     sig = _b64(hmac.new(secret, payload.encode(), hashlib.sha256).digest())
@@ -275,11 +299,10 @@ class WebServer:
     def _secret(self, purpose=b"") -> bytes:
         return hashlib.sha256(b"DiscordDrive-web:" + (self.cfg.web_token or "").encode() + purpose).digest()
 
-    def new_session(self, account="", admin=""):
+    def new_session(self, account=""):
         """A session cookie for the owner ('') or for an account (its id). "n" makes every sign-in its
-        own session (each browser unlocks locked folders for itself). An admin account signs in as the
-        owner, with its id in "m": the session ends when the admin account is switched off or deleted."""
-        return session_cookie(self.cfg.web_token, account, admin)
+        own session (each browser unlocks locked folders for itself)."""
+        return session_cookie(self.cfg.web_token, account)
 
     def _session_data(self, value):
         """What a valid, unexpired session cookie says, or None."""
@@ -298,8 +321,7 @@ class WebServer:
             return None
 
     def session(self, value):
-        """Who a session cookie belongs to: '' the owner (or an admin account), an account's id, or None
-        (signed out)."""
+        """Who a session cookie belongs to: '' the owner, an account's id, or None (signed out)."""
         data = self._session_data(value)
         if data is None:
             return None
@@ -307,15 +329,9 @@ class WebServer:
         if account is None:
             return "" if data.get("u") else None       # a session from before accounts: the owner's
         if account == "":
-            if data.get("m"):                          # an admin account: only while it may sign in
-                return "" if self.accounts.admin_ok(data["m"]) else None
-            return ""
+            # ("m": an admin account from before they were end-to-end encrypted signed in as the owner)
+            return None if data.get("m") else ""
         return account if self.accounts.active(str(account)) is not None else None
-
-    def session_admin(self, value):
-        """The admin account a session belongs to ('' for the owner's own sessions and accounts')."""
-        data = self._session_data(value) or {}
-        return str(data.get("m") or "") if data.get("a") == "" else ""
 
     def locked_for(self, addr):
         with self._fail_lock:
@@ -427,6 +443,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     _acct = None
     _space = None
     _e2e = False                 # the account being served is end-to-end encrypted (vault.py)
+    _admin = ""                  # the admin account that asks this of the drive itself (ADMIN_GET, ADMIN_POST)
+    _retired = False             # the account being served is of the earlier kind (RETIRED_POST)
 
     @property
     def app(self):
@@ -570,6 +588,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                    {"Set-Cookie": self._cookie_for(self.app.new_session())})
 
     def _get_api_signin(self):
+        if self._admin:                          # how the owner signs in is the owner's to see
+            return self._json({"admin": self._admin})
         rp, _ = self._rp()
         cfg = self.drive.cfg
         secure = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip() == "https" or rp == "localhost"
@@ -579,7 +599,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                           "last": p.get("last"), "here": p.get("rp") == rp} for p in cfg.web_passkeys or []],
             "encrypted": bool(cfg.encryption_enabled and cfg.encryption_key), "webdav": bool(cfg.webdav_enabled),
             "dav_user": cfg.web_user or "", "dav_password": bool(cfg.web_password),
-            "admin": self.app.session_admin(self._cookie()),
+            "admin": "",
         })
 
     def _post_api_signin_passkey_options(self):
@@ -718,6 +738,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self.rfile.n = 0                         # from here on: bytes of this request's body
         self._locks_seen = None                  # (a connection is kept for several requests)
         self._move_body = {}
+        self._admin, self._e2e, self._retired = "", False, False
         try:
             self._route(method)
         finally:
@@ -785,13 +806,23 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._error(401, "Signed out. Reload the page to sign in.")
             if method == "POST" and self.headers.get("X-DD") != "1":
                 return self._error(403, "missing X-DD header")
-            if who == "" and route in OWNER_ONLY and self.server.app.session_admin(self._cookie()):
-                return self._error(403, "Only the owner can change how the owner signs in.")
+            if self.headers.get("X-DD-Admin") == "1":     # an admin account asks something of the drive itself
+                if not who or not self.server.app.accounts.admin_ok(who):
+                    return self._error(403, "Only an admin account can do that.")
+                if not admin_may(method, route):
+                    return self._error(403, "Only the owner can change how the owner signs in." if route in OWNER_ONLY
+                                       else "An admin account manages the drive; it doesn't open the owner's files.")
+                self._admin, who = who, ""
             if who:                              # an account: its own drive, and only what accounts may do
-                e2e = bool((self.server.app.accounts.active(who) or {}).get("e2e"))
-                if not account_may(method, route, e2e):
-                    return self._error(403, "An end-to-end encrypted account's files are only opened on your own device."
-                                       if e2e else "Only the owner of this drive can do that.")
+                accounts = self.server.app.accounts
+                e2e = bool((accounts.active(who) or {}).get("e2e"))
+                retired = RETIRE_EARLIER_ACCOUNTS and accounts.retired(who)
+                if not account_may(method, route, e2e, retired):
+                    return self._error(403, "An end-to-end encrypted account's files are only opened on your own device." if e2e
+                                       else "This account is of an earlier kind that can only be read now. Move it into an "
+                                            "end-to-end encrypted account to carry on." if retired and method != "GET"
+                                       else "Only the owner of this drive can do that.")
+                self._retired = retired
                 if (e2e and method == "POST" and (route.startswith("/api/vault/") or route == "/api/account/delete")
                         and not route.startswith("/api/vault/move/") and self.server.app.moves.moving(who)):
                     return self._error(423, "This account is moving into another one: nothing in it can change now.")
@@ -907,21 +938,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if wait:
             return self._signin(f"Too many failed tries. Try again in {int(wait) + 1} seconds.", 429)
         if form.get("auth"):
-            # An end-to-end encrypted account: its words stayed on the device, this is what it made from them.
-            # An admin account's words sign in the same way, as the owner.
+            # An end-to-end encrypted account (an admin account is one): its words stayed on the device,
+            # this is what it made from them.
             try:
-                auth = bytes.fromhex(form["auth"])
+                rec = app.accounts.find(bytes.fromhex(form["auth"]))
             except ValueError:
-                auth = b""
-            rec = app.accounts.find(auth)
-            admin = app.accounts.find_admin(auth) if rec is None else None
-            ok = admin is not None or (rec is not None and bool(rec.get("e2e")))
+                rec = None
+            ok = rec is not None and bool(rec.get("e2e"))
             app.note_login(addr, ok)
             if not ok:
                 return self._signin("Nobody here has an end-to-end encrypted account with those 24 words.", 401)
-            if admin is not None:
-                log.info("Web dashboard: admin account %s signed in from %s", admin["id"], addr)
-                return self._redirect("/", self._cookie_for(app.new_session("", admin=admin["id"])))
+            if rec.get("admin"):
+                log.info("Web dashboard: admin account %s signed in from %s", rec["id"], addr)
             return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
         try:
             key = words.phrase_to_key(form.get("phrase") or "")
@@ -929,20 +957,22 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             app.note_login(addr, False)
             return self._signin(f"That phrase isn't right: {e}.", 401)
         owner = app.owner_key()
-        admin = ""
         if owner and hmac.compare_digest(key.hex(), owner):
             who = ""
         else:
-            rec = app.accounts.find(key)
+            rec = app.accounts.find(key)             # (the words came here: an account of the earlier kind)
+            if rec is not None and rec.get("admin") and not rec.get("e2e"):
+                app.note_login(addr, True)
+                log.warning("Web dashboard: admin account %s from before admins were end-to-end encrypted tried to "
+                            "sign in from %s", rec["id"], addr)
+                return self._signin("This admin account was made before admin accounts were end-to-end encrypted, and "
+                                    "can't sign in any more. Ask the owner to make you a new one.", 403)
             who = rec["id"] if rec is not None else None
-            if rec is not None and rec.get("admin"):
-                who, admin = "", rec["id"]
-                log.info("Web dashboard: admin account %s signed in from %s", admin, addr)
         app.note_login(addr, who is not None)
         if who is None:
             log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
             return self._signin("Those are 24 valid words, but nobody here has that phrase.", 401)
-        self._redirect("/", self._cookie_for(app.new_session(who, admin=admin)))
+        self._redirect("/", self._cookie_for(app.new_session(who)))
 
     def _signup(self, method):
         """Making an account: the page gives 24 new words, and the account exists once they are confirmed."""
@@ -972,6 +1002,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                     auth = b""
                 rec = accounts.create_e2e(auth, invite, addr)
                 return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
+            if RETIRE_EARLIER_ACCOUNTS:              # no words are made here any more: this computer would know them
+                raise AccountError("Accounts are made in your browser, which keeps the 24 words to itself. "
+                                   "That needs JavaScript and an https address (or the computer itself).")
             if form.get("step") == "confirm":
                 rec = accounts.create(form.get("phrase"), form.get("ticket"), invite, addr)
                 return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
@@ -1031,6 +1064,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if self._acct is not None:               # an account sees its own storage, nothing of the computer
             return self._json({
                 "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True, "e2e": self._e2e,
+                "admin": self.server.app.accounts.admin_ok(d.id),     # it may also manage the drive (ADMIN_GET)
+                "retired": self._retired,                              # of the earlier kind: read and move out only
                 "stats": st, "uploads": self._uploads(), "downloads": len(d.cache.active), "queued": len(d.uploader._pending),
                 "quota": {"bytes": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]},
                 "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
@@ -1046,8 +1081,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({
             "version": __version__,
             "role": "owner",
-            "admin": self.app.session_admin(self._cookie()),     # signed in with an admin account's words
-            "user": self.app.user_name(),
+            "admin": self._admin,                    # an admin account asks: its page shows what manages the drive
+            "user": "" if self._admin else self.app.user_name(),
             "signup": self.app.accounts.mode(),
             "accounts": self.app.accounts.count(),
             "mount": d.cfg.mount_point,
@@ -1055,7 +1090,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "encrypted": d.crypto is not None,
             "bots": getattr(d.backend, "upload_slots", 1),
             "stats": st,
-            "uploads": self._uploads(),
+            "uploads": [] if self._admin else self._uploads(),       # (these name the owner's files)
             "downloads": len(d.cache.active) if d.cache else 0,
             "queued": len(d.uploader._pending) if d.uploader else 0,
             "saved": dict(d.uploader.stats) if d.uploader else {},
@@ -1072,7 +1107,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "public": self.public_base(),
             "snapshots": {"interval": d.cfg.snapshot_interval_hours, "keep": d.cfg.snapshot_keep_days},
             "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
-            "fetches": self._fetch_list(),
+            "fetches": [] if self._admin else self._fetch_list(),
             "resources": resources.snapshot(d),
         })
 
@@ -1182,17 +1217,24 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             auth = b""
         if len(auth) != 32:
             raise ApiError(400, "That isn't a sign-in key.")
-        accounts = self.app.accounts
+        accounts = self.server.app.accounts
+        me = self._acct.id if self._acct is not None else ""     # an account of the earlier kind moves itself out
         rec = accounts.find(auth)
         made = False
         if rec is None:
             if not body.get("create"):
                 raise ApiError(404, "There is no end-to-end encrypted account with those words here.")
+            if me and accounts.successor(me):
+                raise ApiError(409, "This account made an end-to-end encrypted account to move into already: "
+                                    "use that one's 24 words (“Use an account I have”).")
             rec = accounts.create_e2e(auth, owner=True)
             made = True
+            if me:
+                accounts.successor(me, rec["id"])
+                log.info("Web dashboard: account %s made end-to-end encrypted account %s to move into.", me, rec["id"])
         if not rec.get("e2e"):
             raise ApiError(400, "Those words belong to an account of the earlier kind, which isn't end-to-end encrypted.")
-        self._json({"ok": True, "id": rec["id"], "made": made, "session": self.app.new_session(rec["id"])})
+        self._json({"ok": True, "id": rec["id"], "made": made, "session": self.server.app.new_session(rec["id"])})
 
     def _get_api_accounts(self):
         """Everything about accounts, for the owner's Settings."""
@@ -1214,39 +1256,34 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"ok": True, "count": count})
 
     def _post_api_accounts_create(self):
-        """Make an account for somebody (accounts.create_for). End-to-end encrypted: the page made the
-        24 words and sends only the sign-in key made from them ("auth"). {"kind": "phrase"}: an account
-        of the earlier kind, whose words are made here and are in this answer only."""
-        body = self._body_json()
-        auth = None
-        if body.get("kind") != "phrase":
-            try:
-                auth = bytes.fromhex(str(body.get("auth") or ""))
-            except ValueError:
-                auth = b""
-        try:
-            phrase, rec = self.app.accounts.create_for(auth, str(body.get("note") or ""))
-        except AccountError as e:
-            raise ApiError(409 if "already" in str(e) else 400 if "sign-in key" in str(e) else 503, str(e)) from None
-        by = self.app.session_admin(self._cookie())
-        log.info("Web dashboard: account %s was made by %s%s.", rec["id"], f"admin account {by}" if by else "the owner",
-                 " (end-to-end encrypted)" if rec.get("e2e") else "")
-        out = {"ok": True, "id": rec["id"], "e2e": bool(rec.get("e2e"))}
-        if phrase:
-            out["phrase"] = phrase
-        self._json(out)
+        """Make an account for somebody (accounts.create_for). It is end-to-end encrypted: the page made
+        the 24 words and sends only the sign-in key made from them ("auth"). No words are made here."""
+        self._make_account(admin=False)
 
     def _post_api_accounts_admin(self):
-        """Make an admin account: a co-owner with 24 words of its own (accounts.create_admin). The words
-        are in this answer only."""
+        """Make an admin account (accounts.create_admin): an end-to-end encrypted account, made the
+        same way, that may also manage the drive."""
+        self._make_account(admin=True)
+
+    def _make_account(self, admin):
         body = self._body_json()
+        if not body.get("auth"):
+            raise ApiError(400, "Accounts are end-to-end encrypted: their 24 words are made in the browser, which needs an "
+                                "https address (or the computer that runs the drive). No words are made by the server.")
         try:
-            phrase, rec = self.app.accounts.create_admin(str(body.get("note") or ""))
+            auth = bytes.fromhex(str(body.get("auth") or ""))
+        except ValueError:
+            auth = b""
+        try:
+            rec = self.app.accounts.create_for(auth, str(body.get("note") or ""), admin=admin)
         except AccountError as e:
-            raise ApiError(409, str(e)) from None
-        by = self.app.session_admin(self._cookie())
-        log.warning("Web dashboard: admin account %s was made by %s.", rec["id"], f"admin account {by}" if by else "the owner")
-        self._json({"ok": True, "id": rec["id"], "phrase": phrase})
+            raise ApiError(409 if "already" in str(e) else 400 if "sign-in key" in str(e) else 503, str(e)) from None
+        by = f"admin account {self._admin}" if self._admin else "the owner"
+        if admin:
+            log.warning("Web dashboard: admin account %s was made by %s.", rec["id"], by)
+        else:
+            log.info("Web dashboard: account %s was made by %s (end-to-end encrypted).", rec["id"], by)
+        self._json({"ok": True, "id": rec["id"], "e2e": True, "admin": bool(rec.get("admin"))})
 
     def _post_api_accounts_invite(self):
         body = self._body_json()

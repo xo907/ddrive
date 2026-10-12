@@ -14,6 +14,8 @@
   const PIECE = 8 * 1024 * 1024;
   const BY = "moved from the drive";
   let job = null;                            // what is running or was stopped: {vault, stop, done, ...}
+  // (An account of the earlier kind moves itself out the same way: what it is told is worded for it.)
+  const mine = () => isAccount();
 
   /** A file on the owner's drive, as the sealing code reads a file: a size, and pieces of it on request. */
   function driveFile(it, signal) {
@@ -143,10 +145,13 @@
         const failed = job.failed || [];
         body.replaceChildren(...[
           h("p", { style: "margin:0 0 14px" }, h("b", {}, failed.length ? `${st.n - failed.length} of ${st.todo} files were copied.` : st.todo ? `Done: ${plural(st.todo, "file")} copied.` : "Everything is in the account already."),
-            ` The account now holds what the drive holds (${plural(st.files, "file")}).`),
+            ` The ${mine() ? "new " : ""}account now holds what ${mine() ? "this one" : "the drive"} holds (${plural(st.files, "file")}).`),
           failed.length ? h("div", {}, p(`${plural(failed.length, "file")} could not be copied. Press “Try those again”.`, "err"),
                             h("pre", { class: "move-log" }, failed.slice(0, 30).join("\n"))) : null,
-          p("Nothing on the drive was changed or deleted. To use the account, sign out here and sign in with its 24 words. "
+          p(mine() ? "Nothing here was changed or deleted. To use the new account, sign out and sign in with its 24 words. When you have seen that everything is there, sign in here once more "
+                     + "and delete this account (Your account, Delete my account): until then the server can still read what is in it. "
+                     + "Password-locked folders were not copied unless they were unlocked. Earlier versions, snapshots and share links are not copied."
+                   : "Nothing on the drive was changed or deleted. To use the account, sign out here and sign in with its 24 words. "
             + "Folders that are hidden or password-locked on this device were not copied unless they were unlocked. Earlier versions, snapshots and share links stay with the drive."),
           actions(failed.length ? h("button", { class: "btn", type: "button", onclick: progress }, "Try those again") : null,
                   h("button", { class: "btn ghost", type: "button", onclick: m.close }, "Close"))].filter(Boolean));
@@ -199,9 +204,10 @@
         return;
       }
       body.replaceChildren(
-        p("Your drive's files can be read by the computer that runs it: it holds the drive's key. An end-to-end encrypted account's can't: they are sealed on your own devices with 24 words that never leave them."),
-        p("This copies everything on the drive into such an account: folders, files with their dates, stars, and your notes, contacts, bookmarks and saved messages, which the account's pages then show. "
-          + "It is done in this browser, so the server never gets the account's key. Nothing on the drive is changed."),
+        p(mine() ? "This account's files can be read by the computer that runs the drive: it holds the account's key. An end-to-end encrypted account's can't: they are sealed on your own devices with 24 words that never leave them."
+                 : "Your drive's files can be read by the computer that runs it: it holds the drive's key. An end-to-end encrypted account's can't: they are sealed on your own devices with 24 words that never leave them."),
+        p(`This copies everything ${mine() ? "in this account" : "on the drive"} into such an account: folders, files with their dates, stars, and your notes, contacts, bookmarks and saved messages, which the account's pages then show. `
+          + `It is done in this browser, so the server never gets the account's key. Nothing ${mine() ? "here" : "on the drive"} is changed.`),
         actions(h("button", { class: "btn", type: "button", onclick: fresh }, "Make a new account"),
                 h("button", { class: "btn ghost", type: "button", onclick: existing }, "Use an account I have")));
     }

@@ -18,6 +18,7 @@ from ddrive.crypto import AuthenticationError
 class AccountsTest(helpers.DriveTest):
     def setUp(self):
         super().setUp()
+        self.earlier_accounts()
         self.d = self.drive(web_token="secret-token")
         self.web = self.d.start_web(port=0)
         self.acc = self.web.accounts

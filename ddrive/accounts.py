@@ -33,13 +33,16 @@ that Discord and other accounts can't read; whoever runs the server could.
 Who may make an account is `signup_mode`: closed (nobody), invite (with a code made in the owner's
 Settings) or public (anybody who can reach the dashboard).
 
-An admin account (create_admin) is a co-owner: 24 words of its own that sign in to the owner's
-dashboard with everything the owner can do, except change how the owner signs in (passkeys, the
-recovery phrase, the WebDAV password). It has no storage of its own, so the computer keeps no key of
-it, only the check that recognises its words. Switching it off or deleting it ends its sessions at
-once: that is what makes it better than handing out the recovery phrase. A browser signs it in like an
-end-to-end encrypted account, with the sign-in key it makes from the words (vault.auth_key) and not
-the words: "auth" in its record is the check that recognises that key (find_admin).
+New accounts are end-to-end encrypted (vault.py): their 24 words are made on a device and never come
+here, so what is said above about the key is true only of accounts of the earlier kind, made before.
+Those are retired (web.py): they can still be read, and moved into an end-to-end encrypted one.
+
+An admin account (create_admin) is an end-to-end encrypted account that may also manage this
+computer's drive: its settings, its accounts and other admins, its health and its log (web.py,
+ADMIN_GET and ADMIN_POST). It has storage of its own like any account, which this computer can't
+read, and it doesn't open the owner's files. Switching it off or deleting it ends its sessions at
+once: that is what makes it better than handing out the recovery phrase. Admin accounts from before
+they were end-to-end encrypted (2.16.0 to 2.17.2: "admin" without "e2e") can't sign in any more.
 """
 
 import gzip
@@ -61,7 +64,7 @@ from .crypto import KeyRing
 from .journal import Journal, OP_PREFIX, _hostname
 from .logbuf import hush_accounts, quiet
 from .shares import Shares
-from . import vault, words
+from . import words
 
 log = logging.getLogger("ddrive.accounts")
 
@@ -559,49 +562,57 @@ class Accounts:
             raise AccountError("That isn't a sign-in key.")
         return self._make(auth, invite, addr, e2e=True, owner=owner)
 
-    def create_admin(self, note=""):
-        """Make an admin account (a co-owner, see above). Only the owner or another admin makes one,
-        so sign-up rules don't apply. Returns (its 24 words, its record): the words are shown once."""
-        key = secrets.token_bytes(32)
-        aid = account_id(key)
+    def create_admin(self, auth: bytes, note=""):
+        """Make an admin account (see above). Only the owner or another admin makes one, so sign-up
+        rules don't apply. Like any account's, its 24 words were made in a browser: `auth` is the
+        sign-in key made from them. Returns its record."""
+        return self.create_for(auth, note, admin=True)
+
+    def create_for(self, auth: bytes, note="", admin=False):
+        """The owner (or an admin) makes an account for somebody from the dashboard, whatever sign-up
+        allows. It is end-to-end encrypted: the browser that asks made the 24 words and kept them,
+        and `auth` is the sign-in key it made from them. Returns its record."""
+        if not isinstance(auth, (bytes, bytearray)) or len(auth) != 32:
+            raise AccountError("That isn't a sign-in key.")
         with self._lock:
             if self._broken:
                 raise AccountError("the list of accounts on this computer is damaged")
-            rec = {"id": aid, "check": _check(key), "auth": _check(vault.auth_key(key)), "created": time.time(),
-                   "seen": None, "invite": "", "admin": True, "note": str(note or "")[:80]}
-            self._recs[aid] = rec
-            self._backup_wanted = self._backup_soon = True
-            self._save()
-        log.info("Admin account %s was created.", aid)
-        return words.key_to_phrase(key), rec
-
-    def create_for(self, auth: bytes = None, note=""):
-        """The owner (or an admin) makes an account for somebody from the dashboard, whatever sign-up
-        allows. With `auth` it is end-to-end encrypted: the owner's browser made the 24 words and kept
-        them, and this is the sign-in key it made from them. Without, it is an account of the earlier kind
-        and its words are made here. Returns (its words or "", its record)."""
-        phrase = ""
-        if auth is None:
-            key = secrets.token_bytes(32)
-            phrase = words.key_to_phrase(key)
-            rec = self._make(key, "", None, owner=True)
-        else:
-            if len(auth) != 32:
-                raise AccountError("That isn't a sign-in key.")
             if self._recs.get(account_id(auth)) is not None:
                 raise AccountError("There is an account with those words already.")
-            rec = self._make(auth, "", None, e2e=True, owner=True)
+        rec = self._make(bytes(auth), "", None, e2e=True, owner=True)
         with self._lock:
             rec["note"] = str(note or "")[:80]
             rec["by_owner"] = True
+            if admin:
+                rec["admin"] = True
+                log.info("Account %s is an admin account.", rec["id"])
             self._save()
-        return phrase, rec
+        return rec
 
     def admin_ok(self, aid):
-        """True while `aid` is an admin account that may sign in."""
+        """True while `aid` is an admin account that may sign in and manage the drive."""
         with self._lock:
             rec = self._recs.get(str(aid or ""))
-            return rec is not None and bool(rec.get("admin")) and not rec.get("disabled")
+            return rec is not None and bool(rec.get("admin")) and bool(rec.get("e2e")) and not rec.get("disabled")
+
+    def retired(self, aid):
+        """True for an account of the earlier kind, whose key this computer has: it can be read and
+        moved into an end-to-end encrypted one, and nothing else."""
+        with self._lock:
+            rec = self._recs.get(str(aid or ""))
+            return rec is not None and not rec.get("e2e") and not rec.get("admin")
+
+    def successor(self, aid, new=None):
+        """The end-to-end encrypted account an account of the earlier kind made to move into ('' when
+        it made none). With `new`, that is noted: it may make one, not as many as it likes."""
+        with self._lock:
+            rec = self._recs.get(str(aid or ""))
+            if rec is None:
+                return ""
+            if new:
+                rec["successor"] = str(new)
+                self._save()
+            return rec.get("successor") or ""
 
     def _make(self, key, invite, addr, e2e=False, owner=False):
         """owner: the owner makes it from their dashboard (to move their own files in): whether and how
@@ -649,34 +660,23 @@ class Accounts:
             rec = self._recs.get(aid)
             if rec is None or not hmac.compare_digest(rec.get("check") or "", _check(key)) or rec.get("disabled"):
                 return None
-            if not rec.get("admin") and (self._secrets.get(aid) or {}).get("key") != key.hex():  # the keys could not be read here
+            if rec.get("admin") and not rec.get("e2e"):     # an admin from before they were end-to-end encrypted
+                return rec                                   # (it has no drive and can't sign in: web.py says so)
+            if (self._secrets.get(aid) or {}).get("key") != key.hex():  # the keys could not be read here
                 self._secrets[aid] = {"key": key.hex(), "token": (self._secrets.get(aid) or {}).get("token", "")}
-                self._save()
-            if rec.get("admin") and not rec.get("auth"):    # made before admins signed in with a sign-in key
-                rec["auth"] = _check(vault.auth_key(key))
-                self._backup_wanted = True
                 self._save()
             rec["seen"] = time.time()
             self._dirty = True
             return rec
 
-    def find_admin(self, auth: bytes):
-        """The admin account a sign-in key (made in a browser from its 24 words) belongs to, or None."""
-        check = _check(auth)
-        with self._lock:
-            for rec in self._recs.values():
-                if rec.get("admin") and hmac.compare_digest(rec.get("auth") or "", check) and not rec.get("disabled"):
-                    rec["seen"] = time.time()
-                    self._dirty = True
-                    return rec
-        return None
-
     def active(self, aid):
         """The record of an account (with a drive of its own) that may be used right now, or None.
-        Admin accounts have no drive: they sign in as the owner (admin_ok)."""
+        An admin account from before they were end-to-end encrypted has no drive."""
         with self._lock:
             rec = self._recs.get(aid)
-            return rec if rec is not None and not rec.get("disabled") and not rec.get("admin") else None
+            if rec is None or rec.get("disabled") or (rec.get("admin") and not rec.get("e2e")):
+                return None
+            return rec
 
     # ------------------------------------------------------------ an account's drive
     def acquire(self, aid):
@@ -974,7 +974,7 @@ class Accounts:
                         pass
                 out.append({"id": aid, "created": rec.get("created"), "seen": rec.get("seen"), "disabled": bool(rec.get("disabled")),
                             "invite": rec.get("invite") or "", "files": usage.get("files", 0), "bytes": usage.get("bytes", 0),
-                            "open": d is not None, "ready": bool(rec.get("admin") or (self._secrets.get(aid) or {}).get("key")),
+                            "open": d is not None, "ready": bool((rec.get("admin") and not rec.get("e2e")) or (self._secrets.get(aid) or {}).get("key")),
                             "admin": bool(rec.get("admin")), "e2e": bool(rec.get("e2e")), "note": rec.get("note") or "",
                             "moving": aid in moving})
             return sorted(out, key=lambda a: -(a["created"] or 0))

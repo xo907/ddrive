@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -38,6 +39,14 @@ class DriveTest(unittest.TestCase):
             except Exception:
                 pass
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def earlier_accounts(self):
+        """For the rest of this test, accounts of the earlier kind (their key is on the computer that runs
+        the drive) are made and written to as they were before they were retired. The dashboard still
+        serves them for reading and moving out, so what they are and keep apart is still tested."""
+        patch = mock.patch("ddrive.web.RETIRE_EARLIER_ACCOUNTS", False)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def drive(self, device="aaaa", **settings):
         opts = dict(data_dir=os.path.join(self.tmp, device), chunk_size=PIECE, encryption_key=KEY,

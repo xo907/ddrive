@@ -1276,3 +1276,8 @@ main::-webkit-scrollbar-thumb { background: var(--line); }
 .search { min-width: 0; }
 .top .icon-btn, .top .avatar { flex: none; }
 @media (max-width: 760px) { .top { gap: 8px; } }
+
+/* ------------------------------------------------------------------ an admin account managing the drive ("/?server") */
+/* Only the pages that manage the drive are there: nothing that finds, lists or uploads files. */
+body.server .search { visibility: hidden; }
+body.server #locks, body.server #apps, body.server .usage, body.server .tray, body.server .drop { display: none !important; }

@@ -315,6 +315,7 @@ class LiteSyncAccountTest(helpers.DriveTest):
     """Somebody with an account syncs folders into their own storage; the owner sees nothing of it."""
 
     def test_an_account_and_the_owner_are_apart(self):
+        self.earlier_accounts()
         host = self.drive(web_token="secret-token")
         web = host.start_web(port=0)
         self.addCleanup(web.stop)

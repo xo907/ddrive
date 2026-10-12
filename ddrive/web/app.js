@@ -19,7 +19,15 @@ const OWNER_PAGES = ["log", "health", "resources", "check"];
 // What an end-to-end encrypted account doesn't have yet: each of these needs work done on the device
 // that the server used to do with the files in the clear.
 const E2E_LATER = [];
-const notHere = (name) => (isAccount() && OWNER_PAGES.includes(name)) || (!!(status && status.e2e) && E2E_LATER.includes(name));
+// An admin account is an end-to-end encrypted account that may also manage the drive. "/" is its own
+// account, like anybody's; "/?server" is this page as the drive's, with only the pages that manage
+// it (e2e-api.js sends those questions to the server as the admin's). Never the owner's files.
+const SERVER = !!(window.E2E && E2E.server);
+const SERVER_PAGES = ["settings", "log", "health", "resources", "check"];
+const SERVER_URL = "/?server#/settings";
+const notHere = (name) => SERVER ? !SERVER_PAGES.includes(name)
+  : (isAccount() && OWNER_PAGES.includes(name)) || (!!(status && status.e2e) && E2E_LATER.includes(name));
+if (SERVER) document.body.classList.add("server");
 
 // ------------------------------------------------------------------ helpers
 function h(tag, attrs, ...children) {
@@ -390,6 +398,7 @@ async function refreshStatus() {
   }
   const dot = $("#sync-dot"), text = $("#sync-text");
   if (!status) { dot.className = "dot warn"; text.textContent = "Not reachable"; return; }
+  if (status.retired) retiredNotice();
   const st = status.stats;
   const busy = status.uploads.length + status.queued + st.unsynced;
   if (busy) { dot.className = "dot busy"; text.textContent = `Uploading ${st.unsynced || busy}`; }
@@ -455,7 +464,7 @@ function render() {
   closeSheet();
   leaveNotes();
   leaveMessages();
-  if (notHere(route.name)) return go("#/home");
+  if (notHere(route.name)) return go(SERVER ? "#/settings" : "#/home");
   if (route.name !== "files" || route.path !== currentDir) sel.clear();
   const views = { files: renderFiles, search: renderSearch, deleted: renderDeleted, snapshots: renderSnapshots,
                   snapshot: renderSnapshot, health: renderHealth, notes: renderNotes, shared: renderShared,
@@ -1666,8 +1675,9 @@ async function renderSettings() {
                                onchange: (e) => save(key, type === "list" ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : e.target.value.trim()) });
     return input;
   };
-  page(h("h1", {}, "Settings"),
-       h("p", { class: "lede" }, "Changes are saved as you make them, for this computer's drive."),
+  page(h("h1", {}, SERVER ? "The drive's settings" : "Settings"),
+       h("p", { class: "lede" }, SERVER ? "You manage this drive as an admin. Changes are saved as you make them, for the computer that runs it. Your own files are under “Back to my files” in the menu at the top right."
+                                        : "Changes are saved as you make them, for this computer's drive."),
        SETTING_ROWS.map(([title, rows]) => [h("h2", {}, title), h("div", { class: "settings" }, rows.map(([key, label, hint, type]) =>
          h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hint),
            data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
@@ -1675,7 +1685,7 @@ async function renderSettings() {
        h("div", { id: "discord-settings" }),
        h("div", { id: "signin-settings" }),
        h("div", { id: "accounts-settings" }));
-  discordSection($("#discord-settings"));
+  if (!SERVER) discordSection($("#discord-settings"));      // (the owner's Discord account: not an admin's)
   signInSection($("#signin-settings"));
   accountsSection($("#accounts-settings"));
 }
@@ -3112,8 +3122,9 @@ async function signInSection(into) {
     into.replaceChildren(
       h("h2", {}, "Sign-in"),
       h("p", { class: "muted", style: "margin:0 0 12px" }, ["You are signed in with admin account ", h("code", {}, info.admin),
-        ": you can do everything the owner can, except change how the owner signs in (the recovery phrase, passkeys and the password for other apps). ",
-        "Your own 24 words sign you in. If the owner switches this admin account off or deletes it, you are signed out at once."]));
+        ": you can change the drive's settings, manage accounts and other admins, and look after its health and its log. You can't open the owner's files, ",
+        "or change how the owner signs in (the recovery phrase, passkeys and the password for other apps). ",
+        "Your own 24 words sign you in; they never leave your browser. If the owner switches this admin account off or deletes it, you are signed out at once."]));
     return;
   }
   into.replaceChildren(
@@ -3165,11 +3176,13 @@ function inviteDialog(redraw) {
     field("Good for", uses), field("Works for", days), field("Note", note), result, h("div", { class: "modal-actions" }, go_));
 }
 
-/** Make an account for somebody. End-to-end encrypted when this browser can encrypt: the 24 words are
- * made here and shown before anything is sent; the server only gets the sign-in key made from them. */
-function newAccountDialog(redraw) {
+/** Make an account for somebody, or (admin) an admin account. Always end-to-end encrypted: the 24 words
+ * are made here and shown before anything is sent; the server only gets the sign-in key made from
+ * them. So it needs a browser that can encrypt (https, or the computer itself). */
+function newAccountDialog(redraw, admin = false) {
   const e2e = !!(window.DDV && DDV.usable);
-  const note = h("input", { placeholder: "Who it is for (only you see this)", maxlength: "80", spellcheck: "false" });
+  const what = admin ? "admin account" : "account";
+  const note = h("input", { placeholder: admin ? "Who it is for (only the owner and admins see this)" : "Who it is for (only you see this)", maxlength: "80", spellcheck: "false" });
   const area = h("div");
   const p = (text, cls = "muted") => h("p", { class: cls, style: "margin:0 0 14px" }, text);
   const wordsBox = (phrase) => [h("ol", { class: "phrase" }, phrase.split(" ").map((w) => h("li", {}, w))),
@@ -3178,8 +3191,9 @@ function newAccountDialog(redraw) {
     } }, "Copy the words"))];
   const done = (id, phrase) => {
     note.disabled = true;
-    area.replaceChildren(p(h("b", {}, `Account ${id} was made.`), ""),
-      p("These 24 words sign it in. They are shown only now: give them to that person, and to nobody else. Nobody can reset them."), ...wordsBox(phrase),
+    area.replaceChildren(p(h("b", {}, `${admin ? "Admin account" : "Account"} ${id} was made.`), ""),
+      p("These 24 words sign it in. They are shown only now: give them to that person, and to nobody else. Nobody can reset them."
+        + (admin ? " Signed in, that person finds “Manage the drive” in the menu at the top right." : "")), ...wordsBox(phrase),
       h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: () => m.close() }, "Done")));
     redraw();
   };
@@ -3191,53 +3205,28 @@ function newAccountDialog(redraw) {
       if (String(await DDV.phraseToKey(phrase)) !== String(key)) throw new Error("the words could not be checked");
     } catch (e) { area.replaceChildren(p(`The words could not be made: ${e.message}`, "err")); return; }
     const saved = h("input", { type: "checkbox", style: "width:auto;height:auto;margin:0;flex:none" });
-    const make = h("button", { class: "btn", type: "button", disabled: true, onclick: async () => {
+    const make = h("button", { class: "btn" + (admin ? " danger" : ""), type: "button", disabled: true, onclick: async () => {
       make.disabled = true;
-      const r = await attempt(() => api("/api/accounts/create", { auth: d.auth, note: note.value.trim() }));
+      const r = await attempt(() => api(admin ? "/api/accounts/admin" : "/api/accounts/create", { auth: d.auth, note: note.value.trim() }));
       if (!r) { make.disabled = false; return; }
       key.fill(0);
       done(r.id, phrase);
-    } }, "Make the account");
+    } }, `Make the ${what}`);
     saved.addEventListener("change", () => { make.disabled = !saved.checked; });
     area.replaceChildren(
-      p("These are the new account's 24 words. They were made in this browser and are not sent anywhere: the server only gets a sign-in key made from them, so neither it nor you can open the account later without them. Write them down or copy them for that person now."),
+      p(`These are the new ${what}'s 24 words. They were made in this browser and are not sent anywhere: the server only gets a sign-in key made from them, so neither it nor you can open the account later without them. Write them down or copy them for that person now.`),
       ...wordsBox(phrase),
       h("label", { class: "check", style: "display:flex;gap:8px;align-items:center;margin:4px 0 0" }, saved, "The words are written down or passed on"),
       h("div", { class: "modal-actions" }, make));
   }
-  async function startPhrase() {
-    if (!await ask({ title: "Make an account of the earlier kind?", ok: "Make it", text: "Its words are made by the server, which keeps its key: its files are encrypted, but not end-to-end. On an https address (or on this computer) you can make an end-to-end encrypted one instead." })) return;
-    const r = await attempt(() => api("/api/accounts/create", { kind: "phrase", note: note.value.trim() }));
-    if (r) done(r.id, r.phrase);
-  }
-  const m = modal("Make an account",
-    p(e2e ? "An account with storage of its own, made for somebody, whoever sign-up is open to. It is end-to-end encrypted: its 24 words are made here, in your browser, and the server never gets them."
-          : "This address isn't https, so the browser can't encrypt here: an end-to-end encrypted account can only be made on an https address or on the computer that runs the drive (http://localhost). Here you can make one of the earlier kind, whose key the server keeps."),
-    field("Note", note), area,
-    h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: (e) => { e.target.parentNode.remove(); (e2e ? startE2E : startPhrase)(); } }, "Next")));
-}
-
-/** Make an admin account: a co-owner with 24 words of its own, shown once, here. */
-function adminDialog(redraw) {
-  const note = h("input", { placeholder: "Who it is for (only admins see this)", maxlength: "80", spellcheck: "false" });
-  const result = h("div");
-  const go_ = h("button", { class: "btn danger", type: "button", onclick: async () => {
-    const r = await attempt(() => api("/api/accounts/admin", { note: note.value.trim() }));
-    if (!r) return;
-    go_.remove();
-    note.disabled = true;
-    result.replaceChildren(
-      h("p", { class: "muted", style: "margin:14px 0 8px" }, ["Admin account ", h("code", {}, r.id), " was made. These 24 words sign it in. They are shown only now: give them to that person, and to nobody else."]),
-      h("ol", { class: "phrase" }, r.phrase.split(" ").map((w) => h("li", {}, w))),
-      h("div", { class: "modal-actions" }, h("button", { class: "btn ghost", type: "button", onclick: async () => {
-        try { await navigator.clipboard.writeText(r.phrase); toast("Copied. Clear your clipboard once it is passed on."); } catch { toast("Could not copy"); }
-      } }, "Copy")));
-    redraw();
-  } }, "Make the admin account");
-  modal("Make an admin account",
-    h("p", { class: "muted", style: "margin:0 0 16px" }, "An admin is a co-owner: with 24 words of its own it signs in here and can do everything you can — your files, the drive's settings, accounts, other admins — except change how you sign in. "
-      + "Switch it off or delete it below and it is signed out at once. Only make one for somebody you trust with the whole drive."),
-    field("Note", note), result, h("div", { class: "modal-actions" }, go_));
+  const m = modal(`Make an ${what}`,
+    p(!e2e ? `This address isn't https, so the browser can't encrypt here, and an ${what} is end-to-end encrypted: its 24 words are made in the browser, never by the server. Open the dashboard by its https address, or on the computer that runs the drive (http://localhost), and make it there.`
+      : admin ? "An admin is an end-to-end encrypted account, with storage of its own that the server can't read, that may also manage this drive: its settings, the accounts and other admins, its health and its log. "
+                + "It doesn't open your files, and it can't change how you sign in. Switch it off or delete it below and it is signed out at once. Only make one for somebody you trust with the drive."
+              : "An account with storage of its own, made for somebody, whoever sign-up is open to. It is end-to-end encrypted: its 24 words are made here, in your browser, and the server never gets them."),
+    e2e && field("Note", note), area,
+    h("div", { class: "modal-actions" }, e2e ? h("button", { class: "btn", type: "button", onclick: (e) => { e.target.parentNode.remove(); startE2E(); } }, "Next")
+                                             : h("button", { class: "btn ghost", type: "button", onclick: () => m.close() }, "Close")));
 }
 
 async function accountsSection(into) {
@@ -3253,13 +3242,13 @@ async function accountsSection(into) {
     h("h2", {}, "Accounts"),
     h("p", { class: "muted", style: "margin:0 0 12px" }, "Let other people use this dashboard. An account is 24 words made here: no name, no password. Each one has its own storage, encrypted with its own words, and sees files, notes, bookmarks, contacts, messages and share links. Never your files, and nothing that manages the drive."),
     h("div", { class: "settings" },
-      row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
+      !SERVER && row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
           + "copied and sealed in this browser, so the server never gets the key. Nothing here is changed.",
           h("button", { class: "btn small", onclick: () => window.moveToAccount() }, "Move everything…")),
       row("Make an account", "For somebody, with storage of its own: end-to-end encrypted, its 24 words made in this browser. Works whoever sign-up is open to.",
           h("button", { class: "btn small", onclick: () => newAccountDialog(redraw) }, "Make an account…")),
-      row("Admin accounts", "Co-owners with 24 words of their own: they can do everything you can, except change how you sign in. Switching one off signs it out at once.",
-          h("button", { class: "btn small", onclick: () => adminDialog(redraw) }, "Make an admin…")),
+      row("Admin accounts", "End-to-end encrypted accounts that may also manage the drive: settings, accounts, other admins, health and the log. They don't open the owner's files and can't change how the owner signs in. Switching one off signs it out at once.",
+          h("button", { class: "btn small", onclick: () => newAccountDialog(redraw, true) }, "Make an admin…")),
       row("Who can make an account", mode[2],
           h("select", { "aria-label": "Who can make an account", onchange: (e) => save({ signup_mode: e.target.value }, "Saved") },
             SIGNUP_MODES.map(([k, label]) => h("option", { value: k, selected: k === d.mode }, label)))),
@@ -3296,18 +3285,20 @@ async function accountsSection(into) {
     h("h2", {}, `${plural(d.accounts.length, "account")}`),
     d.accounts.length ? h("div", { class: "settings" }, d.accounts.map((a) => row(
         [h("code", {}, a.id), a.admin && h("span", { class: "tag", style: "margin-left:8px" }, "Admin"), a.e2e && h("span", { class: "tag", style: "margin-left:8px" }, "End-to-end"),
+         !a.e2e && h("span", { class: "tag busy", style: "margin-left:8px" }, a.admin ? "Can't sign in" : "Earlier kind"),
          a.moving && h("span", { class: "tag busy", style: "margin-left:8px" }, "Moving"), a.note && ` · ${a.note}`,
          status && status.admin === a.id && h("span", { class: "tag", style: "margin-left:8px" }, "You"),
          a.disabled && h("span", { class: "tag busy", style: "margin-left:8px" }, "Switched off"), a.open && !a.disabled && h("span", { class: "tag", style: "margin-left:8px" }, "In use")],
-        a.admin ? `Co-owner · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : " · not signed in yet"}`
-                : `${plural(a.files, "file")}, ${size(a.bytes)} · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : ""}${a.invite ? " · invite " + a.invite : ""}`,
+        a.admin && !a.e2e ? `Made ${when(a.created)}, before admin accounts were end-to-end encrypted: it can't sign in any more. Delete it and make a new one.`
+                : `${a.admin ? "Manages the drive · " : ""}${plural(a.files, "file")}, ${size(a.bytes)} · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : a.admin ? " · not signed in yet" : ""}${a.invite ? " · invite " + a.invite : ""}`
+                  + (a.e2e ? "" : " · not end-to-end encrypted: it can only be read, until its owner moves it into an account that is"),
         h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
           h("button", { class: "btn ghost small", onclick: async () => {
-            if (!a.disabled && !await ask({ title: "Switch this account off?", ok: "Switch off", danger: true, text: a.admin ? "It is signed out at once and can't sign in. You can switch it on again." : "It is signed out and can't sign in, and its share links stop working. Nothing is deleted: you can switch it on again." })) return;
+            if (!a.disabled && !await ask({ title: "Switch this account off?", ok: "Switch off", danger: true, text: a.admin ? "It is signed out at once and can't sign in, and its share links stop working. Nothing is deleted: you can switch it on again." : "It is signed out and can't sign in, and its share links stop working. Nothing is deleted: you can switch it on again." })) return;
             if (await attempt(() => api("/api/accounts/disable", { id: a.id, off: !a.disabled }), a.disabled ? "Switched on again" : "Switched off")) redraw();
           } }, a.disabled ? "Switch on" : "Switch off"),
           h("button", { class: "btn danger small", onclick: async () => {
-            if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: a.admin ? `Admin account ${a.id} is signed out and its 24 words stop working. This can't be undone.` : `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
+            if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: a.admin && !a.e2e ? `Admin account ${a.id} is removed. This can't be undone.` : `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
                 && await attempt(() => api("/api/accounts/delete", { id: a.id }), "Account deleted")) { await refreshStatus(); redraw(); }
           } }, "Delete")))))
       : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one above." : "None yet."),
@@ -3324,6 +3315,32 @@ async function accountsSection(into) {
         } }, "Bring back"))))]));
 }
 
+// ------------------------------------------------------------------ an account of the earlier kind
+// Its key is on the computer that runs the drive, which accounts made now never allow. It is retired:
+// the server lets it read what it has and nothing else, and this says so and offers the way out
+// (moving.js: everything is sealed in this browser into a new end-to-end encrypted account).
+let retiredTold = false;
+function retiredDialog() {
+  const can = !!(window.DDV && DDV.usable);
+  const p = (text) => h("p", { class: "muted", style: "margin:0 0 14px" }, text);
+  const m = modal("This account has to move",
+    p("Accounts here are end-to-end encrypted now: their 24 words stay in your browser, and the computer that runs this drive can't read their files or their names. "
+      + "Yours was made the earlier way, so that computer holds its key."),
+    p("It can't be changed any more. You can still look at and download everything in it, and move all of it into a new end-to-end encrypted account: "
+      + "that is done here, in your browser, and gives you 24 new words."),
+    !can && h("p", { class: "err", style: "margin:0 0 14px" }, "Moving needs an https address (or the computer itself): a browser doesn't encrypt on plain http. Open this dashboard by its https address to move."),
+    h("div", { class: "modal-actions" },
+      can && h("button", { class: "btn", type: "button", onclick: () => { m.close(); window.moveToAccount(); } }, "Move everything…"),
+      h("button", { class: "btn ghost", type: "button", onclick: () => m.close() }, "Look at my files")));
+}
+function retiredNotice() {
+  if (retiredTold) return;
+  retiredTold = true;
+  document.body.append(h("div", { class: "reload-bar", role: "status" }, "This account isn't end-to-end encrypted and can only be read now. ",
+    h("button", { class: "btn small", onclick: retiredDialog }, "Move it")));
+  retiredDialog();
+}
+
 // ------------------------------------------------------------------ your account (somebody signed in to one)
 async function renderAccount() {
   const a = await attempt(() => api("/api/account"));
@@ -3334,6 +3351,10 @@ async function renderAccount() {
        h("p", { class: "lede" }, "Your account is your 24 words: they sign you in, and they are the key everything here is encrypted with. There is no name, no password and no way to reset them, so keep them safe."),
        h("div", { class: "settings" },
          row("Account", [h("code", {}, a.id), a.created ? ` · made ${when(a.created)}` : ""]),
+         status && status.admin && row("Admin", "This account may also manage the drive: its settings, accounts and other admins, its health and its log. Never the owner's files.",
+             h("a", { class: "btn small", href: SERVER_URL }, "Manage the drive")),
+         status && status.retired && row("Move into an end-to-end encrypted account", "This account is of an earlier kind, whose key the server holds: it can only be read now. Everything in it can be sealed in this browser into a new account the server can't read.",
+             h("button", { class: "btn small", onclick: retiredDialog }, "Move it…")),
          row("Storage", `${plural(a.files, "file")}, ${size(a.bytes)}${a.version_bytes ? `, plus ${size(a.version_bytes)} of earlier versions and deleted files` : ""}.`
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
@@ -3636,7 +3657,7 @@ async function connectApps() {
 
 // ------------------------------------------------------------------ find anything (Ctrl+K)
 function openPalette() {
-  if (document.querySelector("dialog.palette")) return;
+  if (SERVER || document.querySelector("dialog.palette")) return;      // (it finds files and their pages: not an admin's)
   const pages = [["Home", "#/home"], ["Files", "#/files/"], ["Gallery", "#/gallery/"], ["Starred", "#/starred"], ["Recent", "#/recent"],
                  ["Activity", "#/history"], ["Storage", "#/storage"], ["Resources", "#/resources"], ["Notes", "#/notes"], ["Bookmarks", "#/bookmarks"], ["Messages", "#/messages"], ["Contacts", "#/contacts"], ["Shared links", "#/shared"],
                  ["Folder sync", "#/sync"], ["Deleted files", "#/deleted"], ["Snapshots", "#/snapshots"], ["Log", "#/log"], ["Health", "#/health"],
@@ -3703,7 +3724,7 @@ document.addEventListener("keydown", (e) => {
 
 // Paste a screenshot or copied files anywhere to upload them into the folder that is open.
 document.addEventListener("paste", (e) => {
-  if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+  if (SERVER || (e.target.closest && e.target.closest("input, textarea, [contenteditable]"))) return;
   const files = [...(e.clipboardData ? e.clipboardData.files : [])];
   if (!files.length) return;
   e.preventDefault();
@@ -4185,14 +4206,16 @@ async function renderMessages() {
 // ------------------------------------------------------------------ account
 $("#account").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
-  const who = isAccount() ? `Account ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in";
+  const who = isAccount() ? `${status.admin ? "Admin account" : "Account"} ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in";
   const drive = pageItems(DRIVE_PAGES);
   openMenu([
     !sheetMode() && { label: who, icon: "user", disabled: true },          // (a phone's sheet has it as its title)
-    { label: isAccount() ? "Your account" : "Settings", icon: "settings", current: route.name === "settings", run: () => go("#/settings") },
+    { label: isAccount() ? "Your account" : SERVER ? "Settings and accounts" : "Settings", icon: "settings", current: route.name === "settings", run: () => go("#/settings") },
     ...(drive.length ? ["-", { head: isAccount() ? "History and storage" : "Drive" }, ...drive] : []),
     "-",
-    { label: "Find anything", icon: "open", run: openPalette },
+    isAccount() && status.admin && { label: "Manage the drive", icon: "shield", run: () => { location.href = SERVER_URL; } },
+    SERVER && { label: "Back to my files", icon: "folder", run: () => { location.href = "/"; } },
+    !SERVER && { label: "Find anything", icon: "open", run: openPalette },
     { label: "What's new", icon: "info", run: whatsNew },
     { label: "Sign out", icon: "signout", run: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } },
   ], r.right - 240, r.bottom + 6, who);

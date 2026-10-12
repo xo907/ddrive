@@ -2460,7 +2460,7 @@ def main():
     p_menu = subparsers.add_parser("context-menu", help="Install Windows Explorer right-click menu")
     p_menu.add_argument("action", choices=["install", "uninstall"], default="install", nargs="?")
 
-    p_acc = subparsers.add_parser("accounts", help="Accounts on the dashboard: list, admin [note], disable|enable|delete <id>, "
+    p_acc = subparsers.add_parser("accounts", help="Accounts on the dashboard: list, disable|enable|delete <id>, "
                                                     "moves, move-cancel <id>")
     p_acc.add_argument("action", nargs="?", default="list")
     p_acc.add_argument("rest", nargs="*")

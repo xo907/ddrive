@@ -3,6 +3,32 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.18.0 (2026-10-12)
+
+- **Admin accounts are end-to-end encrypted.** An admin is now an ordinary end-to-end encrypted
+  account, with storage of its own that the server can't read and 24 words made in the browser, that
+  may also manage the drive. Signed in, it finds **Manage the drive** in the menu at the top right:
+  the drive's settings, accounts, invites and other admins, Health, the Log and Resources. "Back to
+  my files" leads back.
+- **An admin no longer opens the owner's files.** Until now an admin signed in as the owner, files
+  included. Now it manages the drive and nothing else: listing, opening, searching, uploading,
+  sharing and deleting the owner's files are refused, as is changing how the owner signs in. (Health
+  and the Log can still name a file of the owner's, where one is damaged or an error is about one.)
+- **Admin accounts made by 2.16.0 to 2.17.2 can't sign in any more.** Their words were made by the
+  server. They are marked "Can't sign in" under Settings → Accounts: delete them and make new ones
+  with "Make an admin…".
+- **The server makes no account's words any more.** "Make an account…" and "Make an admin…" need an
+  https address (or the computer itself), where the browser makes the words; on plain http they say
+  so instead of making an account whose key the server keeps. `accounts admin` in a terminal is gone
+  for the same reason, and so is sign-up without the browser making the words.
+- **Accounts of the earlier kind are retired.** An account whose key the server keeps (made before
+  2.5.0, or since then on plain http) can only be read now: signed in, it is told so and offered
+  "Move everything…", which seals all of it in the browser into a new end-to-end encrypted account
+  with 24 new words; then the old one is deleted under Your account. Uploading, changing, sharing
+  and syncing are refused for it. Under Settings → Accounts such accounts are marked "Earlier kind".
+- What the server still reads, as before: the owner's own drive (it is that computer's drive;
+  "Move everything…" under Settings → Accounts moves it into an end-to-end encrypted account too).
+
 ## 2.17.2 (2026-10-12)
 
 - **An admin account's 24 words sign in at once.** Until now the sign-in page answered "No end-to-end

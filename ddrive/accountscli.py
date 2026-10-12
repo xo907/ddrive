@@ -17,12 +17,18 @@ from .config import Config, launcher
 USAGE = f"""Usage: {launcher()} accounts <command>
 
   list                   the accounts, admin accounts and moves
-  admin [note]           make an admin account (a co-owner) and show its 24 words once
   disable <id>           switch an account off (an admin is signed out at once)
   enable <id>            switch it on again
   delete <id>            delete an account for good (with everything it stored)
   moves                  moves between end-to-end encrypted accounts in progress
-  move-cancel <id>       stop a move (the account it came from is left as it was)"""
+  move-cancel <id>       stop a move (the account it came from is left as it was)
+
+Accounts and admin accounts are made in the dashboard (Settings, Accounts): they are end-to-end
+encrypted, so their 24 words are made in a browser and never on this computer."""
+
+NO_ADMIN = """Admin accounts are end-to-end encrypted: their 24 words are made in a browser, so that this
+computer never has them, and a terminal here can't make them. Make one in the dashboard instead:
+Settings, Accounts, "Make an admin…" (on an https address, or on this computer as http://localhost)."""
 
 
 class Unreachable(Exception):
@@ -63,10 +69,6 @@ class _Remote:
     def listing(self):
         return self.call("/api/accounts")
 
-    def admin(self, note):
-        r = self.call("/api/accounts/admin", {"note": note})
-        return r["id"], r["phrase"]
-
     def disable(self, aid, off):
         self.call("/api/accounts/disable", {"id": aid, "off": off})
 
@@ -102,10 +104,6 @@ class _Local:
     def listing(self):
         return {"accounts": self.acc.listing(), "mode": self.acc.mode()}
 
-    def admin(self, note):
-        phrase, rec = self.acc.create_admin(note)
-        return rec["id"], phrase
-
     def disable(self, aid, off):
         with self.acc._lock:
             rec = self.acc._recs.get(aid)
@@ -119,7 +117,7 @@ class _Local:
             rec = self.acc._recs.get(aid)
             if rec is None:
                 raise RuntimeError("No such account")
-            if not rec.get("admin"):
+            if not (rec.get("admin") and not rec.get("e2e")):    # (an admin from before 2.18.0 stored nothing)
                 raise RuntimeError(f"Deleting an account with storage needs the drive running ({launcher()} start): "
                                    "what it stored on Discord is removed by the drive.")
             self.acc._recs.pop(aid)
@@ -167,12 +165,12 @@ def _print_list(d):
     print(f"Sign-up: {d.get('mode', 'closed')}")
     print(f"\nAdmin accounts ({len(admins)}):")
     for a in admins:
-        print(f"  {a['id']}  {'OFF ' if a['disabled'] else ''}made {_ago(a['created'])}, last signed in {_ago(a['seen'])}"
+        print(f"  {a['id']}  {'OFF ' if a['disabled'] else ''}{'' if a.get('e2e') else 'CAN NO LONGER SIGN IN (made before 2.18.0)  '}made {_ago(a['created'])}, last signed in {_ago(a['seen'])}"
               + (f"  ({a['note']})" if a.get("note") else ""))
     print(f"\nAccounts ({len(others)}):")
     from .config import format_size
     for a in others:
-        kind = "end-to-end" if a.get("e2e") else "phrase"
+        kind = "end-to-end" if a.get("e2e") else "retired"
         print(f"  {a['id']}  {kind:10s} {'OFF ' if a['disabled'] else ''}{a['files']} files, {format_size(a['bytes'])}, "
               f"last signed in {_ago(a['seen'])}{'  MOVING' if a.get('moving') else ''}")
 
@@ -191,19 +189,13 @@ def main(args):
     cfg = Config.load()
     action = (args.action or "list").lower()
     rest = list(args.rest or [])
+    if action == "admin":
+        print(NO_ADMIN)
+        return 1
     try:
         t = _target(cfg)
         if action == "list":
             _print_list(t.listing())
-            return 0
-        if action == "admin":
-            aid, phrase = t.admin(" ".join(rest))
-            print(f"[OK] Admin account {aid} was made. It signs in to the dashboard with these 24 words:\n")
-            ws = phrase.split()
-            for i in range(0, 24, 6):
-                print("   " + "  ".join(f"{i + j + 1:2d}. {w:<10s}" for j, w in enumerate(ws[i:i + 6])))
-            print("\nThey are shown only now. An admin can do everything the owner can, except change how the owner")
-            print(f"signs in. Switch it off with: {launcher()} accounts disable {aid}")
             return 0
         if action in ("disable", "enable", "delete", "move-cancel"):
             if not rest:

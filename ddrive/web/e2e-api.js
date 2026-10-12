@@ -18,8 +18,14 @@
  */
 (function () {
   const realFetch = window.fetch.bind(window);
-  const cred = { credentials: "same-origin" };
-  const E = window.E2E = { active: false };
+  // An admin account is an end-to-end encrypted account that may also manage the drive. Its page is
+  // opened in one of two ways: as the account ("/": its own files, answered here like anybody's) or
+  // as the drive's ("/?server": settings, accounts, health and the log, which the server answers).
+  // In the second, every question says so with this header, and nothing here stands in for the server.
+  const SERVER = new URLSearchParams(location.search).has("server");
+  const ADMIN = { "X-DD-Admin": "1" };
+  const cred = SERVER ? { credentials: "same-origin", headers: ADMIN } : { credentials: "same-origin" };
+  const E = window.E2E = { active: false, server: SERVER };
   const enc = new TextEncoder(), dec = new TextDecoder();
   const now = () => Date.now() / 1000;
   let v = null;                              // the account (DDV.Vault)
@@ -1151,7 +1157,12 @@
   E.ready = (async () => {
     if (!window.DDV) return;
     let s;
-    try { const r = await realFetch("/api/status", cred); if (!r.ok) return; s = await r.json(); } catch (e) { return; }
+    try {
+      const r = await realFetch("/api/status", cred);
+      if (SERVER && r.status === 403) { location.replace("/"); return new Promise(() => {}); }     // not an admin account
+      if (!r.ok) return;
+      s = await r.json();
+    } catch (e) { return; }
     E.firstStatus = s;                         // (the dashboard starts with it instead of asking again)
     if (!s.e2e) return;
     E.status = s;
@@ -1185,6 +1196,10 @@
 
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.href);
+    if (SERVER) {
+      if (url.origin !== location.origin || !url.pathname.startsWith("/api/")) return realFetch(input, init);
+      return realFetch(input, { ...(init || {}), headers: { ...((init || {}).headers || {}), ...ADMIN } });
+    }
     // (what is about the account itself, sealed things included, goes straight to the server: also while this is still starting)
     if (url.origin !== location.origin || !url.pathname.startsWith("/api/") || PASS.test(url.pathname.slice(5).replace(/\/+$/, ""))) return realFetch(input, init);
     await E.ready.catch(() => null);

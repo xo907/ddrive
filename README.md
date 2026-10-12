@@ -441,8 +441,8 @@ lock <path> / unprotect <path>       Lock a folder or file with a password (hidd
 unlock [--minutes N] / relock        Show locked folders on this device's drive for a while / hide them again
 sync [list|add|edit|remove|run|stop|pause|resume|status|modes]
                                      Folders kept in sync with the drive (see "Sync and back up folders")
-accounts [list|admin [note]|disable <id>|enable <id>|delete <id>|moves|move-cancel <id>]
-                                     Accounts on the dashboard, admin accounts (co-owners), moves between accounts
+accounts [list|disable <id>|enable <id>|delete <id>|moves|move-cancel <id>]
+                                     Accounts on the dashboard, admin accounts, moves between accounts
 ```
 
 Paths can be given as `Z:\Folder\file.mp4`, `/mnt/ddrive/Folder/file.mp4`, or `/Folder/file.mp4`.
@@ -658,11 +658,15 @@ Settings) decides who may make one:
   key never reaches your computer's DDrive; keep the tab open while it runs.
 - **What it doesn't have**: Messages on the phone app (the Discord logger runs on a computer). And
   never: Settings, Log, Health and anything else that manages the drive or the computer.
-- **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
-  computer, which keeps their keys, so they trust you with them; they open the full dashboard). The
-  sign-in page tries a typed phrase as an end-to-end account first, without sending it, and only sends
-  the words when the person then chooses "sign in the earlier way", which is also how you, the owner,
-  sign in.
+- **Accounts of the earlier kind are retired.** Before 2.5.0, and until 2.18.0 on a plain `http`
+  address, an account's 24 words were made by your computer, which kept its key: its files are
+  encrypted, but your computer can read them. No such account is made any more, by sign-up, by you or
+  in a terminal. The ones there are can only be read: signed in, their owner is told so and offered
+  "Move everything…", which seals all of it in their browser into a new end-to-end encrypted account
+  (24 new words), after which they delete the old one. Uploading, changing, sharing and syncing are
+  refused for them. The sign-in page tries a typed phrase as an end-to-end account first, without
+  sending it, and only sends the words when the person then chooses "sign in the earlier way", which
+  is also how you, the owner, sign in.
 - **Limits**: *Storage per account* (`account_quota_bytes`, 5 GB unless you change it; earlier
   versions and deleted files count until they are gone) and *Most accounts* (`accounts_max`, 100).
   At most three accounts an hour are made from one address.
@@ -671,7 +675,8 @@ Settings) decides who may make one:
   its 24 words and shows them; once you tick that they are written down, it sends only the sign-in key
   made from them, so the account is end-to-end encrypted like one made at `/signup`. Pass the words
   on: nobody, you included, can open or reset the account without them. (On a plain `http` address a
-  browser can't encrypt, so there it makes an account of the earlier kind, whose words the server makes.)
+  browser can't encrypt, so none can be made there: open the dashboard by its `https` address, or on
+  the computer itself as `http://localhost`.)
 - **Managing them**: the list under Settings → Accounts shows each account's id, how much it stores
   and when it last signed in. **Switch off** signs it out and stops its share links without deleting
   anything; **Delete** removes it from this computer and from Discord. An account can delete itself
@@ -692,21 +697,33 @@ Settings) decides who may make one:
 
 ### Admin accounts
 
-An admin account is a **co-owner**: 24 words of its own that sign in to your dashboard with
-everything you can do there (your files, the drive's settings, sync, repair, the log, accounts,
-invites, other admins), except change how you sign in: the recovery phrase, your passkeys and the
-password for other apps are yours alone. Make one under Settings → Accounts → **Make an admin…**, or
-in a terminal:
+An admin account is an **end-to-end encrypted account that may also manage the drive**. Like any
+account it has storage of its own, which your computer can't read, and 24 words that are made in a
+browser and never reach your computer. On top of that it gets **Manage the drive** in the menu at the
+top right, which opens the pages that look after the drive: its settings, accounts, invites and other
+admins, Health and repair, the Log and Resources.
 
-```text
-./run.sh accounts admin "for Sam"      (run.bat accounts admin ... on Windows)
-```
+What an admin can't do: open, list, search or change **your files** (it isn't a second owner), and
+change how you sign in: the recovery phrase, your passkeys and the password for other apps are yours
+alone. The Health and Log pages can name files of yours, where a file is damaged or an error is about
+one; that is all an admin sees of them.
 
-The words are shown once; give them to that person. **Switch off** or **Delete** it in the list and
-it is signed out at once, which is why an admin is better than handing out your recovery phrase.
-An admin has no storage of its own, so the computer keeps no key of it, only a check that recognises
-its words; it doesn't count towards *Most accounts*. While the drive is stopped, `accounts admin`
-changes the list on disk itself; while it runs, it asks the running dashboard.
+Make one under Settings → Accounts → **Make an admin…**, on an `https` address or on the computer
+itself (`http://localhost`): your browser makes the words and shows them once; give them to that
+person. There is no terminal command for it, because a terminal on your computer would have to make
+the words there. **Switch off** or **Delete** it in the list and it is signed out at once, which is
+why an admin is better than handing out your recovery phrase. Admins don't count towards *Most
+accounts*; `accounts list`, `disable`, `enable` and `delete` work on them as on any account.
+
+Admin accounts made by 2.16.0 to 2.17.2 were of another kind (their words were made by your computer,
+and they signed in as you, files included). They can't sign in any more: delete them in the list and
+make new ones.
+
+How it works: the admin's page asks for its own files as any end-to-end encrypted account does, and
+says so with a header (`X-DD-Admin: 1`) when it asks something of the drive itself. Your computer
+answers those only for an account marked as an admin, and only what `ADMIN_GET` and `ADMIN_POST` in
+`ddrive/web.py` list; a route that isn't listed there is refused, so a new one is yours alone until
+it is added.
 
 **Terms and privacy policy.** A dashboard that has accounts needs to say what it does with people's
 data. DDrive serves two pages for that, linked from the sign-in and sign-up pages: `/terms` and
