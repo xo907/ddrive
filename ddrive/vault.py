@@ -34,6 +34,19 @@ Formats (the same in the browser, in the phone app and here):
               unnoticed. An empty file is one empty piece.
     a change  sealed JSON, label "ddv1 op"; several are sent together as a batch: each one preceded
               by its length (4 bytes).
+
+The list is a set of entries, one per file or folder, each with an id of its own:
+
+    {id, parent (a folder's id, "" for the top), name, dir, size, mtime, obj, key}   and, when they apply,
+    star      when it was starred
+    thumb     {obj, key} of its small picture (or -1: none can be made)
+    versions  what the file was before it was last replaced, newest first: [{obj, key, size, mtime, at}]
+    trash     {at, path}: it was deleted then, from there. It is kept (and can be brought back) until
+              it is purged; meanwhile it and what is in it count as not there.
+
+and the changes are: "put" (an entry as it now is), "move" (id, parent, name), "set" (id, fields: the
+ones given replace the entry's, null removes one), "del" (id: the entry and what is in it are gone for
+good). An entry may carry fields a client doesn't know; it keeps them as they are.
 """
 
 import base64
@@ -57,6 +70,7 @@ CHUNK_LOG = 20                    # a file is sealed in pieces of 1 MiB
 OVERHEAD = 28                     # nonce + tag of a sealed thing
 PART = 8 * 1024 * 1024            # sealed pieces go to the host this many bytes of the file at a time
 SNAPSHOT_EVERY = 400              # changes after which the whole list is sealed anew
+VERSIONS_KEPT = 10                # earlier versions of a file that are kept
 
 
 class VaultError(Exception):
@@ -204,7 +218,15 @@ class Vault:
         self._kids = None
         kind = op.get("op")
         if kind == "put":
-            self.nodes[op["id"]] = {k: op.get(k) for k in ("id", "parent", "name", "dir", "size", "mtime", "obj", "key", "thumb")}
+            self.nodes[op["id"]] = {k: v for k, v in op.items() if k != "op"}
+        elif kind == "set":
+            node = self.nodes.get(op["id"])
+            if node is not None:
+                for k, v in (op.get("fields") or {}).items():
+                    if v is None:
+                        node.pop(k, None)
+                    elif k not in ("id",):
+                        node[k] = v
         elif kind == "move":
             node = self.nodes.get(op["id"])
             if node is not None:
@@ -240,7 +262,8 @@ class Vault:
         if self._kids is None:
             kids = {}
             for n in self.nodes.values():
-                kids.setdefault(n["parent"], {})[n["name"]] = n
+                if not n.get("trash"):               # deleted: kept, but not there
+                    kids.setdefault(n["parent"], {})[n["name"]] = n
             self._kids = kids
         return self._kids
 
@@ -258,6 +281,17 @@ class Vault:
                 return None
             nid = node["id"]
         return node
+
+    def files(self):
+        """The files that are there (not the deleted ones, nor what is in a deleted folder)."""
+        out, todo = [], [""]
+        while todo:
+            for n in self._children(todo.pop()):
+                if n["dir"]:
+                    todo.append(n["id"])
+                else:
+                    out.append(n)
+        return out
 
     def list(self, path="/"):
         node = self.resolve(path)
@@ -285,18 +319,44 @@ class Vault:
         self._send({"op": "move", "id": node["id"], "parent": up["id"], "name": name})
 
     def delete(self, path):
+        """Delete a file or a folder with what is in it. It is kept as deleted (and can be brought back
+        from the account's Deleted page) until it is purged."""
         node = self.resolve(path)
         if node is None or not node["id"]:
             raise VaultError(f"Not found: {path}")
-        objects, todo = [], [node]
-        while todo:
-            n = todo.pop()
-            if n.get("obj"):
-                objects.append(n["obj"])
-            todo.extend(self._children(n["id"]))
-        self._send({"op": "del", "id": node["id"]})
-        if objects:
-            self.client._json("/api/vault/delete", {"ids": objects})
+        self._send({"op": "set", "id": node["id"], "fields": {"trash": {"at": time.time(), "path": "/" + path.strip("/")}}})
+
+    @staticmethod
+    def _objects(node):
+        """The objects an entry holds on to: its content, its earlier versions, its small picture."""
+        out = [node.get("obj")] + [v.get("obj") for v in node.get("versions") or []]
+        if isinstance(node.get("thumb"), dict):
+            out.append(node["thumb"].get("obj"))
+        return [o for o in out if o]
+
+    def _drop(self, objects):
+        """Have the host forget objects, except those something in the list still uses."""
+        used = {o for n in self.nodes.values() for o in self._objects(n)}
+        gone = [o for o in dict.fromkeys(objects) if o not in used]
+        if gone:
+            self.client._json("/api/vault/delete", {"ids": gone})
+
+    def purge(self, ids):
+        """Remove entries (deleted ones, usually) for good, with what is in them and their objects."""
+        objects, ops = [], []
+        for nid in ids:
+            todo = [nid]
+            while todo:
+                cur = todo.pop()
+                n = self.nodes.get(cur)
+                if n is None:
+                    continue
+                objects.extend(self._objects(n))
+                todo.extend(x["id"] for x in self.nodes.values() if x["parent"] == cur)
+            ops.append({"op": "del", "id": nid})
+        if ops:
+            self._send(*ops)
+            self._drop(objects)
 
     # ------------------------------------------------------------ files
     def _store(self, oid, key, data=None, read=None, size=None, log=CHUNK_LOG, stop=None, hear=None):
@@ -366,11 +426,20 @@ class Vault:
         size = len(data) if data is not None else size
         key, oid = os.urandom(32), new_id()
         self._store(oid, key, data, read, size, stop=stop, hear=hear)
-        self._send({"op": "put", "id": old["id"] if old else new_id(), "parent": up["id"], "name": name, "dir": False,
-                    "size": size, "mtime": mtime if mtime is not None else time.time(), "obj": oid,
-                    "key": base64.b64encode(key).decode("ascii")})
-        if old is not None and old.get("obj"):
-            self.client._json("/api/vault/delete", {"ids": [old["obj"]]})
+        entry = {"id": new_id(), "parent": up["id"], "name": name, "dir": False}
+        dropped = []
+        if old is not None:                      # replaced: what it was is kept as an earlier version
+            entry = {k: v for k, v in old.items() if k != "thumb"}
+            if isinstance(old.get("thumb"), dict):
+                dropped.append(old["thumb"].get("obj"))
+            versions = ([{"obj": old["obj"], "key": old["key"], "size": old["size"], "mtime": old["mtime"], "at": time.time()}]
+                        if old.get("obj") else []) + list(old.get("versions") or [])
+            dropped += [v.get("obj") for v in versions[VERSIONS_KEPT:]]
+            entry["versions"] = versions[:VERSIONS_KEPT]
+        entry.update(size=size, mtime=mtime if mtime is not None else time.time(), obj=oid,
+                     key=base64.b64encode(key).decode("ascii"))
+        self._send(dict(entry, op="put"))
+        self._drop(dropped)
 
     def read(self, path, start=0, length=None):
         node = self.resolve(path)

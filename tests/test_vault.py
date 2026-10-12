@@ -101,6 +101,15 @@ class VaultTest(helpers.DriveTest):
         aid = next(iter(self.web.accounts._recs))
         return self.web.accounts.acquire(aid)
 
+    def objects(self):
+        """The ids of the sealed objects the host holds for the account."""
+        d = self.account_drive()
+        try:
+            top = d.index.resolve("/o")
+            return [c["name"] for sub in (d.index.children(top["id"]) if top else []) for c in d.index.children(sub["id"])]
+        finally:
+            self.web.accounts.release(d)
+
     def test_files_go_there_sealed_and_come_back(self):
         v = self.device
         self.assertEqual(v.client.status()["e2e"], True)
@@ -123,6 +132,19 @@ class VaultTest(helpers.DriveTest):
         v.delete("/Tax returns")
         v.delete("/renamed.pdf")
         self.assertEqual([n["name"] for n in other.sync().list("/")], ["empty.txt"])
+        # what was deleted is kept until it is purged, and what was replaced is kept as an earlier version
+        gone = [n for n in other.nodes.values() if n.get("trash")]
+        self.assertEqual(sorted(n["trash"]["path"] for n in gone), ["/Tax returns", "/renamed.pdf"])
+        self.assertIsNone(other.resolve("/renamed.pdf"))
+        was = other.resolve("/empty.txt")["versions"]
+        self.assertEqual([(x["size"]) for x in was], [0])
+        held = set(self.objects())
+        self.assertIn(was[0]["obj"], held)
+        pdf = next(n for n in gone if n["name"] == "renamed.pdf")
+        self.assertIn(pdf["obj"], held)
+        other.purge([n["id"] for n in gone])                           # now they are gone, and their sealed content with them
+        self.assertNotIn(pdf["obj"], set(self.objects()))
+        self.assertEqual([n["name"] for n in v.sync().nodes.values()], ["empty.txt"])
         # the wrong words open nothing: there isn't even such an account
         with self.assertRaises(lite.HostError) as e:
             self.new_device(os.urandom(32))

@@ -178,9 +178,15 @@ class Vault(val client: HostClient, key: ByteArray) {
         kids = null
         when (op.optString("op")) {
             "put" -> {
-                val n = JSONObject()
-                for (k in listOf("id", "parent", "name", "dir", "size", "mtime", "obj", "key", "thumb")) if (op.has(k)) n.put(k, op.get(k))
+                val n = JSONObject()             // every field, also ones this app doesn't know: they are kept as they are
+                for (k in op.keys()) if (k != "op") n.put(k, op.get(k))
                 nodes[op.getString("id")] = n
+            }
+            "set" -> nodes[op.getString("id")]?.let { n ->
+                val fields = op.optJSONObject("fields") ?: JSONObject()
+                for (k in fields.keys()) if (k != "id") {
+                    if (fields.isNull(k)) n.remove(k) else n.put(k, fields.get(k))
+                }
             }
             "move" -> nodes[op.getString("id")]?.put("parent", op.getString("parent"))?.put("name", op.getString("name"))
             "del" -> for (id in under(op.getString("id"))) nodes.remove(id)
@@ -231,7 +237,7 @@ class Vault(val client: HostClient, key: ByteArray) {
     private fun byFolder(): HashMap<String, HashMap<String, JSONObject>> {
         kids?.let { return it }
         val made = HashMap<String, HashMap<String, JSONObject>>()
-        for (n in nodes.values) made.getOrPut(n.optString("parent")) { HashMap() }[n.optString("name")] = n
+        for (n in nodes.values) if (!n.has("trash") || n.isNull("trash")) made.getOrPut(n.optString("parent")) { HashMap() }[n.optString("name")] = n   // (deleted: kept, but not there)
         kids = made
         return made
     }
@@ -248,8 +254,41 @@ class Vault(val client: HostClient, key: ByteArray) {
         node
     }
 
-    val fileCount: Int get() = synchronized(lock) { nodes.values.count { !it.optBoolean("dir") } }
-    val bytes: Long get() = synchronized(lock) { nodes.values.sumOf { if (it.optBoolean("dir")) 0L else it.optLong("size") } }
+    /** The files that are there (not the deleted ones, nor what is in a deleted folder). */
+    private fun files(): List<JSONObject> = synchronized(lock) {
+        val by = byFolder()
+        val out = ArrayList<JSONObject>()
+        val todo = ArrayDeque(listOf(""))
+        while (todo.isNotEmpty()) for (n in by[todo.removeLast()]?.values ?: emptyList()) {
+            if (n.optBoolean("dir")) todo.add(n.getString("id")) else out.add(n)
+        }
+        out
+    }
+
+    val fileCount: Int get() = files().size
+    val bytes: Long get() = files().sumOf { it.optLong("size") }
+
+    /** The objects an entry holds on to: its content, its earlier versions, its small picture. */
+    private fun objectsOf(n: JSONObject): List<String> {
+        val out = ArrayList<String>()
+        fun add(s: String?) { if (!s.isNullOrEmpty() && s != "null") out.add(s) }
+        add(n.optString("obj"))
+        n.optJSONArray("versions")?.let { v -> for (i in 0 until v.length()) add(v.optJSONObject(i)?.optString("obj")) }
+        add(n.optJSONObject("thumb")?.optString("obj"))
+        return out
+    }
+
+    /** Have the host forget objects, except those something in the list still uses. */
+    private fun drop(objects: List<String>) {
+        val used = synchronized(lock) { nodes.values.flatMap { objectsOf(it) }.toSet() }
+        val gone = JSONArray()
+        for (o in objects.distinct()) if (o !in used) gone.put(o)
+        if (gone.length() > 0) try {
+            client.postJson("/api/vault/delete", JSONObject().put("ids", gone))
+        } catch (e: HostError) {
+            // it is only room that is not given back
+        }
+    }
 
     // ------------------------------------------------------------ changing things
     /** Have a folder (and the ones above it) exist. */
@@ -273,13 +312,15 @@ class Vault(val client: HostClient, key: ByteArray) {
         send(JSONObject().put("op", "move").put("id", node.getString("id")).put("parent", up.getString("id")).put("name", to.substringAfterLast('/')))
     }
 
-    /** Remove a file or a folder (with what is in it). */
+    /**
+     * Delete a file or a folder with what is in it. It is kept as deleted (and can be brought back
+     * from the account's Deleted page) until it is purged there.
+     */
     fun delete(path: String) {
         val node = resolve(path) ?: throw HostError(404, "Not found: $path")
-        val objects = JSONArray()
-        synchronized(lock) { for (id in under(node.getString("id"))) nodes[id]?.optString("obj")?.takeIf { it.isNotEmpty() && it != "null" }?.let { objects.put(it) } }
-        send(JSONObject().put("op", "del").put("id", node.getString("id")))
-        if (objects.length() > 0) client.postJson("/api/vault/delete", JSONObject().put("ids", objects))
+        if (node.getString("id").isEmpty()) throw HostError(400, "The account itself can't be deleted")
+        send(JSONObject().put("op", "set").put("id", node.getString("id"))
+            .put("fields", JSONObject().put("trash", JSONObject().put("at", now()).put("path", "/" + path.trim('/')))))
     }
 
     // ------------------------------------------------------------ files
@@ -343,15 +384,27 @@ class Vault(val client: HostClient, key: ByteArray) {
         } catch (e: java.io.FileNotFoundException) {
             throw LocalError(e)
         }
-        send(JSONObject().put("op", "put").put("id", old?.getString("id") ?: Seal.newId()).put("parent", up.getString("id"))
-            .put("name", path.substringAfterLast('/')).put("dir", false).put("size", size).put("mtime", mtime)
-            .put("obj", obj).put("key", Base64.getEncoder().encodeToString(key)))
-        val before = old?.optString("obj").orEmpty()
-        if (before.isNotEmpty() && before != "null") try {
-            client.postJson("/api/vault/delete", JSONObject().put("ids", JSONArray().put(before)))
-        } catch (e: HostError) {
-            // it is only room that is not given back
+        val entry = JSONObject()
+        val dropped = ArrayList<String>()
+        if (old == null) {
+            entry.put("id", Seal.newId()).put("parent", up.getString("id")).put("name", path.substringAfterLast('/')).put("dir", false)
+        } else {                                 // replaced: what it was is kept as an earlier version
+            for (k in old.keys()) if (k != "thumb") entry.put(k, old.get(k))
+            old.optJSONObject("thumb")?.optString("obj")?.let { dropped.add(it) }
+            val versions = JSONArray()
+            val was = old.optString("obj")
+            if (was.isNotEmpty() && was != "null") versions.put(JSONObject().put("obj", was).put("key", old.optString("key"))
+                .put("size", old.optLong("size")).put("mtime", old.optDouble("mtime")).put("at", now()))
+            old.optJSONArray("versions")?.let { v ->
+                for (i in 0 until v.length()) {
+                    if (versions.length() < VERSIONS_KEPT) versions.put(v.get(i)) else v.optJSONObject(i)?.optString("obj")?.let { dropped.add(it) }
+                }
+            }
+            entry.put("versions", versions)
         }
+        entry.put("size", size).put("mtime", mtime).put("obj", obj).put("key", Base64.getEncoder().encodeToString(key)).put("op", "put")
+        send(entry)
+        drop(dropped)
     }
 
     private fun readObject(key: ByteArray, obj: String, size: Long, out: OutputStream, stop: (() -> Boolean)?): Long {
@@ -400,5 +453,6 @@ class Vault(val client: HostClient, key: ByteArray) {
     private companion object {
         const val PART_CHUNKS = 8L               // sealed pieces go to the host this many at a time
         const val SNAPSHOT_EVERY = 400
+        const val VERSIONS_KEPT = 10             // earlier versions of a file that are kept
     }
 }

@@ -392,10 +392,17 @@ class AgentTest {
         assertTrue(data.contentEquals(big.toByteArray()))
         assertEquals(1_700_000_000.5, other.resolve("/Camera roll/2026/holiday.mp4")!!.getDouble("mtime"), 0.001)
         other.move("/empty.txt", "/Camera roll/renamed.txt")
-        other.delete("/Camera roll/2026")
+        other.delete("/Camera roll/2026")              // deleted: gone from the list, kept until it is purged on the account's page
         v.sync()
         assertEquals(listOf("renamed.txt"), v.children(v.resolve("/Camera roll")!!.getString("id")).map { it.getString("name") })
         assertEquals(2, v.fileCount)
+        assertNull(v.resolve("/Camera roll/2026/holiday.mp4"))
+        // a file that is replaced keeps what it was as an earlier version, and fields this app doesn't know stay
+        v.put("/from the laptop.txt", put("new.txt", "newer".toByteArray()), 5, 1_700_000_100.0)
+        other.sync()
+        val replaced = other.resolve("/from the laptop.txt")!!
+        assertEquals(17, replaced.getJSONArray("versions").getJSONObject(0).getLong("size"))
+        assertEquals("ok", python("sha ${hex(key)} /from%20the%20laptop.txt").let { if (it.length == 64) "ok" else it })
         // the wrong words open nothing: there isn't even such an account; and the plain way in is shut
         assertEquals(401, runCatching { Vault(HostClient(address, "", auth = hex(Seal.authKey(Seal.randomBytes(32)))), key).sync() }
             .exceptionOrNull().let { (it as HostError).status })

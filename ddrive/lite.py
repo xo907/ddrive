@@ -734,7 +734,7 @@ def cmd_connect(args):
     save_settings(s)
     if e2e:
         v = vault.Vault(client, key).sync()
-        files = [n for n in v.nodes.values() if not n["dir"]]
+        files = v.files()
         print(f"[SUCCESS] Connected to {client.address} as {user}, end-to-end encrypted: DDrive {st.get('version')}, "
               f"{len(files)} files ({format_size(sum(n['size'] for n in files))}).")
         print("          Your words stay on this computer; the host gets a sign-in key made from them and sealed files.")
@@ -939,7 +939,7 @@ def cmd_status(args):
     print(f"Host:        {s['host']} (signed in as {s.get('user')})")
     if s.get("e2e"):
         v = vault_from(s)
-        files = [n for n in v.nodes.values() if not n["dir"]]
+        files = v.files()
         print(f"Account:     end-to-end encrypted, {len(files)} files, {format_size(sum(n['size'] for n in files))}")
     else:
         print(f"On this PC:  {mp} ({'shown' if _is_mounted(mp) else 'not shown; lite mount'})")
