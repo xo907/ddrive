@@ -179,8 +179,12 @@
     }
     _apply(op) {
       if (op.op === "put") {
-        this.nodes.set(op.id, { id: op.id, parent: op.parent, name: op.name, dir: !!op.dir, size: op.size || 0, mtime: op.mtime || 0,
-                                obj: op.obj || null, key: op.key || null, thumb: op.thumb || null });
+        const n = { ...op, dir: !!op.dir, size: op.size || 0, mtime: op.mtime || 0 };      // every field, also ones not known here
+        delete n.op;
+        this.nodes.set(op.id, n);
+      } else if (op.op === "set") {
+        const n = this.nodes.get(op.id);
+        if (n) for (const [k, val] of Object.entries(op.fields || {})) { if (val === null) delete n[k]; else if (k !== "id") n[k] = val; }
       } else if (op.op === "move") {
         const n = this.nodes.get(op.id);
         if (n) { n.parent = op.parent; n.name = op.name; }
@@ -219,7 +223,7 @@
 
     // ---------- finding things
     children(parent) {
-      return [...this.nodes.values()].filter((n) => n.parent === parent)
+      return [...this.nodes.values()].filter((n) => n.parent === parent && !n.trash)
         .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
     }
     /** The folder a path names ("" is the top), or null. */
@@ -238,7 +242,7 @@
       return names;
     }
     taken(parent, name, except) {
-      return [...this.nodes.values()].some((n) => n.parent === parent && n.name === name && n.id !== except);
+      return [...this.nodes.values()].some((n) => n.parent === parent && n.name === name && n.id !== except && !n.trash);
     }
     freeName(parent, name) {
       if (!this.taken(parent, name)) return name;
@@ -340,5 +344,6 @@
     }
   }
 
-  window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, sealMessage, openMessage, newId };
+  window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
+                 newId, fileKey, unseal, chunkLabel, chunksOf, b64, unb64 };
 })();

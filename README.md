@@ -620,11 +620,14 @@ Settings) decides who may make one:
 - **What it rests on.** The page that does the encrypting is served by the computer that runs the
   drive. A person with an account trusts that it serves the real page; a tampered server could serve
   one that leaks the words. Every service that encrypts in a web page has this limit.
-- **What an account has, for now**: a files page of its own: folders, upload (also by dropping files
-  or folders on it), download, preview of pictures, text, audio and video, rename, move, delete.
-  Files of any size go up in parts and are encrypted piece by piece; in Chrome and Edge a download is
-  written straight to disk. It needs an `https` address (or the computer itself): a browser doesn't
-  encrypt on plain `http`.
+- **What an account has**: the same dashboard as you. Home, Files (upload, also by dropping; preview;
+  rename, move, copy, delete; stars; search; earlier versions), the Gallery with thumbnails, Notes,
+  Sync, Deleted (kept 30 days) and Storage. A layer in the browser (`e2e-api.js`) answers the
+  dashboard's questions from the list of files as the browser opened it, where your computer would
+  otherwise answer them from files it can read; pictures and videos are opened as they are shown, so a
+  video plays and seeks without being downloaded first. Files of any size go up in parts, sealed piece
+  by piece; in Chrome and Edge a big download is written straight to disk. It needs an `https` address
+  (or the computer itself): a browser doesn't encrypt on plain `http`.
 - **Folder syncing from a computer.** [DDrive Lite](#ddrive-lite) connected with the account's words
   (`lite connect`, then `lite sync on`) shows up under **Sync** on the account's page, where its
   folders are added and run as on the owner's Sync page. The computer seals the files itself, and
@@ -632,11 +635,11 @@ Settings) decides who may make one:
   too: your computer passes those messages on unread. `lite ls`, `get` and `put` work as well; a
   drive letter doesn't yet. The [phone app](#ddrive-lite-for-android) does the same: connected with
   the account's words it backs up the phone's folders sealed.
-- **What it doesn't have yet**, because each of these needs the file or its name in the clear on your
-  computer and has to be rebuilt to work on the device: the gallery and thumbnails, playing a big
-  video without downloading it, share links, notes, bookmarks, contacts, messages, earlier versions
-  and snapshots, and a drive letter through DDrive Lite. And never: Settings, Log,
-  Health and anything else that manages the drive or the computer.
+- **What it doesn't have yet**, because each of these needs work done on the person's own device that
+  your computer used to do with the files in the clear: bookmarks, messages, contacts, share links,
+  snapshots, the activity list, saving from a web link, a folder as one ZIP, and a drive letter
+  through DDrive Lite. Their pages aren't shown for these accounts. And never: Settings, Log, Health
+  and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
   computer, which keeps their keys, so they trust you with them; they open the full dashboard). The
   sign-in page tries a typed phrase as an end-to-end account first, without sending it, and only sends

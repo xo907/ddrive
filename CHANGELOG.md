@@ -3,6 +3,36 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.8.0 (2026-10-11)
+
+- **End-to-end encrypted accounts get the whole dashboard.** The plain files page of 2.5.0 is gone. An
+  end-to-end account now opens the same dashboard as everybody: Home, Files with everything one does
+  there (upload, also by dropping; preview; rename, move, copy, delete; star; search; earlier
+  versions), the Gallery with thumbnails, Starred, Notes, Sync, Deleted and Storage, and the account
+  page. It looks and behaves the same; what differs is where the work is done.
+- How: the dashboard asks the server for everything, and for these accounts the server can answer none
+  of it (it holds sealed files and a sealed list). So a layer in the browser (`e2e-api.js`) answers
+  the dashboard's questions instead, from the list of files as the browser opened it, in the server's
+  own words. Pictures and videos shown on the page are opened through a small service worker that
+  asks the page for the bytes.
+- **Videos and music play without being downloaded first**, and seeking works: only the pieces that are
+  played are fetched and opened.
+- **Thumbnails** are made in the browser, sealed, and stored with the file, so the gallery is quick on
+  every device of the account.
+- **Deleted** keeps what you delete for 30 days, for bringing back. **Earlier versions**: a file that
+  is replaced, by the browser or by a device that syncs, keeps what it was (the last ten). **Copy**
+  makes a second name for the same sealed content; nothing is uploaded again.
+- **Sync** is the dashboard's own Sync page: the account's computers and phones, their folders, the
+  folder browser, start, stop, pause, as for the owner, with everything said about it sealed.
+- The list of files gained what this needs (stars, thumbnails, earlier versions, deleted entries),
+  and all three clients (browser, DDrive Lite, phone app) understand it: a file deleted in the browser
+  is deleted on a device that syncs it both ways, and can still be brought back from Deleted.
+- Not there yet for these accounts, and not shown in their menu: Bookmarks, Messages, Contacts, Shared,
+  Snapshots and Activity, saving from a web link, and a folder as one ZIP. They are next; some of them
+  need one of your own devices to do what the server used to do.
+- The phone app (2.8.0) and DDrive Lite understand the new list. Update them together with the server:
+  an older app would drop the new details when it tidies the list.
+
 ## 2.7.0 (2026-10-11)
 
 - **The phone app works with end-to-end encrypted accounts.** Connect it with such an account's 24

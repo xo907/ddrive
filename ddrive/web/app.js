@@ -16,6 +16,10 @@ let route = { name: "", args: [] };
 // pages that manage the drive or the computer. The drive refuses those requests anyway; this hides them.
 const isAccount = () => !!status && status.role === "account";
 const OWNER_PAGES = ["log", "health", "resources", "check"];
+// What an end-to-end encrypted account doesn't have yet: each of these needs work done on the device
+// that the server used to do with the files in the clear.
+const E2E_LATER = ["bookmarks", "messages", "contacts", "shared", "snapshots", "history"];
+const notHere = (name) => (isAccount() && OWNER_PAGES.includes(name)) || (!!(status && status.e2e) && E2E_LATER.includes(name));
 
 // ------------------------------------------------------------------ helpers
 function h(tag, attrs, ...children) {
@@ -333,6 +337,7 @@ function backgroundMenu() {
 }
 
 function download(url, name) {
+  if (window.E2E && E2E.active && E2E.download(url, name)) return;        // an end-to-end account: opened here, then saved
   const a = h("a", { href: url, download: name, style: "display:none" });
   document.body.append(a);
   a.click();
@@ -367,7 +372,7 @@ async function refreshStatus() {
   const acct = $("#account");
   if (acct && status.user) { acct.textContent = status.user.slice(0, 1).toUpperCase(); acct.title = `Signed in as ${status.user}`; }
   else if (acct && isAccount()) { if (!acct.firstChild) acct.append(icon("user")); acct.title = `Your account (${status.account})`; }
-  for (const a of document.querySelectorAll("#nav a")) a.hidden = isAccount() && OWNER_PAGES.includes(a.dataset.nav);
+  for (const a of document.querySelectorAll("#nav a")) a.hidden = notHere(a.dataset.nav);
   $("#sync").setAttribute("href", isAccount() ? "#/storage" : "#/health");
   if ((route.name === "health" || route.name === "resources") && !$("#sheet").classList.contains("open")) {
     keepScroll = true;
@@ -418,7 +423,7 @@ function render() {
   closeSheet();
   leaveNotes();
   leaveMessages();
-  if (isAccount() && OWNER_PAGES.includes(route.name)) return go("#/home");
+  if (notHere(route.name)) return go("#/home");
   if (route.name !== "files" || route.path !== currentDir) sel.clear();
   const views = { files: renderFiles, search: renderSearch, deleted: renderDeleted, snapshots: renderSnapshots,
                   snapshot: renderSnapshot, health: renderHealth, notes: renderNotes, shared: renderShared,
@@ -1047,7 +1052,7 @@ function uploadFile(file, dir) {
     const item = h("div", { class: "item" }, h("div", { class: "n" }, h("span", {}, file.name), pct), h("div", { class: "meter" }, bar), sub);
     tray.prepend(item);
     const started = Date.now();
-    const xhr = new XMLHttpRequest();
+    const xhr = window.E2E && E2E.active ? E2E.xhr() : new XMLHttpRequest();      // (an end-to-end account: sealed here, then sent)
     xhr.open("POST", "/api/upload" + q({ path: join(dir, file.name) }));
     xhr.setRequestHeader("X-DD", "1");
     xhr.upload.onprogress = (e) => {
@@ -3484,7 +3489,7 @@ function openPalette() {
                  ["Activity", "#/history"], ["Storage", "#/storage"], ["Resources", "#/resources"], ["Notes", "#/notes"], ["Bookmarks", "#/bookmarks"], ["Messages", "#/messages"], ["Contacts", "#/contacts"], ["Shared links", "#/shared"],
                  ["Folder sync", "#/sync"], ["Deleted files", "#/deleted"], ["Snapshots", "#/snapshots"], ["Log", "#/log"], ["Health", "#/health"],
                  [isAccount() ? "Your account" : "Settings", "#/settings"]]
-    .filter(([, href]) => !isAccount() || !OWNER_PAGES.includes(href.slice(2)))
+    .filter(([, href]) => !notHere(href.slice(2)))
     .map(([label, href]) => ({ label, hint: "Go to", icon: "enter", run: () => go(href) }));
   const actions = [
     { label: "Upload files", hint: "Action", icon: "upload", run: () => $("#pick").click() },

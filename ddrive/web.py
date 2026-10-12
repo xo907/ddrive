@@ -695,13 +695,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                     return self._send(200, f.read(), "text/plain; charset=utf-8", {"Cache-Control": "public, max-age=86400"})
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
                                              "/manifest.webmanifest", "/share-upload.js", "/signin.js",
-                                             "/vaultcore.js", "/e2e.js", "/vaultapp.js", "/vault.css"):
-                if route in ("/", "/index.html"):
-                    who = self._who()
-                    if who is None:
-                        return self._signin()
-                    if who and (self.server.app.accounts.active(who) or {}).get("e2e"):
-                        return self._static("vault.html")       # an end-to-end account's own page: it opens the files itself
+                                             "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js"):
+                if route in ("/", "/index.html") and self._who() is None:
+                    return self._signin()
+                # An end-to-end encrypted account gets the same dashboard as everybody: e2e-api.js, which it
+                # loads, answers its questions in the browser from what only the browser can open.
                 return self._static(route.lstrip("/") or "index.html")
             who = self._who()
             if who is None:

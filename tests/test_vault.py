@@ -230,12 +230,12 @@ class VaultTest(helpers.DriveTest):
         page = get("/signup")[1]
         self.assertIn(b"e2e-make", page)                               # the words are made in the browser...
         self.assertNotIn(b'name="phrase"', page)                       # ...and the page has nowhere to put them for sending
-        for name in ("/vaultcore.js", "/e2e.js", "/vaultapp.js", "/vault.css"):
+        for name in ("/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js"):
             self.assertEqual(get(name)[0], 200, name)
         self.device.client.status()
-        mine = get("/", self.device.client.cookie)[1]                  # an end-to-end account gets its own page, not the dashboard
-        self.assertIn(b"vaultapp.js", mine)
-        self.assertNotIn(b"app.js\"", mine.replace(b"vaultapp.js", b""))
+        mine = get("/", self.device.client.cookie)[1]                  # the same dashboard as everybody, with what answers it in the browser
+        self.assertIn(b"e2e-api.js", mine)
+        self.assertLess(mine.index(b"e2e-api.js"), mine.index(b'"/app.js"'))
 
     def test_the_list_is_sealed_whole_now_and_then(self):
         v = self.device
