@@ -65,17 +65,75 @@
     } catch (e) { $("note").textContent = e.message; }
     finally { button.disabled = false; button.textContent = was; }
   }
-  async function show(f) {
-    const name = f.path.split("/").pop(), type = TYPES[ext(name)], view = $("view");
+  // ------------------------------------------------------------ a link that is for looking only
+  // When downloading is turned off, the page makes saving what it shows as awkward as a page can. There is
+  // no picture file anywhere in it: a picture is painted, no bigger than it is shown, onto a grid of small
+  // canvases under a pane that takes the clicks, so there is nothing to right-click, drag, copy or "save as",
+  // nothing with an address for a download helper to find (what comes from the server is sealed pieces, not
+  // pictures), and the page goes blank when it is printed or the window loses focus (as it does when a
+  // snipping tool opens). What no page can prevent: a photo of the screen, a screenshot taken by the system
+  // itself, and somebody who writes a program around the link, since the link is the key.
+  let guarded = false;
+  function guard() {
+    if (guarded) return;
+    guarded = true;
+    const root = document.documentElement;
+    root.classList.add("guard");
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    for (const what of ["contextmenu", "dragstart", "selectstart", "copy", "cut"]) document.addEventListener(what, stop, true);
+    document.addEventListener("keydown", (e) => {
+      const k = (e.key || "").toLowerCase(), mod = e.ctrlKey || e.metaKey;
+      if (k === "f12" || k === "printscreen" || (mod && ["s", "p", "u", "c", "a"].includes(k)) || (mod && e.shiftKey && ["i", "j", "c", "s"].includes(k))) stop(e);
+    }, true);
+    document.addEventListener("keyup", (e) => {      // a screenshot key: what it may have put on the clipboard is replaced
+      if ((e.key || "").toLowerCase() === "printscreen" && navigator.clipboard) navigator.clipboard.writeText("").catch(() => null);
+    }, true);
+    const away = (on) => root.classList.toggle("away", on);
+    window.addEventListener("blur", () => away(true));
+    window.addEventListener("focus", () => away(false));
+    document.addEventListener("visibilitychange", () => away(document.hidden));
+    window.addEventListener("beforeprint", () => away(true));
+    window.addEventListener("afterprint", () => away(false));
+  }
+  /** A picture, painted in pieces at the size it is shown; the picture itself is let go of. */
+  async function painted(parts, type, view) {
+    const bmp = await createImageBitmap(new Blob(parts, { type }));
+    const N = 4, dpr = Math.min(2, window.devicePixelRatio || 1);
+    const scale = Math.min(1, Math.min(view.clientWidth || 800, 1600) / bmp.width, Math.round(window.innerHeight * 0.75) / bmp.height);
+    const w = Math.max(N, Math.floor(bmp.width * scale / N) * N), h = Math.max(N, Math.floor(bmp.height * scale / N) * N);
+    const box = el("div", { className: "tiles" });
+    box.style.width = `${w}px`; box.style.height = `${h}px`;
+    box.style.gridTemplateColumns = `repeat(${N}, 1fr)`;
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+      const cv = el("canvas", { width: Math.round(w / N * dpr), height: Math.round(h / N * dpr) });
+      cv.getContext("2d").drawImage(bmp, c * bmp.width / N, r * bmp.height / N, bmp.width / N, bmp.height / N, 0, 0, cv.width, cv.height);
+      box.append(cv);
+    }
+    bmp.close();
+    box.append(el("div", { className: "shield" }));
+    view.replaceChildren(box);
+  }
+
+  async function show(f, m) {
+    const name = f.path.split("/").pop(), type = TYPES[ext(name)], view = $("view"), looking = m && m.download === false;
     view.replaceChildren(el("p", { className: "muted", textContent: "Opening…" }));
     try {
-      if (f.size > SHOW_MAX) throw new Error("Too big to show here. Download it instead.");
+      if (f.size > SHOW_MAX) throw new Error(looking ? "Too big to show here." : "Too big to show here. Download it instead.");
+      if (looking && type === "application/pdf") throw new Error("This link is for looking only, and a browser can't show a PDF without offering to save it.");
       const parts = await whole(f);
       if (TEXT.has(ext(name)) && !type) { view.replaceChildren(el("pre", { textContent: dec.decode(await new Blob(parts).arrayBuffer()).slice(0, 400000) })); return; }
-      const url = URL.createObjectURL(new Blob(parts, { type }));
       const kind = type.split("/")[0];
-      view.replaceChildren(kind === "image" ? el("img", { src: url, alt: name }) : kind === "video" ? el("video", { src: url, controls: true })
-        : kind === "audio" ? el("audio", { src: url, controls: true }) : el("iframe", { src: url, title: name }));
+      if (looking && kind === "image") return await painted(parts, type, view);
+      const url = URL.createObjectURL(new Blob(parts, { type }));
+      const shown = kind === "image" ? el("img", { src: url, alt: name }) : kind === "video" ? el("video", { src: url, controls: true })
+        : kind === "audio" ? el("audio", { src: url, controls: true }) : el("iframe", { src: url, title: name });
+      if (looking) {                             // a film or a song: no save or cast buttons, and its address stops working once it is loaded
+        shown.setAttribute("controlslist", "nodownload noremoteplayback noplaybackrate");
+        shown.setAttribute("disablepictureinpicture", "");
+        shown.setAttribute("disableremoteplayback", "");
+        shown.addEventListener("loadeddata", () => URL.revokeObjectURL(url), { once: true });
+      }
+      view.replaceChildren(shown);
     } catch (e) { view.replaceChildren(el("p", { className: "err", textContent: e.message })); }
   }
 
@@ -120,17 +178,18 @@
   function render(m) {
     document.title = `${m.name} · DDrive`;
     $("title").textContent = m.name;
+    if (m.download === false) guard();
     const total = m.files.reduce((s, f) => s + f.size, 0);
     $("note").textContent = m.dir ? `${m.files.length} file${m.files.length === 1 ? "" : "s"}, ${size(total)}` : size(total);
     const showable = (f) => TYPES[ext(f.path)] || TEXT.has(ext(f.path));
     $("files").replaceChildren(...m.files.map((f) => {
       const dl = m.download !== false && el("button", { className: "btn", type: "button", textContent: "Download" });
       if (dl) dl.onclick = () => download(f, dl);
-      const open = showable(f) && el("button", { className: "btn ghost", type: "button", textContent: "View", onclick: () => show(f) });
+      const open = showable(f) && el("button", { className: "btn ghost", type: "button", textContent: "View", onclick: () => show(f, m) });
       return el("div", { className: "row" }, el("span", { className: "name", textContent: f.path }), el("span", { className: "size", textContent: size(f.size) }), open, dl);
     }));
     if (!m.files.length) $("files").replaceChildren(el("p", { className: "muted", textContent: "This folder is empty." }));
-    if (!m.dir && m.files[0] && showable(m.files[0]) && m.files[0].size <= SHOW_MAX) show(m.files[0]);
+    if (!m.dir && m.files[0] && showable(m.files[0]) && m.files[0].size <= SHOW_MAX) show(m.files[0], m);
   }
 
   async function start() {

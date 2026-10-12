@@ -3,6 +3,26 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.15.0 (2026-10-11)
+
+- **A share link with downloading turned off is much harder to save from** (links of end-to-end
+  encrypted accounts, the `/v/...` page). Until now "view only" just left the Download button out.
+- **A picture is no longer a picture in the page.** It is painted, no bigger than it is shown, onto a
+  grid of sixteen small canvases under a pane that takes the clicks. There is no image element and no
+  address of a file anywhere in the page, so there is nothing to right-click, drag out, copy, or
+  "Save image as", and nothing for a download helper to find: what comes from the server is sealed
+  pieces, not pictures.
+- On such a page the right-click menu, selecting, copying, dragging, and the keys for save, print,
+  view source and the developer tools are refused; printing gives an empty page; and what is shown is
+  hidden while the window is not in front, which is what happens when a snipping tool opens.
+- Films and music lose their save, cast and picture-in-picture buttons, and the address they play
+  from stops working once they are loaded. A PDF is not shown on a view-only link at all, because a
+  browser can't show one without offering to save it.
+- What this does not do, and no page can: stop a photo of the screen, a screenshot the system takes
+  by itself, or somebody who writes a program around the link (the link is the key). It makes saving
+  awkward for people, not impossible for a determined one.
+- Links of the owner's drive and of accounts of the earlier kind (`/s/...`) are unchanged.
+
 ## 2.14.0 (2026-10-11)
 
 - **"Move everything…" in Settings, under Accounts**: one button that copies your whole drive into an
