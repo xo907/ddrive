@@ -88,10 +88,16 @@
     document.addEventListener("keyup", (e) => {      // a screenshot key: what it may have put on the clipboard is replaced
       if ((e.key || "").toLowerCase() === "printscreen" && navigator.clipboard) navigator.clipboard.writeText("").catch(() => null);
     }, true);
-    const away = (on) => root.classList.toggle("away", on);
+    let until = 0;                             // hidden at least this long (after a key that starts a screenshot)
+    const away = (on) => root.classList.toggle("away", on || Date.now() < until || !document.hasFocus());
+    const hideFor = (ms) => { until = Date.now() + ms; away(true); setTimeout(() => away(false), ms + 50); };
     window.addEventListener("blur", () => away(true));
     window.addEventListener("focus", () => away(false));
     document.addEventListener("visibilitychange", () => away(document.hidden));
+    root.addEventListener("mouseleave", () => away(true));           // the pointer went to another window or a toolbar
+    root.addEventListener("mouseenter", () => away(false));
+    // the Windows / Command key and PrintScreen come before any snipping tool: what is shown goes first
+    document.addEventListener("keydown", (e) => { if (["meta", "os", "printscreen"].includes((e.key || "").toLowerCase()) || e.metaKey) hideFor(4000); }, true);
     window.addEventListener("beforeprint", () => away(true));
     window.addEventListener("afterprint", () => away(false));
   }
@@ -110,17 +116,33 @@
       box.append(cv);
     }
     bmp.close();
-    box.append(el("div", { className: "shield" }));
+    // Shown only while it is held: a hand that holds can't drag out a snipping rectangle at the same time.
+    const shield = el("div", { className: "shield" }, el("span", { textContent: "Press and hold to view" }));
+    const hold = (on) => box.classList.toggle("on", on);
+    shield.addEventListener("pointerdown", (e) => { e.preventDefault(); try { shield.setPointerCapture(e.pointerId); } catch (e2) { /* fine */ } hold(true); });
+    for (const what of ["pointerup", "pointercancel", "lostpointercapture"]) shield.addEventListener(what, () => hold(false));
+    window.addEventListener("blur", () => hold(false));
+    box.append(shield);
     view.replaceChildren(box);
   }
 
   async function show(f, m) {
     const name = f.path.split("/").pop(), type = TYPES[ext(name)], view = $("view"), looking = m && m.download === false;
-    view.replaceChildren(el("p", { className: "muted", textContent: "Opening…" }));
+    const bar = el("i"), line = el("div", { className: "muted", textContent: "Starting…" });
+    view.replaceChildren(el("div", { className: "loading" }, el("div", { className: "spin" }), el("b", { textContent: `Opening ${name}` }), el("div", { className: "meter" }, bar), line));
+    const began = Date.now();
+    const heard = (n) => {
+      const part = f.size ? n / f.size : 1, took = (Date.now() - began) / 1000, left = part > 0.03 ? Math.ceil(took / part - took) : null;
+      bar.style.width = `${Math.round(part * 100)}%`;
+      line.textContent = part >= 1 ? "Decrypted. Showing it…" : `Fetching and decrypting · ${Math.round(part * 100)}% · ${size(n)} of ${size(f.size)}`
+        + (left !== null ? ` · about ${left < 60 ? left + " s" : Math.ceil(left / 60) + " min"} left` : "");
+    };
+    const tick = setInterval(() => { if (!bar.style.width || bar.style.width === "0%") line.textContent = `Waiting for the server… ${Math.round((Date.now() - began) / 1000)} s`; }, 1000);
     try {
       if (f.size > SHOW_MAX) throw new Error(looking ? "Too big to show here." : "Too big to show here. Download it instead.");
       if (looking && type === "application/pdf") throw new Error("This link is for looking only, and a browser can't show a PDF without offering to save it.");
-      const parts = await whole(f);
+      const parts = await whole(f, heard);
+      heard(f.size);
       if (TEXT.has(ext(name)) && !type) { view.replaceChildren(el("pre", { textContent: dec.decode(await new Blob(parts).arrayBuffer()).slice(0, 400000) })); return; }
       const kind = type.split("/")[0];
       if (looking && kind === "image") return await painted(parts, type, view);
@@ -135,6 +157,7 @@
       }
       view.replaceChildren(shown);
     } catch (e) { view.replaceChildren(el("p", { className: "err", textContent: e.message })); }
+    finally { clearInterval(tick); }
   }
 
   // A file request: files go into somebody's folder. Each is sealed here with a key of its own; that key,

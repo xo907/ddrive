@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.15.1 (2026-10-12)
+
+- The share link page of end-to-end encrypted accounts (`/v/...`) got a proper look: a header, a
+  card, nicer rows and buttons, light and dark.
+- **Opening shows how far it is**: a bar with the percentage, how much was fetched and decrypted, and
+  about how long is left, and a running count while it waits for the server, so a big file doesn't
+  look stuck.
+- **View-only pictures are shown only while they are held** ("Press and hold to view"): let go and
+  the picture is gone. A snipping tool needs the same hand to drag its rectangle. What is shown also
+  disappears when the pointer leaves the page, and at once, for a few seconds, when the Windows /
+  Command key or PrintScreen goes down, which is how screenshot tools are started.
+- Still true: a photo of the screen, or a screenshot key pressed with the other hand while holding,
+  can't be prevented by a page.
+
 ## 2.15.0 (2026-10-11)
 
 - **A share link with downloading turned off is much harder to save from** (links of end-to-end
