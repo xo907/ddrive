@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>DDrive</title>
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/vault.css">
+</head>
+<body class="vault">
+<header class="v-top">
+  <a class="v-brand" href="#/"><img src="/logo.svg" alt="" width="26" height="26"><b>DDrive</b></a>
+  <span class="v-lock" id="v-lock" title="Your files and their names are encrypted in this browser before they are sent. The server stores them and can't read them.">End-to-end encrypted</span>
+  <span class="v-used" id="v-used"></span>
+  <button class="btn ghost small" id="v-out" type="button">Sign out</button>
+</header>
+<main class="v-main" id="v-main">
+  <p class="muted" id="v-wait">Opening your files…</p>
+</main>
+<div class="tray" id="tray" aria-live="polite"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="v-pick" multiple hidden>
+<script src="/vaultcore.js"></script>
+<script src="/vaultapp.js"></script>
+</body>
+</html>

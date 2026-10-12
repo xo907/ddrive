@@ -685,10 +685,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._passkey_login()
             if route.startswith("/s/") and method in ("GET", "POST"):
                 return self._shared(route[3:], method)
+            if method == "GET" and route == "/wordlist.txt":       # the 2048 words a phrase is written in: not a secret
+                with open(os.path.join(os.path.dirname(STATIC), "wordlist.txt"), "rb") as f:
+                    return self._send(200, f.read(), "text/plain; charset=utf-8", {"Cache-Control": "public, max-age=86400"})
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
-                                             "/manifest.webmanifest", "/share-upload.js", "/signin.js"):
-                if route in ("/", "/index.html") and self._who() is None:
-                    return self._signin()
+                                             "/manifest.webmanifest", "/share-upload.js", "/signin.js",
+                                             "/vaultcore.js", "/e2e.js", "/vaultapp.js", "/vault.css"):
+                if route in ("/", "/index.html"):
+                    who = self._who()
+                    if who is None:
+                        return self._signin()
+                    if who and (self.server.app.accounts.active(who) or {}).get("e2e"):
+                        return self._static("vault.html")       # an end-to-end account's own page: it opens the files itself
                 return self._static(route.lstrip("/") or "index.html")
             who = self._who()
             if who is None:
@@ -2604,7 +2612,7 @@ def _signin_page(error="", passkey=False, signup="closed", hint=""):
     if hint:
         parts.append(f'<p class="muted small">You are on the computer that runs the drive: <code>{_esc(hint)}</code> '
                      "shows the owner's words.</p>")
-    script = '<script src="/signin.js"></script>' if passkey else ""
+    script = ('<script src="/signin.js"></script>' if passkey else "") + '<script src="/vaultcore.js"></script><script src="/e2e.js"></script>'
     return _plain_page(f"""<h1>Sign in</h1>
   <p class="muted">DDrive</p>
   {err}
@@ -2640,18 +2648,41 @@ def _signup_page(mode, invite="", error="", phrase="", ticket=""):
   </form><script src="/signin.js"></script>""")
     code = (f'<label>Invite code<input name="invite" value="{_esc(invite)}" autocomplete="off" autocapitalize="none" '
             'spellcheck="false" required autofocus></label>') if mode == "invite" else hidden
+    # The words are made in the browser and stay there (e2e.js); what comes back here is a sign-in key
+    # made from them. So the account is end-to-end encrypted: this server never has the means to read it.
+    ask = ('<label>Invite code<input id="e2e-invite" value="' + _esc(invite) + '" autocomplete="off" autocapitalize="none" '
+           'spellcheck="false" required autofocus></label>') if mode == "invite" else ""
     return _plain_page(f"""<h1>Create an account</h1>
-  <p class="muted">An account here is 24 words that this page makes for you: no name, no email, no password.
-  You get storage of your own, encrypted with those words.{' You need an invite code.' if mode == 'invite' else ''}</p>
+  <p class="muted">An account here is 24 words that <b>your browser</b> makes: no name, no email, no password.
+  The words never leave this device. Your files and their names are encrypted with them before they are sent,
+  so this server stores them without being able to read them.{' You need an invite code.' if mode == 'invite' else ''}</p>
   {err}
-  <form method="post" action="/signup">
-    <input type="hidden" name="step" value="new">
-    {code}
-    <button class="btn" type="submit">Get my 24 words</button>
-  </form>
-  <p class="muted small">By making an account you agree to the <a href="/terms">terms</a> and the
-  <a href="/privacy">privacy policy</a>.</p>
-  {back}""")
+  <p class="err" id="e2e-err" role="alert" hidden></p>
+  <div id="e2e-start">
+    {ask}
+    <button class="btn" id="e2e-make" type="button">Get my 24 words</button>
+  </div>
+  <p class="err" id="e2e-no" hidden>Accounts are encrypted in the browser, and a browser only does that on an https address
+  (or on the computer itself). Open this site by its https address to make an account.</p>
+  <div id="e2e-words" hidden>
+    <p class="muted">These words <b>are</b> your account. They sign you in, and they are the key your files are
+    encrypted with. Write them down in this order, or keep them in a password manager.</p>
+    <ol class="phrase" id="words"></ol>
+    <p class="muted small"><button class="link" id="copy" type="button" hidden>Copy the words</button></p>
+    <p class="muted"><b>They are shown only now, and only here.</b> Nobody can look them up or reset them, the people
+    running this site included: without them the account and everything in it is gone.</p>
+    <form method="post" action="/signup" id="e2e-form">
+      <input type="hidden" name="step" value="e2e">
+      <input type="hidden" name="auth" value="">
+      {hidden}
+      <label class="tick"><input type="checkbox" name="saved" value="1" required> I have saved these 24 words</label>
+      <label class="tick"><input type="checkbox" name="agreed" value="1" required> <span>I agree to the
+      <a href="/terms" target="_blank" rel="noopener">terms</a> and the
+      <a href="/privacy" target="_blank" rel="noopener">privacy policy</a></span></label>
+      <button class="btn" type="submit">Create my account</button>
+    </form>
+  </div>
+  {back}<script src="/vaultcore.js"></script><script src="/e2e.js"></script>""")
 
 
 _LEGAL_LINKS = '<p class="muted small legal-links"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>'

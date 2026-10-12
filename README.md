@@ -76,7 +76,7 @@ snapshots can be brought back. A background check finds problems before you do.
 | **Sharing** | Links with an expiry, a password and view-only mode · direct links that embed in Discord · **file requests**: let others upload into a folder they can't see |
 | **Backup and sync** | Keep folders on your computer backed up, mirrored or two-way synced, live or on a schedule · save a file straight from a web link · WebDAV for other apps |
 | **Safety net** | Self-healing with spare pieces (Reed-Solomon) · versions of every file · undelete · daily snapshots of the whole drive · an activity list of what changed, when, on which device |
-| **Security** | Zero-knowledge encryption · sign-in by 24-word phrase or **passkey** (fingerprint, face, security key), no passwords · password-locked folders that vanish until unlocked · secrets in the config encrypted for your machine |
+| **Security** | Encrypted before it reaches Discord, which can't read any of it · end-to-end encrypted accounts (the computer running the drive can't read them either) · sign-in by 24-word phrase or **passkey** (fingerprint, face, security key), no passwords · password-locked folders that vanish until unlocked · secrets in the config encrypted for your machine |
 | **For others** | **Accounts**: other people get storage of their own on your dashboard, each encrypted with its own 24 words · sign-up closed, by invite or public |
 | **Insight** | What takes the space, by kind and by folder · the largest files · a duplicate finder · health and repair status |
 | **Efficiency** | Compression · identical pieces stored once · parallel uploads with extra bots · gentle pacing that stays inside Discord's limits |
@@ -605,20 +605,36 @@ Settings) decides who may make one:
 | `invite` | Whoever has an invite code. **Invite somebody** makes one (for one account, several or any number; for a day, a week, a month or until you remove it) and gives a link to send. |
 | `public` | Anybody who can open the dashboard, at `/signup`. |
 
-- **An account is 24 words.** The sign-up page makes them, shows them once and asks the person to
-  save them. There is no name, no email and no password, and nobody (you included) can reset them:
-  without the words the account is gone. Signing in is typing them on the same page you sign in on.
-- **Storage of its own, encrypted with its own words.** The 24 words are the account's encryption
-  key. Everything it stores goes to your Discord channel encrypted with that key, so Discord, the
-  other accounts and your own drive key can't read it. An account never sees your files, and you
-  don't see theirs in your drive.
-- **What an account has**: files and folders (upload, preview, download, ZIP, move, rename), the
-  gallery, stars, notes, bookmarks, contacts, messages (their own Discord account), share links and
-  file requests, password-locked folders, earlier versions, deleted files, snapshots, the activity
-  list and the storage page. DDrive Lite works with an account's words too.
-- **What it doesn't have**: Settings, Sync, Log, Health, Resources, checking and repairing, "available
-  offline", WebDAV, passkeys, and anything else that manages the drive or the computer. Those pages
-  aren't shown, and the drive refuses the requests behind them.
+- **An account is 24 words, made in the person's browser.** The sign-up page makes them there, shows
+  them once and asks the person to save them. They are never sent to the computer that runs the
+  drive. There is no name, no email and no password, and nobody (you included) can reset them:
+  without the words the account is gone.
+- **End-to-end encrypted.** The browser turns the words into keys. With them it encrypts every file
+  (each with a key of its own) and the list of files (names, folders, sizes, dates) before anything
+  is sent. Your computer gets a separate sign-in key that can't be turned back into the words, and
+  after that only sealed things with meaningless names, which it stores in your Discord channel like
+  any file (spare pieces, repair and the storage limit work as ever). It can't read them, and
+  neither can Discord, other accounts or your own drive key. What it still sees: that they exist,
+  about how big they are, when they come and go, and from which address. `ddrive/vault.py` describes
+  the keys and formats exactly.
+- **What it rests on.** The page that does the encrypting is served by the computer that runs the
+  drive. A person with an account trusts that it serves the real page; a tampered server could serve
+  one that leaks the words. Every service that encrypts in a web page has this limit.
+- **What an account has, for now**: a files page of its own: folders, upload (also by dropping files
+  or folders on it), download, preview of pictures, text, audio and video, rename, move, delete.
+  Files of any size go up in parts and are encrypted piece by piece; in Chrome and Edge a download is
+  written straight to disk. It needs an `https` address (or the computer itself): a browser doesn't
+  encrypt on plain `http`.
+- **What it doesn't have yet**, because each of these needs the file or its name in the clear on your
+  computer and has to be rebuilt to work in the browser: the gallery and thumbnails, playing a big
+  video without downloading it, share links, notes, bookmarks, contacts, messages, earlier versions
+  and snapshots, DDrive Lite and the phone app. And never: Settings, Sync, Log, Health and anything
+  else that manages the drive or the computer.
+- **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
+  computer, which keeps their keys, so they trust you with them; they open the full dashboard). The
+  sign-in page tries a typed phrase as an end-to-end account first, without sending it, and only sends
+  the words when the person then chooses "sign in the earlier way", which is also how you, the owner,
+  sign in.
 - **Limits**: *Storage per account* (`account_quota_bytes`, 5 GB unless you change it; earlier
   versions and deleted files count until they are gone) and *Most accounts* (`accounts_max`, 100).
   At most three accounts an hour are made from one address.
@@ -637,10 +653,11 @@ ticking that one agrees to them. They are a starting point written by the progra
 legal advice: read them, and have them checked for where you live before you open sign-up to the
 public. What an account does is kept out of your Log page and log file, except error messages.
 
-What this is and isn't: the data is unreadable for Discord and for other accounts. The computer that
-runs the drive handles it while it is uploaded and shown, and keeps each account's key (encrypted for
-that computer, like the secrets of the config file) so that uploads finish and share links work while
-nobody is signed in. So an account trusts whoever runs the dashboard, as with any hosted storage.
+What this is and isn't: an account's data is unreadable for Discord, for other accounts and for the
+computer that runs the drive. Your **own** drive is another matter: the computer that runs it has its
+key (it shows the drive as a folder, syncs and repairs it), so it reads your own files while it
+handles them. "Zero-knowledge" in this README means that Discord can't read what is stored there;
+towards the computer running the drive it holds for accounts only.
 
 Accounts live on the computer that made them, in `accounts/` of the data folder: the list
 (`accounts.json`) and each account's file list. A checkpoint of every account's file list is also

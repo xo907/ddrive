@@ -3,6 +3,40 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.5.0 (2026-10-11)
+
+- **Accounts are end-to-end encrypted.** An account's 24 words are now made in the browser and never
+  sent. The browser turns them into keys, encrypts every file and the list of files (names, folders,
+  sizes, dates) with them, and only then sends anything. The computer that runs the drive gets a
+  sign-in key that can't be turned back into the words, and after that only sealed things with
+  meaningless names. It stores them on Discord as it stores any file, and can't read them: not while
+  they are uploaded, not on its disk, not in its cache, not in its list of files.
+- What the computer running the drive can still see of an account: that sealed things exist, about how
+  big they are, when they come and go, and from which address. And one limit that every service that
+  encrypts in a web page has: it serves the page that does the encrypting, so it is trusted to serve
+  the real one.
+- An end-to-end account opens a **files page of its own**: folders, upload (also by dropping files or
+  whole folders), download, preview of pictures, text, audio and video, rename, move and delete.
+  Files of any size are encrypted piece by piece and go up in parts; a download is decrypted in the
+  browser (in Chrome and Edge straight onto the disk, so size doesn't matter). Several browsers of
+  the same account see each other's changes.
+- **Not there yet for these accounts**: the gallery and thumbnails, playing a big video without
+  downloading it, share links, notes, bookmarks, contacts, messages, earlier versions, DDrive Lite and
+  the phone app. Each needs the file in the clear on the server today and is being rebuilt to work on
+  the device. They come in later versions.
+- It needs an `https` address (or the computer itself). On plain `http` a browser doesn't encrypt, and
+  the pages say so.
+- **Signing in.** The sign-in page first tries a typed phrase as an end-to-end account, without sending
+  it. Only if there is none does it offer "sign in the earlier way", which sends the words: that is how
+  the owner signs in, and accounts made before this version. Those older accounts keep working as
+  they did (the server holds their keys); new accounts are always end-to-end encrypted.
+- Your **own drive** is unchanged: the computer running it has its key, as it must to show the drive as
+  a folder and sync it. To keep your own files out of its reach, keep them in an account.
+- The README and the privacy policy now say exactly this. "Zero-knowledge" used to appear without
+  saying towards whom; it meant Discord.
+- `ddrive/vault.py` is the description of the keys and formats and a client for them, which the tests
+  use to check that the server ends up with nothing readable.
+
 ## 2.4.2 (2026-10-11)
 
 - An opened part of a page no longer closes by itself. Pages that keep themselves up to date (Sync,

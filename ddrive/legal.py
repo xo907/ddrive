@@ -127,36 +127,42 @@ def privacy(cfg):
               f"word). {_contact(cfg)}"]),
         ("In short", [
             ["You are not asked for a name, an email address or a password. An account is 24 words.",
-             "What you store is encrypted with a key made from your 24 words before it leaves this server for storage.",
+             "Accounts are end-to-end encrypted: your files and their names are encrypted in your browser, with keys "
+             "made from your 24 words, before they are sent. The words and those keys never reach this server. It stores "
+             "what you send without being able to read it.",
              "There are no ads, no trackers, no analytics, and nothing is sold or used for anything but running the "
              "service.",
-             "The server that runs the site handles your data to do its work, so you are trusting the operator, as "
-             "with any hosted storage."],
+             "The page that does the encrypting comes from this server. You are trusting the operator to deliver the "
+             "real one: a server that was tampered with could deliver a page that leaks your words. That is true of "
+             "every service that encrypts in a web page.",
+             "An account made here before accounts were end-to-end encrypted (it opens the full dashboard when you sign "
+             "in, not the plain files page) works the earlier way, described at the end of section 2."],
         ]),
         ("1. What is kept about your account", [
             ["an account id, which is worked out from your words and does not reveal them;",
              "when the account was made and when it last signed in;",
              "the invite code it was made with, if there was one;",
              "how many files it holds and how much room they take;",
-             "its encryption key, itself encrypted on the server. The server needs it to finish uploads, serve your "
-             "share links and do background work while you are not signed in. The 24 words themselves are not stored."],
+             "a sign-in key your browser makes from your words. It lets the server recognise you and seals what it "
+             "stores for you a second time; it can't be turned back into your words and opens none of your files."],
             "This is kept on the operator's server. A copy of it without the encryption key is kept in the same "
             "private channel on Discord as the files, encrypted with the operator's key, so that the accounts can be "
             "found again if the server's disk is lost. Discord cannot read it.",
         ]),
         ("2. What you store", [
-            "Files, photos, notes, bookmarks, contacts, saved messages, share links and the settings of your account.",
-            ["Their contents are encrypted with your account's key and stored as attachments in a private channel on "
-             "Discord (Discord Inc., United States). Discord receives encrypted data it cannot read, and can see how "
-             "much there is and when it was stored. It does not learn who you are from this site.",
-             "The list of your files (names, sizes, dates, folders) is kept on the operator's server, and an encrypted "
-             "copy of it in the same channel.",
-             "While a file is being uploaded or opened, the server holds it for a moment: an upload stays on its disk "
-             "until it has been encrypted and stored, and recently opened parts are kept in a small cache.",
-             f"Earlier versions of changed files and deleted files are kept {versions}, and snapshots {snapshots}, so "
-             "that you can bring things back. After that they are removed."],
-            "Your data is not readable by other accounts or by Discord. The operator does not look at it, but has the "
-            "technical means to, since the server handles it. If that is not acceptable for something, don't store it here.",
+            "Your files and folders.",
+            ["Each file is encrypted in your browser with a key of its own, and the list of your files (names, "
+             "folders, sizes, dates, and those keys) with a key made from your words. Only then are they sent.",
+             "The server stores these sealed things as attachments in a private channel on Discord (Discord Inc., "
+             "United States), sealed once more. Neither the server nor Discord can read them. Both can see that they "
+             "exist, about how big they are, when they are stored and fetched, and the server sees from which address.",
+             "While a sealed file is on its way, the server holds it on its disk until it is stored, and keeps recently "
+             f"fetched parts in a small cache. What you delete is kept, still sealed, {versions} and then removed."],
+            "Nobody but you can read your data: not other accounts, not Discord, not the operator. Nobody can reset "
+            "your words either. If you lose them, what you stored can't be opened by anyone.",
+            "An account from before accounts were end-to-end encrypted works differently: its files are encrypted on "
+            "the server, which keeps the account's key (itself encrypted) and the list of its files, and so has the "
+            "technical means to read them. Such an account can be given up for a new one at any time.",
         ]),
         ("3. Technical data", [
             ["Your IP address is used, in memory, to slow down repeated wrong sign-ins and to limit how many accounts "

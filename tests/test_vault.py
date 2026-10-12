@@ -190,6 +190,26 @@ class VaultTest(helpers.DriveTest):
                 c.request("GET", bad)
             self.assertIn(e.exception.status, (400, 404))
 
+    def test_the_pages(self):
+        def get(path, cookie=""):
+            conn = http.client.HTTPConnection("127.0.0.1", self.web.port, timeout=20)
+            conn.request("GET", path, headers={"Cookie": f"dd_session={cookie}"} if cookie else {})
+            r = conn.getresponse()
+            data = r.read()
+            conn.close()
+            return r.status, data
+        status, text = get("/wordlist.txt")                            # the words a phrase is written in: for anybody
+        self.assertEqual((status, len(text.split())), (200, 2048))
+        page = get("/signup")[1]
+        self.assertIn(b"e2e-make", page)                               # the words are made in the browser...
+        self.assertNotIn(b'name="phrase"', page)                       # ...and the page has nowhere to put them for sending
+        for name in ("/vaultcore.js", "/e2e.js", "/vaultapp.js", "/vault.css"):
+            self.assertEqual(get(name)[0], 200, name)
+        self.device.client.status()
+        mine = get("/", self.device.client.cookie)[1]                  # an end-to-end account gets its own page, not the dashboard
+        self.assertIn(b"vaultapp.js", mine)
+        self.assertNotIn(b"app.js\"", mine.replace(b"vaultapp.js", b""))
+
     def test_the_list_is_sealed_whole_now_and_then(self):
         v = self.device
         for i in range(5):
