@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.18.2 (2026-10-12)
+
+- **"Manage the drive" has a menu of its own.** For an admin the left (on a phone: bottom) menu was
+  empty there, the top bar had a hole where the search is, and the account button was a dot. Now the
+  menu holds Settings, Health, Log, Resources and "My files" (the way back), the top bar says
+  "Managing the drive", and the account button shows a shield.
+
 ## 2.18.1 (2026-10-12)
 
 - **An admin account from before 2.18.0 becomes an end-to-end encrypted one by signing in.** 2.18.0

@@ -416,7 +416,8 @@ async function refreshStatus() {
   const acct = $("#account");
   if (acct && status.user) { acct.textContent = status.user.slice(0, 1).toUpperCase(); acct.title = `Signed in as ${status.user}`; }
   else if (acct && isAccount()) { if (!acct.firstChild) acct.append(icon("user")); acct.title = `Your account (${status.account})`; }
-  for (const a of document.querySelectorAll("#nav a")) a.hidden = notHere(a.dataset.nav);
+  else if (acct && SERVER) { if (!acct.firstChild) acct.append(icon("shield")); acct.title = `Admin account ${status.admin}`; }
+  for (const a of document.querySelectorAll("#nav a[data-nav]")) a.hidden = notHere(a.dataset.nav);
   $("#apps").hidden = !TOOL_PAGES.some(([name]) => !notHere(name));
   $("#sync").setAttribute("href", isAccount() ? "#/storage" : "#/health");
   if ((route.name === "health" || route.name === "resources") && !$("#sheet").classList.contains("open")) {
@@ -444,6 +445,16 @@ function applyNav(save) {
   if (save) { try { localStorage.setItem("dd-nav", JSON.stringify(navState)); } catch { /* private mode */ } }
 }
 $("#nav-toggle").addEventListener("click", () => { navState.rail = !navState.rail; applyNav(true); });
+// An admin managing the drive ("/?server") has none of the menu's pages, which are all about files: its
+// menu is the pages that manage the drive, and the way back to its own files.
+if (SERVER) {
+  $("#usage").before(
+    ...[["settings", "Settings", "settings"], ["health", "Health", "shield"], ["log", "Log", "logs"], ["resources", "Resources", "chip"]]
+      .map(([name, label, ic]) => h("a", { href: "#/" + name, "data-nav": name, class: "srv" }, icon(ic), h("span", {}, label))),
+    h("a", { href: "/", class: "srv" }, icon("back"), h("span", {}, "My files")));
+  $(".brand").setAttribute("href", "#/settings");
+  $(".brand").after(h("span", { class: "tag server-tag" }, "Managing the drive"));
+}
 for (const a of document.querySelectorAll("#nav a")) a.title = a.textContent.trim();
 applyNav(false);
 
@@ -1676,7 +1687,7 @@ async function renderSettings() {
     return input;
   };
   page(h("h1", {}, SERVER ? "The drive's settings" : "Settings"),
-       h("p", { class: "lede" }, SERVER ? "You manage this drive as an admin. Changes are saved as you make them, for the computer that runs it. Your own files are under “Back to my files” in the menu at the top right."
+       h("p", { class: "lede" }, SERVER ? "You manage this drive as an admin. Changes are saved as you make them, for the computer that runs it. “My files” in the menu leads back to your own files."
                                         : "Changes are saved as you make them, for this computer's drive."),
        SETTING_ROWS.map(([title, rows]) => [h("h2", {}, title), h("div", { class: "settings" }, rows.map(([key, label, hint, type]) =>
          h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hint),

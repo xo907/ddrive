@@ -1280,4 +1280,8 @@ main::-webkit-scrollbar-thumb { background: var(--line); }
 /* ------------------------------------------------------------------ an admin account managing the drive ("/?server") */
 /* Only the pages that manage the drive are there: nothing that finds, lists or uploads files. */
 body.server .search { visibility: hidden; }
+body.server #nav a:not(.srv) { display: none; }
+body.server #nav a.srv:last-of-type { margin-top: 10px; }
+.server-tag { flex: none; white-space: nowrap; }
+@media (max-width: 760px) { .server-tag { display: none; } body.server #nav a.srv:last-of-type { margin-top: 0; } }
 body.server #locks, body.server #apps, body.server .usage, body.server .tray, body.server .drop { display: none !important; }
