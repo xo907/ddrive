@@ -5,6 +5,12 @@
 const $ = (sel) => document.querySelector(sel);
 const main = $("#main");
 let status = null;
+let pageVersion = "", toldReload = false;
+function reloadNotice(version) {
+  const bar = h("div", { class: "reload-bar", role: "status" }, `DDrive was updated to ${version}. This page is still the old one. `,
+    h("button", { class: "btn small", onclick: () => location.reload() }, "Reload"));
+  document.body.append(bar);
+}
 let route = { name: "", args: [] };
 // Somebody signed in to an account (not the owner) has files and tools of their own, and none of the
 // pages that manage the drive or the computer. The drive refuses those requests anyway; this hides them.
@@ -337,6 +343,11 @@ function download(url, name) {
 async function refreshStatus() {
   try { status = await api("/api/status"); }
   catch { status = null; }
+  // The drive was updated while this page was open: the page is still the old one until it is loaded again.
+  if (status && status.version) {
+    if (!pageVersion) pageVersion = status.version;
+    else if (status.version !== pageVersion && !toldReload) { toldReload = true; reloadNotice(status.version); }
+  }
   const dot = $("#sync-dot"), text = $("#sync-text");
   if (!status) { dot.className = "dot warn"; text.textContent = "Not reachable"; return; }
   const st = status.stats;
@@ -1025,8 +1036,10 @@ function uploadFile(file, dir) {
 
 /** Uploads from the drive to Discord, live: one small card for all of them. (A card per file, as it
  *  used to be, came and went all the time during a big copy and sat on top of the page's buttons.)
- *  It can be put away, and then stays away until the uploads are over. */
+ *  It can be made small (a line with the count and the percentage; remembered in this browser) or
+ *  closed, and then stays away until the uploads are over. */
 let discordCard = null, discordHidden = false;
+let discordMini = (() => { try { return localStorage.getItem("dd-uploads-mini") === "1"; } catch { return false; } })();
 function showDiscordUploads(list, queued) {
   list = list || [];
   const files = list.length + (queued || 0);
@@ -1036,20 +1049,41 @@ function showDiscordUploads(list, queued) {
     return;
   }
   if (!discordCard) {
-    const c = discordCard = { bar: h("i", { style: "width:0%" }), title: h("span", {}), sub: h("div", { class: "sub" }) };
-    const away = h("button", { class: "tray-x", type: "button", title: "Hide until these uploads are done", "aria-label": "Hide the upload progress",
+    const c = discordCard = { bar: h("i", { style: "width:0%" }), title: h("span", {}), pct: h("span", { class: "pct" }),
+                              now: h("div", { class: "sub" }), sub: h("div", { class: "sub" }) };
+    const setMini = (on) => {
+      discordMini = on;
+      try { localStorage.setItem("dd-uploads-mini", on ? "1" : "0"); } catch { /* private window */ }
+      c.el.classList.toggle("mini", on);
+      c.el.title = on ? "Show the upload progress" : "Show what is uploading";
+      showDiscordUploads(status && status.uploads, status && status.queued);
+    };
+    const small = h("button", { class: "tray-x tray-min", type: "button", title: "Make this small", "aria-label": "Make the upload progress small",
+                                onclick: (e) => { e.stopPropagation(); setMini(true); } }, icon("minus"));
+    const away = h("button", { class: "tray-x", type: "button", title: "Close until these uploads are done", "aria-label": "Close the upload progress",
                                onclick: (e) => { e.stopPropagation(); discordHidden = true; c.el.remove(); discordCard = null; } }, icon("close"));
-    c.el = h("div", { class: "item discord", role: "link", tabindex: "0", title: "Show what is uploading",
-                      onclick: () => go("#/log"), onkeydown: (e) => { if (e.key === "Enter") go("#/log"); } },
-             h("div", { class: "n" }, c.title, away), h("div", { class: "meter" }, c.bar), c.sub);
+    const open = () => discordMini ? setMini(false) : go("#/log");
+    c.el = h("div", { class: "item discord" + (discordMini ? " mini" : ""), role: "button", tabindex: "0",
+                      title: discordMini ? "Show the upload progress" : "Show what is uploading",
+                      onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
+             h("div", { class: "n" }, c.title, c.pct, small, away), h("div", { class: "meter" }, c.bar), c.now, c.sub);
     tray.append(c.el);
   }
-  const total = list.reduce((n, u) => n + (u.size || 0), 0), done = list.reduce((n, u) => n + (u.bytes || 0), 0);
+  // Everything the cards per file said, in the one: how many, how far, which file is going now and
+  // what is being done with it, how fast, and how many wait.
   const bps = list.reduce((n, u) => n + (u.speed || 0), 0);
-  discordCard.title.textContent = `Uploading ${plural(files, "file")} to Discord`;
-  discordCard.bar.style.width = (total ? Math.min(100, (done / total) * 100) : 0).toFixed(1) + "%";
-  discordCard.sub.textContent = list.length === 1 ? `${base(list[0].path)} · ${size(done)} of ${size(total)}${bps ? " · " + speed(bps) : ""}`
-    : list.length ? `${size(done)} of ${size(total)} now${bps ? " · " + speed(bps) : ""}` : "Waiting for their turn";
+  const cur = list.find((u) => u.stage !== "spare pieces" && u.pct < 100) || list[0];
+  const pct = cur ? Math.min(100, cur.pct || 0) : 0;           // of the file named below (the rest are still to come)
+  const c = discordCard;
+  c.title.textContent = discordMini ? `↑ ${Number(files).toLocaleString()}` : `Uploading ${plural(files, "file")}`;
+  c.pct.textContent = list.length ? Math.floor(pct) + "%" : "";
+  c.bar.style.width = pct.toFixed(1) + "%";
+  c.now.textContent = !cur ? "Waiting for their turn"
+    : `${base(cur.path)} · ${cur.stage === "spare pieces" ? "adding spare pieces" : `${size(cur.bytes)} of ${size(cur.size)}`}`;
+  c.now.title = list.map((u) => `${base(u.path)}: ${u.stage === "spare pieces" ? "adding spare pieces" : Math.floor(u.pct) + "%"}`).join("\n");
+  const more = ["To Discord", list.length > 1 && `${list.length} at once`, bps > 0 && speed(bps), queued > 0 && `${Number(queued).toLocaleString()} waiting`].filter(Boolean);
+  c.sub.textContent = more.join(" · ");
+  c.sub.hidden = !more.length;
 }
 
 // ------------------------------------------------------------------ deleted

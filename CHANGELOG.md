@@ -3,6 +3,19 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.4.1 (2026-10-11)
+
+- The one upload card at the bottom right now says everything the cards per file used to: how many
+  files are going to Discord, the file that is going right now with how far it is (in percent and in
+  bytes, or that its spare pieces are being added), the speed, how many go at once and how many are
+  waiting. Hovering over the file's name lists all the files going at that moment.
+- The card can be made small with its **–** (a short line: how many files and the percentage; a click
+  opens it again, and the browser remembers the choice) or closed with its **×** (it stays away until
+  the uploads are over).
+- A dashboard page that was open while DDrive was updated says so and offers **Reload**. Until it is
+  loaded again it is still the old page (which is how the old cards, one per file, could still be
+  seen after updating to 2.4.0).
+
 ## 2.4.0 (2026-10-11)
 
 - **A folder sync on a phone or a lite computer no longer gets stuck on a big file.** It used to send

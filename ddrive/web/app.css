@@ -304,7 +304,16 @@ dialog input[hidden] { display: none; }
 .tray .item:nth-child(n+5) { display: none; }      /* a big batch of uploads from this browser: the first few show */
 .tray .item.discord { cursor: pointer; padding: 8px 8px 8px 12px; }
 .tray .item.discord .n { align-items: center; }
-.tray .item.discord .n span:first-child { font-weight: 500; }
+.tray .item.discord .n span:first-child { font-weight: 500; flex: 1; min-width: 0; }
+.tray .item.discord .sub + .sub { margin-top: 2px; }
+.tray .item.discord .sub[hidden] { display: none; }
+.tray .item.discord .pct { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tray .item.discord.mini { align-self: flex-end; padding: 5px 6px 5px 11px; }
+.tray .item.discord.mini .meter, .tray .item.discord.mini .sub, .tray .item.discord.mini .tray-min { display: none; }
+.tray .item.discord.mini .n span:first-child { flex: none; }
+.reload-bar { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center;
+              gap: 12px; padding: 8px 10px 8px 14px; border: 1px solid var(--line); border-radius: var(--radius);
+              background: var(--panel); box-shadow: var(--shadow); font-size: 13px; max-width: calc(100vw - 32px); }
 .tray-x { display: grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px;
           background: none; color: var(--muted); cursor: pointer; }
 .tray-x:hover { background: var(--hover); color: var(--ink); }
