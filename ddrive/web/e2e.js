@@ -15,7 +15,7 @@
     const old = document.createElement("div");
     old.hidden = true;
     old.innerHTML = '<p class="muted small">No end-to-end encrypted account here has these words. If they are the <b>drive owner\'s</b> ' +
-      "recovery phrase, or an account from before accounts were end-to-end encrypted, you can sign in the earlier way. " +
+      "recovery phrase, an <b>admin account's</b> words, or an account from before accounts were end-to-end encrypted, you can sign in the earlier way. " +
       "<b>That sends the words to this server.</b></p>" +
       '<button class="btn ghost" type="button">Send the words and sign in</button>';
     form.after(old);

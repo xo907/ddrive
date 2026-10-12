@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.17.1 (2026-10-12)
+
+- **Signing in with an admin account's words no longer looks like a failure.** The sign-in page tries
+  24 words as an end-to-end encrypted account first, and an admin account isn't one, so it showed "No
+  end-to-end encrypted account here has these words" and named only the owner's phrase and earlier
+  accounts. It names admin accounts now, and the window that shows a new admin's words says how they
+  are entered: like any 24 words, then "Send the words and sign in". Nothing about signing in changed.
+
 ## 2.17.0 (2026-10-12)
 
 - **A shorter menu.** The left (on a phone: bottom) menu has six pages now: Home, Files, Gallery,
