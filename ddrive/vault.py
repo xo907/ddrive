@@ -58,6 +58,7 @@ import posixpath
 import secrets
 import struct
 import time
+import urllib.parse
 
 from .crypto import AuthenticationError, CryptoEngine
 
@@ -177,6 +178,50 @@ def unpack(batch: bytes):
 
 def new_id() -> str:
     return secrets.token_hex(16)
+
+
+# ------------------------------------------------------------ moving one account into another (transfer.py)
+# The account that moves out (S) and the one that receives (T) agree on a key with ECDH (P-256):
+#
+#     shared  = ECDH(own private key, other's public key)             32 bytes (the x coordinate)
+#     K       = HKDF-SHA256(shared, salt=SHA256(tpub + spub), info="ddrive move v1 key")
+#
+# S seals {"v": 1, "nodes": its whole list} with K and the label "ddv1 move". T opens it and adds it
+# to its own list in a new folder, every entry under a new id: SHA256("ddrive move v1 id" + move + old
+# id), the folder's SHA256("ddrive move v1 folder" + move), so taking it in twice changes nothing.
+AAD_MOVE = b"ddv1 move"
+INFO_MOVE = b"ddrive move v1 key"
+MOVE_BATCH = 2 * 1024 * 1024      # sealed changes sent together while taking a list in
+
+
+def hkdf_salted(key: bytes, salt: bytes, info: bytes, n: int = 32) -> bytes:
+    """HKDF-SHA256 with a salt, for up to 32 bytes."""
+    prk = hmac.new(salt, key, hashlib.sha256).digest()
+    return hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:n]
+
+
+def move_key(shared: bytes, tpub: bytes, spub: bytes) -> bytes:
+    return hkdf_salted(shared, hashlib.sha256(tpub + spub).digest(), INFO_MOVE)
+
+
+def moved_id(move: str, old: str) -> str:
+    return hashlib.sha256(b"ddrive move v1 id" + move.encode() + old.encode()).hexdigest()[:32]
+
+
+def moved_folder(move: str) -> str:
+    return hashlib.sha256(b"ddrive move v1 folder" + move.encode()).hexdigest()[:32]
+
+
+def moved_ops(move: str, nodes: dict, folder_name: str, at: float, by: str = ""):
+    """The changes that put a moved account's list into a new folder of this one."""
+    top = moved_folder(move)
+    ops = [{"op": "put", "id": top, "parent": "", "name": folder_name, "dir": True, "size": 0, "mtime": at, "at": at, "by": by}]
+    for old, n in nodes.items():
+        e = dict(n, id=moved_id(move, old), parent=top if not n.get("parent") else moved_id(move, n["parent"]))
+        if e.get("trash") and isinstance(e["trash"], dict) and e["trash"].get("path"):
+            e["trash"] = dict(e["trash"], path="/" + folder_name + "/" + e["trash"]["path"].lstrip("/"))
+        ops.append(dict(e, op="put"))
+    return ops
 
 
 class Vault:
@@ -459,3 +504,84 @@ class Vault:
         if node is None or node["dir"]:
             raise VaultError(f"Not found: {path}")
         return open_range(base64.b64decode(node["key"]), lambda a, n: self._fetch(node["obj"], a, n), node["size"], start, length)
+
+    # ------------------------------------------------------------ moving into another account
+    def move_open(self):
+        """This account receives: ask for a move. Returns {"id" (to type on the other account), "code"
+        (to compare with the other account's page)}; keep it for move_take()."""
+        from . import p256
+        priv, pub = p256.keypair()
+        got = self.client._json("/api/vault/move/open", {"pub": base64.b64encode(pub).decode("ascii")})
+        self._moving = (got["id"], priv, pub)
+        return got
+
+    def move_send(self, move_id, code=None):
+        """This account moves out, into the account that asked (its move id). `code`: what the other
+        account's page shows; if the host handed over another key than that account's, nothing is sent.
+        Returns the check code both pages show next. After this the account can't change, and the host
+        deletes it once the other account has taken everything in."""
+        from . import p256
+        from .transfer import check_code, key_code
+        peer = self.client._json(f"/api/vault/move/peer?id={move_id}")
+        tpub = base64.b64decode(peer["tpub"])
+        if code is not None and key_code(tpub) != code:
+            raise VaultError("The codes don't match: the server handed over a key that isn't the other account's. Nothing was sent.")
+        self.sync()
+        priv, spub = p256.keypair()
+        key = move_key(p256.shared(priv, tpub), tpub, spub)
+        payload = json.dumps({"v": 1, "nodes": self.nodes}, separators=(",", ":")).encode("utf-8")
+        q = urllib.parse.urlencode({"id": move_id, "pub": base64.b64encode(spub).decode("ascii")})
+        got = json.loads(self.client.request("POST", "/api/vault/move/send?" + q, seal(key, payload, AAD_MOVE),
+                                             {"Content-Type": "application/octet-stream"}))
+        if got.get("check") != check_code(tpub, spub):
+            raise VaultError("The server's check code is not the one these keys make.")
+        return got["check"]
+
+    def move_status(self, move_id=None):
+        return self.client._json(f"/api/vault/move?id={move_id or self._moving[0]}")
+
+    def move_take(self, check=None, folder_name=None, wait=0.0):
+        """Take in what the other account sent, once the host has copied its files: its whole list goes
+        into a new folder here. `check`: the code the other page shows (refused when it differs).
+        Returns the new folder's name."""
+        from . import p256
+        from .transfer import check_code
+        mid, priv, tpub = self._moving
+        end = time.time() + wait
+        while True:
+            st = self.move_status(mid)
+            if st["state"] in ("ready", "finishing", "done") or time.time() >= end:
+                break
+            time.sleep(0.2)
+        if st["state"] not in ("ready", "finishing"):
+            raise VaultError(f"The move is {st['state']}" + (f" ({st['error']})" if st.get("error") else "") + ".")
+        spub = base64.b64decode(st["spub"])
+        if check is not None and check_code(tpub, spub) != check:
+            raise VaultError("The codes don't match: what came isn't from the account you moved. Nothing was taken in.")
+        sealed = self.client.request("GET", f"/api/vault/move/list?id={mid}")
+        data = json.loads(unseal(move_key(p256.shared(priv, spub), tpub, spub), sealed, AAD_MOVE))
+        self.sync()
+        top = moved_folder(mid)
+        name = self.nodes[top]["name"] if top in self.nodes else self._free_name("", folder_name or f"From account {st['from']}")
+        ops = moved_ops(mid, data["nodes"], name, time.time(), self.name)
+        batch, size = [], 0
+        for op in ops:
+            n = len(json.dumps(op))
+            if batch and size + n > MOVE_BATCH:
+                self._send(*batch)
+                batch, size = [], 0
+            batch.append(op)
+            size += n
+        if batch:
+            self._send(*batch)
+        self.client._json("/api/vault/move/finish", {"id": mid})
+        return name
+
+    def _free_name(self, parent, name):
+        taken = {n["name"] for n in self._children(parent)}
+        if name not in taken:
+            return name
+        i = 2
+        while f"{name} ({i})" in taken:
+            i += 1
+        return f"{name} ({i})"

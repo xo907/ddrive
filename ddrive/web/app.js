@@ -3062,6 +3062,14 @@ async function signInSection(into) {
   const why = !window.PublicKeyCredential ? "This browser doesn't support passkeys."
             : !info.rp ? `Passkeys need a name in the address. On this computer open http://localhost:${location.port || 80}/ instead of the number address.`
             : !info.can_passkey ? "Browsers only allow passkeys on https (your domain through a reverse proxy) or on localhost." : "";
+  if (info.admin) {
+    into.replaceChildren(
+      h("h2", {}, "Sign-in"),
+      h("p", { class: "muted", style: "margin:0 0 12px" }, ["You are signed in with admin account ", h("code", {}, info.admin),
+        ": you can do everything the owner can, except change how the owner signs in (the recovery phrase, passkeys and the password for other apps). ",
+        "Your own 24 words sign you in. If the owner switches this admin account off or deletes it, you are signed out at once."]));
+    return;
+  }
   into.replaceChildren(
     h("h2", {}, "Sign-in"),
     h("p", { class: "muted", style: "margin:0 0 12px" }, `You are the owner of this drive. There are no user names or passwords: you sign in with your 24-word recovery phrase, or with a passkey you add here.`),
@@ -3111,9 +3119,33 @@ function inviteDialog(redraw) {
     field("Good for", uses), field("Works for", days), field("Note", note), result, h("div", { class: "modal-actions" }, go_));
 }
 
+/** Make an admin account: a co-owner with 24 words of its own, shown once, here. */
+function adminDialog(redraw) {
+  const note = h("input", { placeholder: "Who it is for (only admins see this)", maxlength: "80", spellcheck: "false" });
+  const result = h("div");
+  const go_ = h("button", { class: "btn danger", type: "button", onclick: async () => {
+    const r = await attempt(() => api("/api/accounts/admin", { note: note.value.trim() }));
+    if (!r) return;
+    go_.remove();
+    note.disabled = true;
+    result.replaceChildren(
+      h("p", { class: "muted", style: "margin:14px 0 8px" }, ["Admin account ", h("code", {}, r.id), " was made. These 24 words sign it in. They are shown only now: give them to that person, and to nobody else."]),
+      h("ol", { class: "phrase" }, r.phrase.split(" ").map((w) => h("li", {}, w))),
+      h("div", { class: "modal-actions" }, h("button", { class: "btn ghost", type: "button", onclick: async () => {
+        try { await navigator.clipboard.writeText(r.phrase); toast("Copied. Clear your clipboard once it is passed on."); } catch { toast("Could not copy"); }
+      } }, "Copy")));
+    redraw();
+  } }, "Make the admin account");
+  modal("Make an admin account",
+    h("p", { class: "muted", style: "margin:0 0 16px" }, "An admin is a co-owner: with 24 words of its own it signs in here and can do everything you can — your files, the drive's settings, accounts, other admins — except change how you sign in. "
+      + "Switch it off or delete it below and it is signed out at once. Only make one for somebody you trust with the whole drive."),
+    field("Note", note), result, h("div", { class: "modal-actions" }, go_));
+}
+
 async function accountsSection(into) {
-  const d = await api("/api/accounts").catch(() => null);
+  const [d, mv] = await Promise.all([api("/api/accounts").catch(() => null), api("/api/accounts/moves").catch(() => null)]);
   if (!d || !into.isConnected) return;
+  const moves = ((mv && mv.moves) || []).filter((m) => m.state !== "cancelled" || Date.now() / 1000 - m.created < 86400);
   const redraw = () => accountsSection(into);
   const row = (t, text, ctl, sub) => h("div", { class: "set-row" + (sub ? " sub" : "") }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" + (sub ? "" : " wide") }, ctl));
   const save = async (changes, ok) => { if (await attempt(() => api("/api/settings", changes), ok || "Saved")) { await refreshStatus(); redraw(); } };
@@ -3126,6 +3158,8 @@ async function accountsSection(into) {
       row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
           + "copied and sealed in this browser, so the server never gets the key. Nothing here is changed.",
           h("button", { class: "btn small", onclick: () => window.moveToAccount() }, "Move everything…")),
+      row("Admin accounts", "Co-owners with 24 words of their own: they can do everything you can, except change how you sign in. Switching one off signs it out at once.",
+          h("button", { class: "btn small", onclick: () => adminDialog(redraw) }, "Make an admin…")),
       row("Who can make an account", mode[2],
           h("select", { "aria-label": "Who can make an account", onchange: (e) => save({ signup_mode: e.target.value }, "Saved") },
             SIGNUP_MODES.map(([k, label]) => h("option", { value: k, selected: k === d.mode }, label)))),
@@ -3152,17 +3186,28 @@ async function accountsSection(into) {
         h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
           i.valid && h("button", { class: "btn ghost small", onclick: async () => { try { await navigator.clipboard.writeText(fromHere(i)); toast("Invite link copied"); } catch { toast(fromHere(i)); } } }, "Copy link"),
           h("button", { class: "btn ghost small", onclick: async () => { if (await attempt(() => api("/api/accounts/invite/revoke", { code: i.code }), "Invite removed")) redraw(); } }, "Remove")), true))),
+    ...(moves.length ? [h("h2", {}, "Moves between accounts"),
+      h("div", { class: "settings" }, moves.map((m) => row([h("code", {}, m.from || "…"), " → ", h("code", {}, m.to), h("span", { class: "tag" + (["copying", "ready", "finishing"].includes(m.state) ? " busy" : ""), style: "margin-left:8px" }, m.state)],
+        `${m.objects ? `${m.copied} of ${m.objects} pieces · ${size(m.done_bytes || 0)} of ${size(m.bytes || 0)} · ` : ""}started ${ago(m.created)}${m.error ? " · " + m.error : ""}`,
+        ["open", "copying", "ready"].includes(m.state) ? h("button", { class: "btn ghost small", onclick: async () => {
+          if (await ask({ title: "Cancel this move?", ok: "Cancel the move", danger: true, text: "The account that was moving stays as it was; what was copied so far is removed." })
+              && await attempt(() => api("/api/accounts/moves/cancel", { id: m.id }), "Move cancelled")) redraw();
+        } }, "Cancel") : null)))] : []),
     h("h2", {}, `${plural(d.accounts.length, "account")}`),
     d.accounts.length ? h("div", { class: "settings" }, d.accounts.map((a) => row(
-        [h("code", {}, a.id), a.disabled && h("span", { class: "tag busy", style: "margin-left:8px" }, "Switched off"), a.open && !a.disabled && h("span", { class: "tag", style: "margin-left:8px" }, "In use")],
-        `${plural(a.files, "file")}, ${size(a.bytes)} · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : ""}${a.invite ? " · invite " + a.invite : ""}`,
+        [h("code", {}, a.id), a.admin && h("span", { class: "tag", style: "margin-left:8px" }, "Admin"), a.e2e && h("span", { class: "tag", style: "margin-left:8px" }, "End-to-end"),
+         a.moving && h("span", { class: "tag busy", style: "margin-left:8px" }, "Moving"), a.note && ` · ${a.note}`,
+         status && status.admin === a.id && h("span", { class: "tag", style: "margin-left:8px" }, "You"),
+         a.disabled && h("span", { class: "tag busy", style: "margin-left:8px" }, "Switched off"), a.open && !a.disabled && h("span", { class: "tag", style: "margin-left:8px" }, "In use")],
+        a.admin ? `Co-owner · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : " · not signed in yet"}`
+                : `${plural(a.files, "file")}, ${size(a.bytes)} · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : ""}${a.invite ? " · invite " + a.invite : ""}`,
         h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
           h("button", { class: "btn ghost small", onclick: async () => {
-            if (!a.disabled && !await ask({ title: "Switch this account off?", ok: "Switch off", danger: true, text: "It is signed out and can't sign in, and its share links stop working. Nothing is deleted: you can switch it on again." })) return;
+            if (!a.disabled && !await ask({ title: "Switch this account off?", ok: "Switch off", danger: true, text: a.admin ? "It is signed out at once and can't sign in. You can switch it on again." : "It is signed out and can't sign in, and its share links stop working. Nothing is deleted: you can switch it on again." })) return;
             if (await attempt(() => api("/api/accounts/disable", { id: a.id, off: !a.disabled }), a.disabled ? "Switched on again" : "Switched off")) redraw();
           } }, a.disabled ? "Switch on" : "Switch off"),
           h("button", { class: "btn danger small", onclick: async () => {
-            if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
+            if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: a.admin ? `Admin account ${a.id} is signed out and its 24 words stop working. This can't be undone.` : `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
                 && await attempt(() => api("/api/accounts/delete", { id: a.id }), "Account deleted")) { await refreshStatus(); redraw(); }
           } }, "Delete")))))
       : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one above." : "None yet."),
@@ -3193,6 +3238,10 @@ async function renderAccount() {
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
          a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         status && status.e2e && window.accountMove && row("Move another account into this one", "Everything in another end-to-end encrypted account of yours comes into a new folder here, and that account is deleted. The server copies the sealed files; the keys are agreed between your two screens.",
+             h("button", { class: "btn ghost small", onclick: () => window.accountMove.receive() }, "Receive…")),
+         status && status.e2e && window.accountMove && row("Move everything into another account", "This account's files, folders, earlier versions and deleted files go into another end-to-end encrypted account; then this account is deleted.",
+             h("button", { class: "btn ghost small", onclick: () => window.accountMove.send() }, "Move out…")),
          row("Sign out", "On this browser. Signing in again takes your 24 words.",
              h("button", { class: "btn ghost small", onclick: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } }, "Sign out")),
          row("Terms and privacy", "What you agreed to, and what happens to your data here.",
@@ -4037,7 +4086,7 @@ async function renderMessages() {
 $("#account").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   openMenu([
-    { label: isAccount() ? `Account ${status.account}` : status && status.user ? `Signed in as ${status.user}` : "Signed in", icon: "user", disabled: true },
+    { label: isAccount() ? `Account ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in", icon: "user", disabled: true },
     "-",
     { label: isAccount() ? "Your account" : "Settings", icon: "settings", run: () => go("#/settings") },
     { label: "What's new", icon: "info", run: whatsNew },

@@ -24,6 +24,7 @@ from .cache import IntegrityError
 from .crypto import AuthenticationError
 from .fuse_loader import fuse
 from .index import ROOT_ID
+from .locks import ALL as ALL_OPEN
 
 FuseOSError = fuse.FuseOSError
 Operations = fuse.Operations
@@ -261,6 +262,19 @@ class DDriveFS(Operations):
         # Password-locked folders and files: not there until unlocked (for the drive letter: on this
         # device; for the dashboard: in that browser; background copies such as sync see everything).
         return self.locks is not None and self.locks.hidden(p, getattr(self.scope, "unlocked", None))
+
+    def hides_below(self, path):
+        """False when nothing under folder `path` can be hidden (no hidden folder and no lock below it):
+        then its children need no _hidden() check each, which is what makes listing a big folder slow."""
+        p = "/" + path.replace("\\", "/").strip("/").lower()
+        p = "" if p == "/" else p
+        for h in getattr(self.cfg, "hidden_folders", None) or ():
+            h = "/" + str(h).replace("\\", "/").strip("/").lower()
+            if h != "/" and h.startswith(p + "/"):
+                return True
+        if self.locks is None or getattr(self.scope, "unlocked", None) is ALL_OPEN:
+            return False
+        return any(root.startswith(p + "/") for root, _ in self.locks.roots())
 
     def _get(self, path):
         if self._hidden(path):

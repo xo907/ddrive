@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS nodes(
     is_pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS nodes_parent_name ON nodes(parent, name);
+-- what still has to be uploaded (asked for every few seconds; a full scan of a big drive otherwise)
+CREATE INDEX IF NOT EXISTS nodes_unsynced ON nodes(id) WHERE is_dir=0 AND state!='synced';
 CREATE TABLE IF NOT EXISTS chunks(
     node_id       INTEGER NOT NULL,
     idx           INTEGER NOT NULL,

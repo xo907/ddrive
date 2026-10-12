@@ -46,6 +46,7 @@ from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
 from .logbuf import QUIET
 from .webplus import ApiErrorProxy, Fetches, PlusHandlers, housekeeping
+from .transfer import MoveError, Moves
 
 log = logging.getLogger("ddrive.web")
 
@@ -79,11 +80,20 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("status account changelog vault vault/log vault/object vault/pending vault/sync vault/shares".split())
+E2E_GET = frozenset("""status account changelog vault vault/log vault/object vault/pending vault/sync vault/shares
+    vault/move vault/move/peer vault/move/list""".split())
 E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
+    vault/move/open vault/move/send vault/move/finish vault/move/cancel
     vault/share vault/share/update vault/share/revoke vault/share/collect
     vault/sync/jobs vault/sync/tell vault/sync/ask vault/sync/forget
     vault/sync/hello vault/sync/poll vault/sync/report vault/sync/answer vault/sync/bye""".split())
+
+
+# What an admin account (a co-owner, accounts.py) may not do although it signs in as the owner: change
+# or see how the owner signs in. With these it could make itself a sign-in that switching it off
+# doesn't end.
+OWNER_ONLY = frozenset(("/api/signin/passkey/options", "/api/signin/passkey/register", "/api/signin/passkey/remove",
+                        "/api/signin/phrase", "/api/webdav/password"))
 
 
 def account_may(method, route, e2e=False):
@@ -107,6 +117,18 @@ def owner_key(cfg):
     if not cfg.web_token:
         return ""
     return hashlib.sha256(b"DiscordDrive-owner:" + cfg.web_token.encode()).hexdigest()
+
+
+def session_cookie(web_token, account="", admin=""):
+    """A signed session (WebServer.new_session). Whoever has the dashboard's secret (the config file)
+    can make one: the command line signs in to the running dashboard that way (accountscli.py)."""
+    data = {"a": account, "t": int(time.time()), "n": _b64(os.urandom(9))}
+    if admin and not account:
+        data["m"] = admin
+    payload = _b64(json.dumps(data, separators=(",", ":")).encode())
+    secret = hashlib.sha256(b"DiscordDrive-web:" + (web_token or "").encode() + b"session").digest()
+    sig = _b64(hmac.new(secret, payload.encode(), hashlib.sha256).digest())
+    return f"{payload}.{sig}"
 
 
 class ApiError(Exception):
@@ -165,6 +187,7 @@ class WebServer:
         self.challenges = passkeys.Challenges()
         self._book = (None, [])           # (mtime, size) of the address book file, its contacts
         self.accounts = Accounts(drive)   # other people's accounts, each with a drive of its own
+        self.moves = self.accounts.moves = Moves(self.accounts)   # end-to-end accounts moving into others (transfer.py)
         self.lite = LiteDevices()         # computers running DDrive Lite that sync folders with this drive
         self.sealed = SealedDevices()     # the same for end-to-end encrypted accounts: sealed messages, passed on unread
 
@@ -174,6 +197,7 @@ class WebServer:
         self._thread.start()
         threading.Thread(target=self._clean_thumbs, name="Thumbs", daemon=True).start()
         self.accounts.start()
+        self.moves.start()
         return self
 
     def _clean_thumbs(self):
@@ -198,6 +222,7 @@ class WebServer:
             self.httpd.server_close()
         except Exception:
             pass
+        self.moves.stop()
         self.accounts.stop()
 
     def local_url(self):
@@ -250,16 +275,14 @@ class WebServer:
     def _secret(self, purpose=b"") -> bytes:
         return hashlib.sha256(b"DiscordDrive-web:" + (self.cfg.web_token or "").encode() + purpose).digest()
 
-    def new_session(self, account=""):
+    def new_session(self, account="", admin=""):
         """A session cookie for the owner ('') or for an account (its id). "n" makes every sign-in its
-        own session (each browser unlocks locked folders for itself)."""
-        payload = _b64(json.dumps({"a": account, "t": int(time.time()), "n": _b64(os.urandom(9))},
-                                  separators=(",", ":")).encode())
-        sig = _b64(hmac.new(self._secret(b"session"), payload.encode(), hashlib.sha256).digest())
-        return f"{payload}.{sig}"
+        own session (each browser unlocks locked folders for itself). An admin account signs in as the
+        owner, with its id in "m": the session ends when the admin account is switched off or deleted."""
+        return session_cookie(self.cfg.web_token, account, admin)
 
-    def session(self, value):
-        """Who a session cookie belongs to: '' the owner, an account's id, or None (signed out)."""
+    def _session_data(self, value):
+        """What a valid, unexpired session cookie says, or None."""
         if not value:
             return None
         try:
@@ -268,16 +291,31 @@ class WebServer:
             if not hmac.compare_digest(good, sig):
                 return None
             data = json.loads(_unb64(payload))
-            if time.time() - data.get("t", 0) > SESSION_DAYS * 86400:
+            if not isinstance(data, dict) or time.time() - data.get("t", 0) > SESSION_DAYS * 86400:
                 return None
-            account = data.get("a")
-            if account is None:
-                return "" if data.get("u") else None       # a session from before accounts: the owner's
-            if account == "":
-                return ""
-            return account if self.accounts.active(str(account)) is not None else None
+            return data
         except Exception:
             return None
+
+    def session(self, value):
+        """Who a session cookie belongs to: '' the owner (or an admin account), an account's id, or None
+        (signed out)."""
+        data = self._session_data(value)
+        if data is None:
+            return None
+        account = data.get("a")
+        if account is None:
+            return "" if data.get("u") else None       # a session from before accounts: the owner's
+        if account == "":
+            if data.get("m"):                          # an admin account: only while it may sign in
+                return "" if self.accounts.admin_ok(data["m"]) else None
+            return ""
+        return account if self.accounts.active(str(account)) is not None else None
+
+    def session_admin(self, value):
+        """The admin account a session belongs to ('' for the owner's own sessions and accounts')."""
+        data = self._session_data(value) or {}
+        return str(data.get("m") or "") if data.get("a") == "" else ""
 
     def locked_for(self, addr):
         with self._fail_lock:
@@ -541,6 +579,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                           "last": p.get("last"), "here": p.get("rp") == rp} for p in cfg.web_passkeys or []],
             "encrypted": bool(cfg.encryption_enabled and cfg.encryption_key), "webdav": bool(cfg.webdav_enabled),
             "dav_user": cfg.web_user or "", "dav_password": bool(cfg.web_password),
+            "admin": self.app.session_admin(self._cookie()),
         })
 
     def _post_api_signin_passkey_options(self):
@@ -606,11 +645,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if not headers or "Cache-Control" not in headers:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
+        if self.command != "HEAD" and len(body) <= 65536:
+            # one write for headers and a small body: one packet instead of two
+            self._headers_buffer.append(b"\r\n")
+            self._headers_buffer.append(bytes(body))
+            self.flush_headers()
+            return
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -648,10 +694,19 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def setup(self):
         super().setup()
+        # Headers and body go out in separate writes; without this, Nagle's algorithm holds the second
+        # one back until the browser acknowledges the first, which it delays: ~40 ms per request on a
+        # kept-alive connection.
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except (OSError, AttributeError):
+            pass
         self.rfile = _Counted(self.rfile)
 
     def _dispatch(self, method):
         self.rfile.n = 0                         # from here on: bytes of this request's body
+        self._locks_seen = None                  # (a connection is kept for several requests)
+        self._move_body = {}
         try:
             self._route(method)
         finally:
@@ -708,7 +763,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
                                              "/manifest.webmanifest", "/share-upload.js", "/signin.js",
                                              "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/vshare.js", "/vshare.css",
-                                             "/moving.js"):
+                                             "/moving.js", "/accountmove.js"):
                 if route in ("/", "/index.html") and self._who() is None:
                     return self._signin()
                 # An end-to-end encrypted account gets the same dashboard as everybody: e2e-api.js, which it
@@ -719,11 +774,16 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._error(401, "Signed out. Reload the page to sign in.")
             if method == "POST" and self.headers.get("X-DD") != "1":
                 return self._error(403, "missing X-DD header")
+            if who == "" and route in OWNER_ONLY and self.server.app.session_admin(self._cookie()):
+                return self._error(403, "Only the owner can change how the owner signs in.")
             if who:                              # an account: its own drive, and only what accounts may do
                 e2e = bool((self.server.app.accounts.active(who) or {}).get("e2e"))
                 if not account_may(method, route, e2e):
                     return self._error(403, "An end-to-end encrypted account's files are only opened on your own device."
                                        if e2e else "Only the owner of this drive can do that.")
+                if (e2e and method == "POST" and (route.startswith("/api/vault/") or route == "/api/account/delete")
+                        and not route.startswith("/api/vault/move/") and self.server.app.moves.moving(who)):
+                    return self._error(423, "This account is moving into another one: nothing in it can change now.")
                 self._enter(who)
                 self._e2e = e2e
             # Pages that refresh by themselves don't count as using an unlocked folder.
@@ -733,6 +793,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._error(404, "not found")
             fn()
         except (ApiError, ApiErrorProxy) as e:
+            self._error(e.status, str(e))
+        except MoveError as e:
             self._error(e.status, str(e))
         except AccountError as e:
             self._error(503, str(e))
@@ -749,21 +811,53 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             except Exception:
                 pass
 
-    def _static(self, name):
+    _static_cache = {}               # file name -> (mtime, size, body, gzipped body or None, etag, type)
+    _static_lock = threading.Lock()
+
+    @classmethod
+    def _static_file(cls, name):
+        """A file of the dashboard, read (and compressed) once and again only when it changes on disk."""
         path = os.path.join(STATIC, name)
-        try:
-            with open(path, "rb") as f:
-                body = f.read()
-        except FileNotFoundError:
-            return self._error(404, "not found")
+        st = os.stat(path)                       # FileNotFoundError: not one
+        got = cls._static_cache.get(name)
+        if got is not None and got[:2] == (st.st_mtime_ns, st.st_size):
+            return got
+        with open(path, "rb") as f:
+            body = f.read()
         ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
         if name.endswith(".webmanifest"):
             ctype = "application/manifest+json"
         if name.endswith(".js"):
             ctype = "application/javascript"
-        if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
+        text = ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml")
+        if text:
             ctype += "; charset=utf-8"
-        self._send(200, body, ctype, _PAGE_HEADERS)
+        gz = None
+        if text and len(body) > 1024:
+            import gzip
+            gz = gzip.compress(body, 6, mtime=0)
+        etag = '"' + hashlib.sha256(body).hexdigest()[:20] + '"'
+        got = (st.st_mtime_ns, st.st_size, body, gz, etag, ctype)
+        with cls._static_lock:
+            cls._static_cache[name] = got
+        return got
+
+    def _static(self, name):
+        try:
+            _, _, body, gz, etag, ctype = self._static_file(name)
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            return self._error(404, "not found")
+        # Asked again on every load ("no-cache"), so an update shows at once, but answered with
+        # "304 Not Modified" when the browser has it already; and sent compressed when it may be.
+        headers = dict(_PAGE_HEADERS, ETag=etag, **{"Cache-Control": "no-cache"})
+        if gz is not None:
+            headers["Vary"] = "Accept-Encoding"
+        if etag in (self.headers.get("If-None-Match") or ""):
+            return self._send(304, b"", ctype, headers)
+        if gz is not None and "gzip" in (self.headers.get("Accept-Encoding") or "").lower():
+            body = gz
+            headers["Content-Encoding"] = "gzip"
+        self._send(200, body, ctype, headers)
 
     def _cookie_for(self, value, days=SESSION_DAYS):
         return f"{COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(days * 86400)}"
@@ -793,16 +887,20 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             app.note_login(addr, False)
             return self._signin(f"That phrase isn't right: {e}.", 401)
         owner = app.owner_key()
+        admin = ""
         if owner and hmac.compare_digest(key.hex(), owner):
             who = ""
         else:
             rec = app.accounts.find(key)
             who = rec["id"] if rec is not None else None
+            if rec is not None and rec.get("admin"):
+                who, admin = "", rec["id"]
+                log.info("Web dashboard: admin account %s signed in from %s", admin, addr)
         app.note_login(addr, who is not None)
         if who is None:
             log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
             return self._signin("Those are 24 valid words, but nobody here has that phrase.", 401)
-        self._redirect("/", self._cookie_for(app.new_session(who)))
+        self._redirect("/", self._cookie_for(app.new_session(who, admin=admin)))
 
     def _signup(self, method):
         """Making an account: the page gives 24 new words, and the account exists once they are confirmed."""
@@ -857,10 +955,19 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             raise ApiError(400, f"{path} is a folder")
         return path, node
 
+    def _lock_ids(self):
+        """The ids of the locked items, read once per request and drive (a list of thousands of entries
+        asked the database once per entry)."""
+        index = self.drive.index
+        got = self.__dict__.get("_locks_seen")
+        if got is None or got[0] is not index:
+            got = self._locks_seen = (index, frozenset(index.locks_all()))
+        return got[1]
+
     def _entry(self, path, n):
         e = {"name": n["name"], "path": path, "dir": bool(n["is_dir"]), "size": n["size"], "mtime": n["mtime"],
              "state": n["state"], "pinned": bool(n["is_pinned"])}
-        if self.drive.locks.is_root(n["uid"]):
+        if n["uid"] in self._lock_ids():
             e["locked"] = True            # has a password lock (open in this browser, or it wouldn't be listed)
         return e
 
@@ -897,6 +1004,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({
             "version": __version__,
             "role": "owner",
+            "admin": self.app.session_admin(self._cookie()),     # signed in with an admin account's words
             "user": self.app.user_name(),
             "signup": self.app.accounts.mode(),
             "accounts": self.app.accounts.count(),
@@ -1063,6 +1171,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         log.warning("Web dashboard: the list of %d account(s) was brought back from Discord.", count)
         self._json({"ok": True, "count": count})
 
+    def _post_api_accounts_admin(self):
+        """Make an admin account: a co-owner with 24 words of its own (accounts.create_admin). The words
+        are in this answer only."""
+        body = self._body_json()
+        try:
+            phrase, rec = self.app.accounts.create_admin(str(body.get("note") or ""))
+        except AccountError as e:
+            raise ApiError(409, str(e)) from None
+        by = self.app.session_admin(self._cookie())
+        log.warning("Web dashboard: admin account %s was made by %s.", rec["id"], f"admin account {by}" if by else "the owner")
+        self._json({"ok": True, "id": rec["id"], "phrase": phrase})
+
     def _post_api_accounts_invite(self):
         body = self._body_json()
         try:
@@ -1078,14 +1198,21 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             raise ApiError(404, "That invite is already gone")
         self._json({"ok": True})
 
+    def _not_moving(self, aid):
+        if self.server.app.moves.moving(aid):
+            raise ApiError(409, "That account is moving into another one. Cancel the move first (or let it finish).")
+
     def _post_api_accounts_disable(self):
         body = self._body_json()
+        self._not_moving(str(body.get("id") or ""))
         if not self.app.accounts.set_disabled(str(body.get("id") or ""), bool(body.get("off"))):
             raise ApiError(404, "No such account")
         self._json({"ok": True})
 
     def _post_api_accounts_delete(self):
-        if not self.app.accounts.delete(str(self._body_json().get("id") or "")):
+        aid = str(self._body_json().get("id") or "")
+        self._not_moving(aid)
+        if not self.app.accounts.delete(aid):
             raise ApiError(404, "No such account")
         self._json({"ok": True})
 
@@ -1193,9 +1320,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         items = []
         stars = self.drive.index.stars_all()
         _, sizes = self._tree()
+        fs = self.drive.fs
+        check = fs.hides_below(path)
         for c in self.drive.index.children(node["id"]):
             cpath = posixpath.join(path, c["name"])
-            if not self.drive.fs._hidden(cpath):
+            if not check or not fs._hidden(cpath):
                 e = self._entry(cpath, c)
                 if c["uid"] in stars:
                     e["starred"] = True
@@ -1582,6 +1711,87 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             raise ApiError(400, "bad size or offset")
         d.index.makedirs(posixpath.dirname(path))
         self._take_part(path, size, offset, None)
+
+    # ------------------------------------------------------------ end-to-end accounts: moving one into another
+    # (transfer.py). The account that receives asks (open), the one that moves out answers (peer, send);
+    # the host copies the sealed objects and passes the sealed list on unread (list), and once it is taken
+    # in (finish), the account that moved out is deleted.
+    def _move_id(self):
+        mid = str(self._query().get("id") or self._move_body.get("id") or "").strip().lower()
+        if not re.fullmatch(r"[a-z2-7]{16}", mid):
+            app = self.server.app
+            app.note_login("move:" + self._addr(), False)          # guessing at ids is slowed down like guessing phrases
+            raise ApiError(404, "There is no such move. Check the code.")
+        return mid
+
+    _move_body = {}
+
+    def _get_api_vault_move(self):
+        self._vault()
+        self._json(self.server.app.moves.status(self._move_id(), self._acct.id))
+
+    def _post_api_vault_move_open(self):
+        self._vault()
+        self._json(self.server.app.moves.open(self._acct.id, self._body_json().get("pub")))
+
+    def _get_api_vault_move_peer(self):
+        self._vault()
+        app = self.server.app
+        wait = app.locked_for("move:" + self._addr())
+        if wait:
+            raise ApiError(429, f"Too many wrong codes. Try again in {int(wait) + 1} seconds.")
+        mid = self._move_id()
+        try:
+            out = app.moves.peer(mid, self._acct.id)
+        except MoveError as e:
+            if e.status == 404:
+                app.note_login("move:" + self._addr(), False)
+            raise
+        self._json(out)
+
+    def _post_api_vault_move_send(self):
+        """The sealed list of the account that moves out: ?id=&pub= , the body is the sealed bytes."""
+        self._vault()
+        from .transfer import LIST_MAX
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= LIST_MAX:
+            raise ApiError(413 if n else 400, "The list of files is too big to move this way." if n else "nothing sent")
+        data = self.rfile.read(n)
+        if len(data) != n:
+            raise ApiError(400, "upload was cut off")
+        mid = self._move_id()
+        d = self._acct
+        self._leave()                            # (the move opens both accounts itself)
+        self._json(self.server.app.moves.send(mid, d.id, self._query().get("pub"), data))
+
+    def _get_api_vault_move_list(self):
+        self._vault()
+        mid, aid = self._move_id(), self._acct.id
+        self._leave()
+        spub, data = self.server.app.moves.sealed_list(mid, aid)
+        self._send(200, data, "application/octet-stream", {"X-DD-Pub": spub})
+
+    def _post_api_vault_move_finish(self):
+        self._vault()
+        self._move_body = self._body_json()
+        mid, aid = self._move_id(), self._acct.id
+        self._leave()
+        self._json(self.server.app.moves.finish(mid, aid))
+
+    def _post_api_vault_move_cancel(self):
+        self._vault()
+        self._move_body = self._body_json()
+        mid, aid = self._move_id(), self._acct.id
+        self._leave()
+        self._json(self.server.app.moves.cancel(mid, aid))
+
+    # ---------- the owner's side
+    def _get_api_accounts_moves(self):
+        self._json({"moves": self.server.app.moves.listing()})
+
+    def _post_api_accounts_moves_cancel(self):
+        self._move_body = self._body_json()
+        self._json(self.server.app.moves.cancel(self._move_id(), None))
 
     # ------------------------------------------------------------ end-to-end accounts: share links
     # The link carries the key, after the # (the part of an address a browser sends nowhere). What the host

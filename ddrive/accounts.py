@@ -32,6 +32,12 @@ that Discord and other accounts can't read; whoever runs the server could.
 
 Who may make an account is `signup_mode`: closed (nobody), invite (with a code made in the owner's
 Settings) or public (anybody who can reach the dashboard).
+
+An admin account (create_admin) is a co-owner: 24 words of its own that sign in to the owner's
+dashboard with everything the owner can do, except change how the owner signs in (passkeys, the
+recovery phrase, the WebDAV password). It has no storage of its own, so the computer keeps no key of
+it, only the check that recognises its words. Switching it off or deleting it ends its sessions at
+once: that is what makes it better than handing out the recovery phrase.
 """
 
 import gzip
@@ -511,7 +517,7 @@ class Accounts:
             raise AccountError("That invite code isn't valid (any more)." if str(invite or "").strip()
                                else "An invite code is needed to make an account here.")
         limit = int(getattr(self.cfg, "accounts_max", 0) or 0)
-        if limit and len(self._recs) >= limit:
+        if limit and sum(1 for r in self._recs.values() if not r.get("admin")) >= limit:
             raise AccountError("No more accounts can be made here: it is full.")
         recent = [t for t in self._signups.get(addr, []) if t > time.time() - 3600]
         if addr is not None and len(recent) >= SIGNUPS_PER_HOUR:
@@ -550,6 +556,28 @@ class Accounts:
         if len(auth) != 32:
             raise AccountError("That isn't a sign-in key.")
         return self._make(auth, invite, addr, e2e=True, owner=owner)
+
+    def create_admin(self, note=""):
+        """Make an admin account (a co-owner, see above). Only the owner or another admin makes one,
+        so sign-up rules don't apply. Returns (its 24 words, its record): the words are shown once."""
+        key = secrets.token_bytes(32)
+        aid = account_id(key)
+        with self._lock:
+            if self._broken:
+                raise AccountError("the list of accounts on this computer is damaged")
+            rec = {"id": aid, "check": _check(key), "created": time.time(), "seen": None, "invite": "",
+                   "admin": True, "note": str(note or "")[:80]}
+            self._recs[aid] = rec
+            self._backup_wanted = self._backup_soon = True
+            self._save()
+        log.info("Admin account %s was created.", aid)
+        return words.key_to_phrase(key), rec
+
+    def admin_ok(self, aid):
+        """True while `aid` is an admin account that may sign in."""
+        with self._lock:
+            rec = self._recs.get(str(aid or ""))
+            return rec is not None and bool(rec.get("admin")) and not rec.get("disabled")
 
     def _make(self, key, invite, addr, e2e=False, owner=False):
         """owner: the owner makes it from their dashboard (to move their own files in): whether and how
@@ -597,7 +625,7 @@ class Accounts:
             rec = self._recs.get(aid)
             if rec is None or not hmac.compare_digest(rec.get("check") or "", _check(key)) or rec.get("disabled"):
                 return None
-            if (self._secrets.get(aid) or {}).get("key") != key.hex():      # the keys could not be read here
+            if not rec.get("admin") and (self._secrets.get(aid) or {}).get("key") != key.hex():  # the keys could not be read here
                 self._secrets[aid] = {"key": key.hex(), "token": (self._secrets.get(aid) or {}).get("token", "")}
                 self._save()
             rec["seen"] = time.time()
@@ -605,10 +633,11 @@ class Accounts:
             return rec
 
     def active(self, aid):
-        """The record of an account that may be used right now, or None."""
+        """The record of an account (with a drive of its own) that may be used right now, or None.
+        Admin accounts have no drive: they sign in as the owner (admin_ok)."""
         with self._lock:
             rec = self._recs.get(aid)
-            return rec if rec is not None and not rec.get("disabled") else None
+            return rec if rec is not None and not rec.get("disabled") and not rec.get("admin") else None
 
     # ------------------------------------------------------------ an account's drive
     def acquire(self, aid):
@@ -684,6 +713,11 @@ class Accounts:
                     log.debug("saving the list of accounts: %s", e)
         if self._backup_wanted and (self._backup_soon or time.time() - self._backup_at >= BACKUP_EVERY):
             self.backup()
+        if self.moves is not None:
+            try:
+                self.moves.tidy()
+            except Exception as e:
+                log.debug("tidying moves: %s", e)
 
     def start(self):
         hush_accounts()
@@ -885,7 +919,10 @@ class Accounts:
         return len(recs)
 
     # ------------------------------------------------------------ for the owner
+    moves = None                        # the moves between accounts (transfer.Moves), set by the dashboard
+
     def listing(self):
+        moving = self.moves.moving_ids() if self.moves is not None else set()
         with self._lock:
             out = []
             for aid, rec in self._recs.items():
@@ -898,7 +935,9 @@ class Accounts:
                         pass
                 out.append({"id": aid, "created": rec.get("created"), "seen": rec.get("seen"), "disabled": bool(rec.get("disabled")),
                             "invite": rec.get("invite") or "", "files": usage.get("files", 0), "bytes": usage.get("bytes", 0),
-                            "open": d is not None, "ready": bool((self._secrets.get(aid) or {}).get("key"))})
+                            "open": d is not None, "ready": bool(rec.get("admin") or (self._secrets.get(aid) or {}).get("key")),
+                            "admin": bool(rec.get("admin")), "e2e": bool(rec.get("e2e")), "note": rec.get("note") or "",
+                            "moving": aid in moving})
             return sorted(out, key=lambda a: -(a["created"] or 0))
 
     def count(self):

@@ -441,6 +441,8 @@ lock <path> / unprotect <path>       Lock a folder or file with a password (hidd
 unlock [--minutes N] / relock        Show locked folders on this device's drive for a while / hide them again
 sync [list|add|edit|remove|run|stop|pause|resume|status|modes]
                                      Folders kept in sync with the drive (see "Sync and back up folders")
+accounts [list|admin [note]|disable <id>|enable <id>|delete <id>|moves|move-cancel <id>]
+                                     Accounts on the dashboard, admin accounts (co-owners), moves between accounts
 ```
 
 Paths can be given as `Z:\Folder\file.mp4`, `/mnt/ddrive/Folder/file.mp4`, or `/Folder/file.mp4`.
@@ -660,7 +662,38 @@ Settings) decides who may make one:
 - **Managing them**: the list under Settings → Accounts shows each account's id, how much it stores
   and when it last signed in. **Switch off** signs it out and stops its share links without deleting
   anything; **Delete** removes it from this computer and from Discord. An account can delete itself
-  under *Your account*.
+  under *Your account*. The same from a terminal: `accounts list`, `accounts disable|enable|delete <id>`.
+- **Moving one account into another.** Two end-to-end encrypted accounts of the same person can be
+  made one: everything of one (files, folders, earlier versions, deleted files, snapshots, saved
+  messages) goes into a new folder of the other, and the first one is then deleted. On the account
+  that receives, *Your account* → **Receive…** shows a code; on the other, **Move out…** takes it.
+  The two pages agree on a key (ECDH, P-256) through your computer, which sees only public keys; the
+  account that moves out seals its whole list of files with it, and your computer passes that on
+  unread and copies the sealed files from one account's storage to the other's without opening them,
+  in the background (the pages may be closed meanwhile). Two codes are compared between the two
+  screens, so that a server that swapped a key or slipped in a list of its own is caught. The account
+  that moves out can't change while it runs, and is deleted only once the files are stored on Discord
+  as the other account's. Either page, or you under Settings → Accounts, can cancel until the list is
+  taken in. Share links of the account that moved out stop working. `ddrive/transfer.py` describes it
+  exactly.
+
+### Admin accounts
+
+An admin account is a **co-owner**: 24 words of its own that sign in to your dashboard with
+everything you can do there (your files, the drive's settings, sync, repair, the log, accounts,
+invites, other admins), except change how you sign in: the recovery phrase, your passkeys and the
+password for other apps are yours alone. Make one under Settings → Accounts → **Make an admin…**, or
+in a terminal:
+
+```text
+./run.sh accounts admin "for Sam"      (run.bat accounts admin ... on Windows)
+```
+
+The words are shown once; give them to that person. **Switch off** or **Delete** it in the list and
+it is signed out at once, which is why an admin is better than handing out your recovery phrase.
+An admin has no storage of its own, so the computer keeps no key of it, only a check that recognises
+its words; it doesn't count towards *Most accounts*. While the drive is stopped, `accounts admin`
+changes the list on disk itself; while it runs, it asks the running dashboard.
 
 **Terms and privacy policy.** A dashboard that has accounts needs to say what it does with people's
 data. DDrive serves two pages for that, linked from the sign-in and sign-up pages: `/terms` and

@@ -3,6 +3,31 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.16.0 (2026-10-12)
+
+- **Admin accounts.** A co-owner with 24 words of its own: it signs in to the owner's dashboard and
+  can do everything the owner can, except change how the owner signs in (recovery phrase, passkeys,
+  WebDAV password). Settings → Accounts → "Make an admin…", or `accounts admin [note]` in a terminal.
+  Switching it off or deleting it signs it out at once. Admins are listed with an "Admin" tag and
+  don't count towards "Most accounts".
+- **`accounts` command**: `list`, `admin`, `disable`, `enable`, `delete`, `moves`, `move-cancel`.
+  It asks the running dashboard, or changes the list on disk while the drive is stopped.
+- **Moving one end-to-end encrypted account into another.** "Receive…" on the account that takes
+  everything, "Move out…" on the one that goes. The two pages agree on a key (ECDH P-256) through the
+  server, which only sees public keys; two codes compared between the screens catch a server that
+  swaps a key or a list. The server copies the sealed files between the accounts in the background
+  without opening them, the receiving page adds the whole list in a new folder, and the account that
+  moved out is deleted once the files are stored as the other's. Cancel any time before that; the
+  owner sees and can cancel moves under Settings → Accounts.
+- **Faster dashboard.** Answers no longer wait for the browser's delayed acknowledgement (Nagle's
+  algorithm with headers and body sent apart): about 40 ms less per request on a kept-alive
+  connection, which is most of them (status 44 → 2 ms, an end-to-end account's change 90 → 6 ms).
+  Large folders list twice as fast (locks are read once per request, not once per entry, and the
+  hidden/locked check is skipped where nothing below can be hidden). The page's own files are sent
+  compressed (app.js 266 → 75 KB) and answered with "not modified" when the browser has them. Finding
+  what still has to be uploaded uses an index instead of reading the whole file list (10 ms → 0 on a
+  drive of 200,000 files, asked every few seconds).
+
 ## 2.15.3 (2026-10-12)
 
 - A GIF (or animated WebP) on a view-only share link moves again. Such a link paints pictures instead

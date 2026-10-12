@@ -2460,6 +2460,11 @@ def main():
     p_menu = subparsers.add_parser("context-menu", help="Install Windows Explorer right-click menu")
     p_menu.add_argument("action", choices=["install", "uninstall"], default="install", nargs="?")
 
+    p_acc = subparsers.add_parser("accounts", help="Accounts on the dashboard: list, admin [note], disable|enable|delete <id>, "
+                                                    "moves, move-cancel <id>")
+    p_acc.add_argument("action", nargs="?", default="list")
+    p_acc.add_argument("rest", nargs="*")
+
     p_lite = subparsers.add_parser("lite", add_help=False,
                                    help="Use a drive that runs on another computer: lite connect <address>, lite mount, lite stop")
     p_lite.add_argument("rest", nargs=argparse.REMAINDER)
@@ -2549,6 +2554,9 @@ def main():
         return cmd_sync(args)
     elif args.command in ("lock", "unlock", "relock", "unprotect"):
         return cmd_lock(args)
+    elif args.command == "accounts":
+        from .accountscli import main as accounts_main
+        return accounts_main(args)
     else:
         parser.print_help()
         return 0
