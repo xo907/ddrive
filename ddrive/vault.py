@@ -177,6 +177,7 @@ class Vault:
         self.seq = 0                     # the number of the last change that is in `nodes`
         self.since_snapshot = 0
         self.snapshot_object = None
+        self._kids = None                # folder id -> {name: node}, made when asked for
 
     # ------------------------------------------------------------ the list of files
     def sync(self):
@@ -189,6 +190,7 @@ class Vault:
                 state = json.loads(raw)
                 self.nodes, self.seq, self.since_snapshot = state["nodes"], snap["seq"], 0
                 self.snapshot_object = snap["object"]
+                self._kids = None
                 continue
             for seq, b64 in got["batches"]:
                 for blob in unpack(base64.b64decode(b64)):
@@ -199,6 +201,7 @@ class Vault:
                 return self
 
     def _apply(self, op):
+        self._kids = None
         kind = op.get("op")
         if kind == "put":
             self.nodes[op["id"]] = {k: op.get(k) for k in ("id", "parent", "name", "dir", "size", "mtime", "obj", "key", "thumb")}
@@ -233,15 +236,24 @@ class Vault:
         self.since_snapshot, self.snapshot_object = 0, oid
 
     # ------------------------------------------------------------ paths
+    def _by_folder(self):
+        if self._kids is None:
+            kids = {}
+            for n in self.nodes.values():
+                kids.setdefault(n["parent"], {})[n["name"]] = n
+            self._kids = kids
+        return self._kids
+
     def _children(self, parent):
-        return [n for n in self.nodes.values() if n["parent"] == parent]
+        return list(self._by_folder().get(parent, {}).values())
 
     def resolve(self, path):
         """The node at a path ('' is the top folder), or None."""
         nid = ""
         node = {"id": "", "dir": True, "name": "", "parent": None}
+        kids = self._by_folder()
         for name in [p for p in path.strip("/").split("/") if p]:
-            node = next((n for n in self._children(nid) if n["name"] == name), None)
+            node = kids.get(nid, {}).get(name)
             if node is None:
                 return None
             nid = node["id"]
@@ -287,8 +299,9 @@ class Vault:
             self.client._json("/api/vault/delete", {"ids": objects})
 
     # ------------------------------------------------------------ files
-    def _store(self, oid, key, data=None, read=None, size=None, log=CHUNK_LOG):
-        """Seal a file (bytes, or read(n) with its size) and send it to the host as object `oid`."""
+    def _store(self, oid, key, data=None, read=None, size=None, log=CHUNK_LOG, stop=None, hear=None):
+        """Seal a file (bytes, or read(n) with its size) and send it to the host as object `oid`.
+        stop() returning true gives up (InterruptedError); hear(part_bytes=n) / hear(note=why) tell how it goes."""
         if data is not None:
             src, size = [data], len(data)
 
@@ -296,27 +309,40 @@ class Vault:
                 out, src[0] = src[0][:n], src[0][n:]
                 return out
         total = sealed_size(size, log)
-        offset, buf = 0, b""
+        offset, buf, plain = 0, b"", 0
 
-        def post(part):
+        def check():
+            if stop is not None and stop():
+                raise InterruptedError("stopped")
+
+        def post(part, done):
             nonlocal offset
             while True:
+                check()
                 got = json.loads(self.client.request("POST", f"/api/vault/object?id={oid}&size={total}&offset={offset}", part,
                                                      {"Content-Type": "application/octet-stream"}))
                 if got.get("wait"):
-                    time.sleep(15)
+                    if hear:
+                        hear(note="Waiting for the host: " + str(got["wait"]))
+                    for _ in range(15):
+                        check()
+                        time.sleep(1.0)
                     continue
                 if not got.get("ok"):
                     raise VaultError("The host lost its place in this file; send it again.")
                 offset = got["offset"]
+                if hear:
+                    hear(part_bytes=done, note="")
                 return
 
+        sent = 0
         for piece in seal_stream(key, read, size, log):
             buf += piece
+            plain += max(0, len(piece) - OVERHEAD) if piece[:4] != MAGIC or len(piece) != 5 else 0
             if len(buf) >= PART:
-                post(buf)
-                buf = b""
-        post(buf)
+                post(buf, plain - sent)
+                sent, buf = plain, b""
+        post(buf, plain - sent)
 
     def _fetch(self, oid, a, n):
         return self.client.request("GET", f"/api/vault/object?id={oid}", headers={"Range": f"bytes={a}-{a + n - 1}"})
@@ -324,7 +350,11 @@ class Vault:
     def _fetch_all(self, oid, size):
         return open_range(self.meta, lambda a, n: self._fetch(oid, a, n), size)
 
-    def put(self, path, data=None, read=None, size=None, mtime=None):
+    def pending(self):
+        """The ids of the objects the host has but hasn't stored on Discord yet."""
+        return set(self.client._json("/api/vault/pending")["ids"])
+
+    def put(self, path, data=None, read=None, size=None, mtime=None, stop=None, hear=None):
         """Store a file (bytes, or read(n) and its size) at a path, replacing what was there."""
         parent, name = posixpath.split("/" + path.strip("/"))
         up = self.resolve(parent)
@@ -335,7 +365,7 @@ class Vault:
             raise VaultError(f"{path} is a folder")
         size = len(data) if data is not None else size
         key, oid = os.urandom(32), new_id()
-        self._store(oid, key, data, read, size)
+        self._store(oid, key, data, read, size, stop=stop, hear=hear)
         self._send({"op": "put", "id": old["id"] if old else new_id(), "parent": up["id"], "name": name, "dir": False,
                     "size": size, "mtime": mtime if mtime is not None else time.time(), "obj": oid,
                     "key": base64.b64encode(key).decode("ascii")})

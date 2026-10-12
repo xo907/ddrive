@@ -40,7 +40,7 @@ from .crypto import hash_password
 from .index import ROOT_ID, new_uid
 from . import legal, passkeys, resources, words
 from .shares import Shares
-from .syncdevices import Gone, LiteDevices, Offline
+from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
 from .logbuf import QUIET
@@ -56,7 +56,8 @@ MAX_FAILURES = 5          # wrong phrases (or passwords of a lock) from one addr
 LOCKOUT = 60.0            # seconds, doubled for every further wrong one (up to an hour)
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
 _BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
-                      "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report", "/api/upload/part")
+                      "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report", "/api/upload/part",
+                      "/api/vault/sync", "/api/vault/sync/poll", "/api/vault/sync/report")
 PART_MAX = 64 * 1024 * 1024   # the largest part of a file sent in parts (/api/upload/part)
 PART_DAYS = 7.0               # a file of which only some parts came is given up after this long
 _MEDIA_EXT = ("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "mp4", "m4v", "webm", "mov", "mkv", "avi")
@@ -77,8 +78,10 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("status account changelog vault vault/log vault/object".split())
-E2E_POST = frozenset("logout account/delete vault/log vault/snapshot vault/object vault/delete".split())
+E2E_GET = frozenset("status account changelog vault vault/log vault/object vault/pending vault/sync".split())
+E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
+    vault/sync/jobs vault/sync/tell vault/sync/ask vault/sync/forget
+    vault/sync/hello vault/sync/poll vault/sync/report vault/sync/answer vault/sync/bye""".split())
 
 
 def account_may(method, route, e2e=False):
@@ -161,6 +164,7 @@ class WebServer:
         self._book = (None, [])           # (mtime, size) of the address book file, its contacts
         self.accounts = Accounts(drive)   # other people's accounts, each with a drive of its own
         self.lite = LiteDevices()         # computers running DDrive Lite that sync folders with this drive
+        self.sealed = SealedDevices()     # the same for end-to-end encrypted accounts: sealed messages, passed on unread
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -186,6 +190,7 @@ class WebServer:
 
     def stop(self):
         self.lite.close()
+        self.sealed.close()
         try:
             self.httpd.shutdown()
             self.httpd.server_close()
@@ -1543,6 +1548,81 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             raise ApiError(400, "bad size or offset")
         d.index.makedirs(posixpath.dirname(path))
         self._take_part(path, size, offset, None)
+
+    def _get_api_vault_pending(self):
+        """The objects that are here but not yet stored on Discord (a device that moves files off itself
+        waits for them to be)."""
+        d = self._vault()
+        out = []
+        top = d.index.resolve("/o")
+        for sub in (d.index.children(top["id"]) if top is not None else []):
+            for c in d.index.children(sub["id"]):
+                if c["state"] != "synced":
+                    out.append(c["name"])
+        self._json({"ids": out})
+
+    # ---------- folder syncing on an end-to-end account's devices: sealed messages passed on (syncdevices.SealedDevices)
+    def _sealed(self, fn, *args, **kw):
+        self._vault()
+        from . import sync
+        try:
+            return fn(self._who(), *args, **kw)
+        except Gone:
+            raise ApiError(404, "That device no longer syncs folders with this account.") from None
+        except Offline as e:
+            raise ApiError(409, str(e)) from None
+        except sync.SyncError as e:
+            raise ApiError(400, str(e)) from None
+
+    def _get_api_vault_sync(self):
+        self._json({"devices": self._sealed(self.server.app.sealed.listing)})
+
+    def _post_api_vault_sync_jobs(self):
+        body = self._body_json()
+        rev = self._sealed(self.server.app.sealed.set_jobs, body.get("device"), body.get("rev") or 0, body.get("jobs"))
+        if rev is None:
+            raise ApiError(409, "Those folders were changed meanwhile. Look again and repeat the change.")
+        self._json({"ok": True, "rev": rev})
+
+    def _post_api_vault_sync_tell(self):
+        body = self._body_json()
+        self._sealed(self.server.app.sealed.tell, body.get("device"), body.get("sealed"))
+        self._json({"ok": True})
+
+    def _post_api_vault_sync_ask(self):
+        body = self._body_json()
+        self._json({"ok": True, "sealed": self._sealed(self.server.app.sealed.ask, body.get("device"), body.get("sealed"))})
+
+    def _post_api_vault_sync_forget(self):
+        self._sealed(self.server.app.sealed.bye, self._body_json().get("device"))
+        self._json({"ok": True})
+
+    def _post_api_vault_sync_hello(self):
+        body = self._body_json()
+        got = self._sealed(self.server.app.sealed.hello, body.get("device"), body.get("rev"), body.get("info"), body.get("jobs"))
+        self._json(dict(got, ok=True, version=__version__))
+
+    def _post_api_vault_sync_poll(self):
+        body = self._body_json()
+        try:
+            wait = float(body.get("wait") or 0)
+        except (TypeError, ValueError):
+            wait = 0.0
+        self._json(self._sealed(self.server.app.sealed.poll, body.get("device"), body.get("rev"), wait))
+
+    def _post_api_vault_sync_report(self):
+        body = self._body_json()
+        self._sealed(self.server.app.sealed.report, body.get("device"), body.get("status"))
+        self._json({"ok": True})
+
+    def _post_api_vault_sync_answer(self):
+        body = self._body_json()
+        self._sealed(self.server.app.sealed.answer, body.get("device"), body.get("req"), body.get("sealed"))
+        self._json({"ok": True})
+
+    def _post_api_vault_sync_bye(self):
+        self._sealed(self.server.app.sealed.bye, self._body_json().get("device"))
+        self._json({"ok": True})
 
     def _post_api_vault_delete(self):
         d = self._vault()

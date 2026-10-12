@@ -2,14 +2,19 @@
 things and can read none of it. Here the host is a whole drive with its dashboard on a free local
 port, and the device is the reference client (ddrive/vault.py) talking to it over HTTP."""
 
+import base64
+import contextlib
 import http.client
 import io
 import json
 import os
+import time
 import urllib.parse
 
 import helpers
-from ddrive import lite, vault, words
+from ddrive import lite, litesync, vault, words
+
+DEVICE = "0123456789abcdef"
 
 MARK = b"PLAINTEXT-MARKER-that-must-never-reach-the-host"
 
@@ -230,6 +235,165 @@ class VaultTest(helpers.DriveTest):
         finally:
             self.web.accounts.release(d)
         self.assertEqual(len(objects), 6 + 1)                           # six files and one sealed list
+
+
+class VaultSyncTest(VaultTest):
+    """Folder syncing on a device of an end-to-end encrypted account: the files go sealed, and so does
+    everything said about them between the device and the account's page in a browser."""
+
+    def setUp(self):
+        super().setUp()
+        self.here = os.path.join(self.tmp, "Secret project")
+        os.makedirs(self.here)
+        self.agent = litesync.VaultAgent(lite.HostClient(self.address, auth=self.auth), self.key, DEVICE, "my laptop",
+                                         data_dir=os.path.join(self.tmp, "lite")).start()
+        self.addCleanup(self.agent.stop)
+        self.page = self.device.client                                 # the account's page in a browser, as requests
+        self.until(lambda: self.agent.online and self.shown(), "connecting")
+
+    # what the browser does: seal and open with the account's key
+    def seal(self, obj):
+        data = json.dumps(obj).encode()
+        return base64.b64encode(vault.seal(vault.meta_key(self.key), data, litesync.AAD_SYNC)).decode()
+
+    def open(self, text):
+        return json.loads(vault.unseal(vault.meta_key(self.key), base64.b64decode(text), litesync.AAD_SYNC)) if text else None
+
+    def shown(self):
+        devs = self.page._json("/api/vault/sync")["devices"]
+        return devs[0] if devs else None
+
+    def until(self, fn, what, seconds=20):
+        end = time.time() + seconds
+        while time.time() < end:
+            got = fn()
+            if got:
+                return got
+            time.sleep(0.05)
+        self.fail(f"{what} did not happen")
+
+    def set_jobs(self, jobs):
+        d = self.shown()
+        self.page._json("/api/vault/sync/jobs", {"device": DEVICE, "rev": d["rev"], "jobs": self.seal(jobs)})
+
+    def run_job(self, jid):
+        self.until(lambda: self.agent.job(jid), "the pair reaching the device")
+        before = ((self.agent.status.get(jid) or {}).get("history") or [{}])[0].get("at")
+        self.page._json("/api/vault/sync/tell", {"device": DEVICE, "sealed": self.seal({"do": "run", "id": jid})})
+
+        def done():
+            hist = (self.agent.status.get(jid) or {}).get("history") or []
+            return hist[0] if hist and hist[0]["at"] != before and self.agent.running is None else None
+        res = self.until(done, "the pair running")
+        self.assertEqual(res["error"], "")
+        return res
+
+    def put(self, rel, data, age=100):
+        p = os.path.join(self.here, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as f:
+            f.write(data)
+        t = time.time() - age
+        os.utime(p, (t, t))
+        return p
+
+    def test_a_device_syncs_into_the_account_and_the_host_learns_nothing(self):
+        d = self.shown()
+        self.assertEqual(self.open(d["info"])["name"], "my laptop")    # the browser can read who it is...
+        self.put("plans.txt", MARK + b" plans")
+        self.put("drafts/chapter one.txt", MARK + b" chapter")
+        job = {"id": "aa11bb", "name": "Project", "local": self.here, "remote": "/Backed up/Project", "mode": "backup",
+               "trigger": "manual", "every": 60, "at": "03:00", "exclude": [], "enabled": True}
+        self.set_jobs([job])
+        self.assertEqual(self.run_job("aa11bb")["up"], 2)
+        v = self.new_device()                                          # another device of the account sees the files
+        self.assertEqual(v.read("/Backed up/Project/plans.txt"), MARK + b" plans")
+        self.assertEqual(v.read("/Backed up/Project/drafts/chapter one.txt"), MARK + b" chapter")
+        self.assertAlmostEqual(v.resolve("/Backed up/Project/plans.txt")["mtime"],
+                               os.path.getmtime(os.path.join(self.here, "plans.txt")), delta=0.01)
+        self.assertEqual(self.run_job("aa11bb")["up"], 0)              # nothing is copied twice
+        # how it went reaches the browser, sealed
+        def reported():
+            st = self.open(self.shown()["status"]) or {}
+            return len(((st.get("jobs") or {}).get("aa11bb") or {}).get("history") or []) == 2
+        self.until(reported, "the report")
+        # the browser looks into a folder of the device, through the host
+        got = self.page._json("/api/vault/sync/ask", {"device": DEVICE, "sealed": self.seal({"do": "browse", "path": self.here})})
+        self.assertEqual([x["name"] for x in self.open(got["sealed"])["dirs"]], ["drafts"])
+        # ...and all the host ever held of this is sealed: no device name, no folder, no file name
+        held = json.dumps(self.web.sealed._devs[(next(iter(self.web.accounts._recs)), DEVICE)], default=str)
+        for needle in ("my laptop", "Secret project", "Backed up", "plans", "chapter", "drafts"):
+            self.assertNotIn(needle, held)
+        for folder, _, files in os.walk(os.path.join(self.tmp, "aaaa")):          # the host's own folder
+            for f in files:
+                with open(os.path.join(folder, f), "rb") as fh:
+                    data = fh.read()
+                for needle in (MARK, b"Secret project", b"plans.txt", b"chapter one", b"Backed up"):
+                    self.assertNotIn(needle, data, os.path.join(folder, f))
+        # both ways, and a change in the browser's copy of the pairs reaches the device
+        self.set_jobs([dict(job, mode="two-way")])
+        self.until(lambda: self.agent.job("aa11bb")["mode"] == "two-way", "the change")
+        v.put("/Backed up/Project/from the phone.txt", b"added elsewhere", mtime=1_700_000_000)
+        self.assertEqual(self.run_job("aa11bb")["down"], 1)
+        with open(os.path.join(self.here, "from the phone.txt"), "rb") as f:
+            self.assertEqual(f.read(), b"added elsewhere")
+        # what isn't sealed with the account's key is not acted on
+        self.page._json("/api/vault/sync/tell", {"device": DEVICE, "sealed": "bm90IHNlYWxlZA=="})
+        other = base64.b64encode(vault.seal(os.urandom(32), b'{"do":"run","id":"aa11bb"}', litesync.AAD_SYNC)).decode()
+        self.page._json("/api/vault/sync/tell", {"device": DEVICE, "sealed": other})
+        time.sleep(1.5)
+        self.assertEqual(len(self.agent.status["aa11bb"]["history"]), 3)
+        # a change made from a stale copy is refused, so two browsers don't undo each other
+        with self.assertRaises(lite.HostError) as e:
+            self.page._json("/api/vault/sync/jobs", {"device": DEVICE, "rev": 0, "jobs": self.seal([])})
+        self.assertEqual(e.exception.status, 409)
+
+    def test_moving_waits_until_the_host_has_stored_it(self):
+        self.put("film.mp4", os.urandom(200_000))
+        self.set_jobs([{"id": "cc22dd", "name": "Films", "local": self.here, "remote": "/Films", "mode": "move",
+                        "trigger": "manual", "every": 60, "at": "03:00", "exclude": [], "enabled": True}])
+        res = self.run_job("cc22dd")
+        self.assertEqual((res["up"], res["moved"]), (1, 0))            # sent, but the host hasn't stored it on Discord yet
+        self.assertTrue(os.path.exists(os.path.join(self.here, "film.mp4")))
+        d = self.account_drive()
+        try:
+            helpers.DriveTest.upload(d)                                 # now it has
+        finally:
+            self.web.accounts.release(d)
+        time.sleep(3.5)                                                 # (the device asks the host about this every few seconds)
+        self.assertEqual(self.run_job("cc22dd")["moved"], 1)
+        self.assertFalse(os.path.exists(os.path.join(self.here, "film.mp4")))
+        self.assertEqual(len(self.new_device().read("/Films/film.mp4")), 200_000)
+
+    def test_the_commands(self):
+        os.environ["DDRIVE_LITE_CONFIG"] = os.path.join(self.tmp, "lite.json")
+        self.addCleanup(os.environ.pop, "DDRIVE_LITE_CONFIG")
+
+        def run(*argv):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = lite.main(list(argv))
+            return code, out.getvalue()
+        phrase = words.key_to_phrase(self.key)
+        code, text = run("connect", self.address, "-p", phrase)
+        self.assertEqual(code, 0, text)
+        self.assertIn("end-to-end encrypted", text)
+        self.assertTrue(lite.load_settings()["e2e"])
+        src = self.put("notes.txt", b"typed on the laptop")
+        self.assertEqual(run("put", src, "/")[0], 0)
+        self.assertIn("notes.txt", run("ls")[1])
+        back = os.path.join(self.tmp, "back.txt")
+        self.assertEqual(run("get", "/notes.txt", back)[0], 0)
+        with open(back, "rb") as f:
+            self.assertEqual(f.read(), b"typed on the laptop")
+        self.assertEqual(run("get", "/nothing.txt")[0], 1)
+        self.assertEqual(run("ls", "/no such folder")[0], 1)
+        self.assertEqual(run("mount")[0], 1)                           # no drive letter for these yet, said in words
+        self.assertIn("end-to-end", run("status")[1])
+        # the owner's words still connect the earlier way
+        owner = words.key_to_phrase(bytes.fromhex(self.host.cfg.encryption_key))
+        code, text = run("connect", self.address, "-p", owner)
+        self.assertEqual((code, lite.load_settings()["e2e"]), (0, False), text)
 
 
 if __name__ == "__main__":

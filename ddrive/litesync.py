@@ -21,6 +21,7 @@ folder of this computer to copy to the drive, or to copy drive folders into. Tha
 it, and why it is off until it is turned on here.
 """
 
+import base64
 import errno
 import json
 import logging
@@ -31,7 +32,7 @@ import threading
 import time
 import types
 
-from . import sync
+from . import sync, vault
 from .config import default_data_dir
 from .lite import HostError
 
@@ -86,6 +87,8 @@ def _host(fn):
             if e.status in _ERRNO:
                 raise OSError(_ERRNO[e.status], str(e)) from None
             raise
+        except vault.VaultError as e:
+            raise OSError(errno.EIO, str(e)) from None
     wrapper.__name__ = fn.__name__
     return wrapper
 
@@ -233,11 +236,130 @@ class RemoteDrive:
         self._forget(old, new)
 
 
+class VaultDrive:
+    """An end-to-end encrypted account (vault.py) as a sync pass uses a drive. Files are sealed here
+    before they go and opened here after they come; the list of files is the one this computer
+    keeps (and the host has only sealed). The pass itself is the same as for any drive."""
+
+    local_test_dir = None
+    journal = None
+    parts = True
+
+    def __init__(self, v, data_dir):
+        self.v = v
+        self.cfg = types.SimpleNamespace(resolved_data_dir=data_dir, sync_jobs=[], min_free_disk_bytes=KEEP_FREE)
+        self.index = self.fs = self
+        self.change_listeners = []
+        self.scope = types.SimpleNamespace(unlocked=None)
+        self.refuse = None
+        self._hear = None
+        self._pending = set()            # objects the host has but hasn't stored on Discord yet
+        self._asked = 0.0
+
+    def listen(self, hear):
+        self._hear = hear
+
+    def _waiting(self, fresh=False):
+        """Which objects are not on Discord yet (asked of the host at most every few seconds)."""
+        if fresh or time.monotonic() - self._asked > LIST_SECONDS:
+            self._pending = self.v.pending()
+            self._asked = time.monotonic()
+        return self._pending
+
+    def _node(self, n):
+        return {"id": n["id"], "name": n.get("name") or "", "is_dir": bool(n["dir"]), "size": n.get("size") or 0,
+                "mtime": n.get("mtime") or 0, "state": "pending" if n.get("obj") in self._waiting() else "synced",
+                "version": (n.get("size"), n.get("mtime"), n.get("obj"))}
+
+    @_host
+    def resolve(self, path):
+        n = self.v.resolve(path)
+        return None if n is None else self._node(n)
+
+    @_host
+    def get(self, nid):
+        self.v.sync()
+        n = self.v.nodes.get(nid)
+        return None if n is None else self._node(n)
+
+    @_host
+    def children(self, nid, limit=-1):
+        self.v.sync()
+        items = [self._node(n) for n in self.v._children(nid)]
+        return items[:limit] if limit and limit > 0 else items
+
+    @_host
+    def scan_tree(self, root_path, excluded):
+        self.v.sync()
+        self._waiting(fresh=True)
+        files, dirs = {}, set()
+        root = self.v.resolve(root_path)
+        if root is None or not root["dir"]:
+            return files, dirs
+        todo = [(root["id"], "")]
+        while todo:
+            nid, rel_dir = todo.pop()
+            for n in self.v._children(nid):
+                rel = f"{rel_dir}/{n['name']}" if rel_dir else n["name"]
+                if excluded(rel):
+                    continue
+                if n["dir"]:
+                    dirs.add(rel)
+                    todo.append((n["id"], rel))
+                else:
+                    files[rel] = (n["size"], n["mtime"], self._node(n))
+        return files, dirs
+
+    def _hidden(self, path):
+        return False
+
+    @_host
+    def makedirs(self, path):
+        made = ""
+        for part in path.strip("/").split("/"):
+            made += "/" + part
+            n = self.v.resolve(made)
+            if n is None:
+                self.v.mkdir(made)
+            elif not n["dir"]:
+                raise OSError(errno.ENOTDIR, f"{made} on the drive is a file")
+
+    @_host
+    def put_file(self, path, src, mtime=None, stop=None):
+        size = os.fstat(src.fileno()).st_size
+        self.v.put(path, read=src.read, size=size, mtime=mtime, stop=stop, hear=self._hear)
+        n = self.v.resolve(path)
+        if n is not None and n.get("obj"):
+            self._pending.add(n["obj"])      # it is on the host now; whether it is on Discord too is asked later
+        return size
+
+    @_host
+    def read_file(self, nid, pos, size):
+        n = self.v.nodes.get(nid)
+        if n is None or n["dir"]:
+            raise OSError(errno.ENOENT, "it is gone from the drive")
+        return vault.open_range(base64.b64decode(n["key"]), lambda a, k: self.v._fetch(n["obj"], a, k), n["size"], pos, size)
+
+    @_host
+    def unlink(self, path):
+        if self.v.resolve(path) is None:
+            raise OSError(errno.ENOENT, "it is gone from the drive")
+        self.v.delete(path)
+
+    rmdir = unlink
+
+    @_host
+    def rename(self, old, new):
+        self.v.move(old, new)
+
+
 class Agent(sync.SyncManager):
     """The host's sync scheduler, run here: the pairs come from the host's Sync page instead of a
     config file, and how they are doing is told back to it."""
 
-    def __init__(self, client, device, name, data_dir=None, mount_point=""):
+    NEEDS = "2.2.0"                      # the first host that knows about this
+
+    def __init__(self, client, device, name, data_dir=None, mount_point="", drive=None):
         self.client, self.device, self.name, self.mount_point = client, device, name, mount_point
         self.online = False
         self.rev = 0                         # the number of the pairs' last change that we know of
@@ -246,7 +368,7 @@ class Agent(sync.SyncManager):
         self._greeted = False
         self._report = threading.Event()
         self._threads = []
-        drive = RemoteDrive(client, data_dir or os.path.join(default_data_dir(), "lite"))
+        drive = drive or RemoteDrive(client, data_dir or os.path.join(default_data_dir(), "lite"))
         drive.refuse = lambda job: self.refused.get(job["id"])
         super().__init__(drive)
         try:
@@ -303,12 +425,11 @@ class Agent(sync.SyncManager):
     def hello(self):
         """Say to the host that this computer is there. Raises HostError with a message for people."""
         try:
-            got = self.client.sync_call("hello", device=self.device, name=self.name, platform=sys.platform,
-                                        home=os.path.expanduser("~"), rev=self.rev, jobs=self.raw)
+            got = self._say_hello()
         except HostError as e:
             if e.status == 404:
-                raise HostError(404, f"The host at {self.client.address} runs a DDrive from before folder syncing for "
-                                     "lite computers (2.2.0). Update it there first.") from None
+                raise HostError(404, f"The host at {self.client.address} runs a DDrive from before this kind of folder "
+                                     f"syncing ({self.NEEDS}). Update it there first.") from None
             raise
         self._greeted = True
         try:
@@ -329,7 +450,25 @@ class Agent(sync.SyncManager):
                 result = sync.browse(c.get("path"), self.mount_point)
             except OSError as e:
                 result = {"error": str(e)}
-            self.client.sync_call("answer", device=self.device, req=c.get("req"), result=result)
+            self._reply(c.get("req"), result)
+
+    # What is said to the host, and how (an end-to-end account says the same things sealed: VaultAgent).
+    def _say_hello(self):
+        return self.client.sync_call("hello", device=self.device, name=self.name, platform=sys.platform,
+                                     home=os.path.expanduser("~"), rev=self.rev, jobs=self.raw)
+
+    def _ask(self, wait):
+        return self.client.sync_call("poll", device=self.device, rev=self.rev, wait=wait)
+
+    def _tell_status(self, status, running):
+        self.client.sync_call("report", device=self.device, running=running, status=status)
+
+    def _reply(self, req, result):
+        self.client.sync_call("answer", device=self.device, req=req, result=result)
+
+    def bye(self):
+        """Folder syncing was turned off here: off the host's Sync page."""
+        self.client.sync_call("bye", device=self.device)
 
     def _link(self):
         """Wait at the host for word: changed pairs, a pair to start or stop, a folder to list."""
@@ -344,7 +483,7 @@ class Agent(sync.SyncManager):
                     log.info("Folder syncing: connected to %s as %s", self.client.address, self.name)
                     self._report.set()
                     self._wake.set()
-                got = self.client.sync_call("poll", device=self.device, rev=self.rev, wait=POLL_WAIT)
+                got = self._ask(POLL_WAIT)
                 if self._stop.is_set():
                     break
                 self._take(got)
@@ -375,8 +514,7 @@ class Agent(sync.SyncManager):
             if not self.online or self._stop.is_set():
                 continue
             try:
-                self.client.sync_call("report", device=self.device, running=self.running,
-                                      status={j["id"]: j["status"] for j in self.snapshot()})
+                self._tell_status({j["id"]: j["status"] for j in self.snapshot()}, self.running)
             except HostError:
                 pass                             # the other thread notices and connects again
             except Exception as e:               # a pair's status changed while it was being read: next time
@@ -397,7 +535,7 @@ class Agent(sync.SyncManager):
         self._report.set()
         if self.online:                      # let go of the question we have open at the host
             try:
-                self.client.sync_call("poll", device=self.device, rev=self.rev, wait=0)
+                self._ask(0)
             except Exception:
                 pass
         for t in self._threads:
@@ -412,6 +550,72 @@ class Agent(sync.SyncManager):
     def _save(self, force=False):
         super()._save(force)
         self._report.set()
+
+
+AAD_SYNC = b"ddv1 sync"
+
+
+class VaultAgent(Agent):
+    """The same for an end-to-end encrypted account. The files go to the account sealed (VaultDrive),
+    and so does everything said about them: this computer's name, its folders, which folder goes
+    where, how a pair is doing, the folders the browser is shown when it picks one. The host passes
+    these messages between this computer and the account's page in a browser, and can read none."""
+
+    NEEDS = "2.6.0"
+
+    def __init__(self, client, key, device, name, data_dir=None, mount_point=""):
+        self.vault = vault.Vault(client, key)
+        data_dir = data_dir or os.path.join(default_data_dir(), "lite")
+        super().__init__(client, device, name, data_dir, mount_point, drive=VaultDrive(self.vault, data_dir))
+
+    def _seal(self, obj):
+        data = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+        return base64.b64encode(vault.seal(self.vault.meta, data, AAD_SYNC)).decode("ascii")
+
+    def _open(self, text):
+        return json.loads(vault.unseal(self.vault.meta, base64.b64decode(text), AAD_SYNC)) if text else None
+
+    def _jobs(self, sealed):
+        """The pairs the browser (or we) sealed. They are checked here: nobody else can."""
+        try:
+            raw = self._open(sealed) or []
+        except (vault.VaultError, ValueError):
+            return list(self.raw)            # not ours to open: keep what we have
+        out = []
+        for j in raw if isinstance(raw, list) else []:
+            try:
+                out.append(sync.normalize_job(j, None, out, elsewhere=True))
+            except (sync.SyncError, TypeError, AttributeError):
+                continue
+        return out
+
+    def _say_hello(self):
+        got = self.client._json("/api/vault/sync/hello", {
+            "device": self.device, "rev": self.rev, "jobs": self._seal(self.raw),
+            "info": self._seal({"name": self.name, "platform": sys.platform, "home": os.path.expanduser("~")})})
+        return {"rev": got["rev"], "jobs": self._jobs(got["jobs"]), "version": got.get("version")}
+
+    def _ask(self, wait):
+        got = self.client._json("/api/vault/sync/poll", {"device": self.device, "rev": self.rev, "wait": wait})
+        commands = []
+        for c in got.get("commands") or []:
+            try:
+                m = self._open(c.get("sealed"))
+            except (vault.VaultError, ValueError):
+                continue                     # not sealed with this account's key: not for us
+            if isinstance(m, dict):
+                commands.append(dict(m, req=c.get("req")))
+        return {"rev": got["rev"], "jobs": self._jobs(got["jobs"]), "commands": commands}
+
+    def _tell_status(self, status, running):
+        self.client._json("/api/vault/sync/report", {"device": self.device,
+                                                     "status": self._seal({"jobs": status, "running": running})})
+
+    def _reply(self, req, result):
+        self.client._json("/api/vault/sync/answer", {"device": self.device, "req": req, "sealed": self._seal(result)})
+
+    def bye(self):
+        self.client._json("/api/vault/sync/bye", {"device": self.device})
 
 
 # ---------------------------------------------------------------------- keeping it running
@@ -480,7 +684,7 @@ class Supervisor:
             agent.stop()
             if bye:                              # turned off: off the host's Sync page (said once more here, because
                 try:                             # the agent may just have said hello again)
-                    agent.client.sync_call("bye", device=agent.device)
+                    agent.bye()
                 except Exception:
                     pass
         if running_pid() == os.getpid():
@@ -499,8 +703,7 @@ class Supervisor:
             self._release(bye=not s.get("sync"))
         if want and self.agent is None and self._claim():
             try:
-                self.agent = Agent(lite.client_from(s), s["device"], lite.device_name(),
-                                   mount_point=s.get("mount_point") or "").start()
+                self.agent = lite.agent_from(s).start()
                 self._sig, self._told = sig, None
                 log.info("Folder syncing is on: its folders are chosen on the Sync page of %s", s["host"])
             except HostError as e:

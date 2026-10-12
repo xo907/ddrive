@@ -253,3 +253,156 @@ class LiteDevices:
         return {"path": str(got.get("path") or ""), "parent": got.get("parent"),
                 "dirs": [x for x in got.get("dirs") or [] if isinstance(x, dict)][:2000],
                 "roots": [x for x in got.get("roots") or [] if isinstance(x, dict)][:50]}
+
+
+class SealedDevices:
+    """The same for the devices of end-to-end encrypted accounts (vault.py), of which this computer
+    may know nothing: not a device's name, not its folders, not which folder goes where, not how a
+    pair is doing. All of that is sealed on the device or in the account's browser with a key this
+    computer doesn't have, and passed on as it is. What is left for it to do is what a post office
+    does: keep each device's last sealed word and the browser's, say whether the device is there,
+    and carry sealed messages between the two. Nothing is checked or filled in here (the browser
+    and the device do that) and nothing is written to disk."""
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._devs = {}              # (account, device id) -> record
+        self._closed = False
+
+    def close(self):
+        with self._cv:
+            self._closed = True
+            self._cv.notify_all()
+
+    def _dev(self, who, device):
+        d = self._devs.get((who, str(device or "")))
+        if d is None:
+            raise Gone()
+        return d
+
+    @staticmethod
+    def _online(d):
+        return d["polls"] > 0 or time.time() - d["seen"] < ONLINE
+
+    @staticmethod
+    def _sealed(value, limit=2 * 1024 * 1024):
+        value = value if isinstance(value, str) else ""
+        if len(value) > limit:
+            raise sync.SyncError("That is too big to pass on.")
+        return value
+
+    # ------------------------------------------------------------ what the device asks
+    def hello(self, who, device, rev, info, jobs):
+        """A device says it is there: who it is and which pairs it keeps, both sealed."""
+        device = str(device or "")
+        if not re.fullmatch(r"[0-9a-f]{8,32}", device):
+            raise sync.SyncError("Not a device id")
+        try:
+            rev = max(0, int(rev or 0))
+        except (TypeError, ValueError):
+            rev = 0
+        with self._cv:
+            now = time.time()
+            for key in [k for k, d in self._devs.items() if d["polls"] <= 0 and now - d["seen"] > FORGET]:
+                del self._devs[key]
+            d = self._devs.get((who, device))
+            if d is None:
+                if sum(1 for k in self._devs if k[0] == who) >= MAX_DEVICES:
+                    raise sync.SyncError("Too many devices sync folders with this account already.")
+                d = self._devs[(who, device)] = {"id": device, "jobs": self._sealed(jobs), "rev": rev, "status": "",
+                                                 "commands": [], "answers": {}, "asked": set(), "polls": 0, "turn": 0}
+            elif rev >= d["rev"]:            # nothing was changed in the browser since it last heard from us
+                d["jobs"], d["rev"] = self._sealed(jobs), rev
+            d.update(info=self._sealed(info, 4096), seen=now)
+            self._cv.notify_all()
+            return {"rev": d["rev"], "jobs": d["jobs"]}
+
+    def poll(self, who, device, rev, wait=POLL_WAIT):
+        end = time.monotonic() + max(0.0, min(float(wait), POLL_WAIT))
+        with self._cv:
+            d = self._dev(who, device)
+            d["polls"] += 1
+            d["seen"] = time.time()
+            d["turn"] = turn = d["turn"] + 1
+            self._cv.notify_all()
+            try:
+                while not self._closed and self._devs.get((who, d["id"])) is d and d["rev"] == rev and not d["commands"] \
+                        and d["turn"] == turn:
+                    left = end - time.monotonic()
+                    if left <= 0:
+                        break
+                    self._cv.wait(left)
+                if self._devs.get((who, d["id"])) is not d:
+                    raise Gone()
+                commands = []
+                if d["turn"] == turn:
+                    commands, d["commands"] = d["commands"], []
+                return {"rev": d["rev"], "jobs": d["jobs"], "commands": commands}
+            finally:
+                d["polls"] -= 1
+                d["seen"] = time.time()
+
+    def report(self, who, device, status):
+        with self._cv:
+            d = self._dev(who, device)
+            d["seen"] = time.time()
+            d["status"] = self._sealed(status)
+
+    def answer(self, who, device, req, result):
+        with self._cv:
+            d = self._dev(who, device)
+            if req in d["asked"]:
+                d["asked"].discard(req)
+                d["answers"][req] = self._sealed(result)
+                self._cv.notify_all()
+
+    def bye(self, who, device):
+        with self._cv:
+            if self._devs.pop((who, str(device or "")), None) is not None:
+                self._cv.notify_all()
+
+    # ------------------------------------------------------------ what the account's browser asks
+    def listing(self, who):
+        with self._cv:
+            return [{"id": d["id"], "online": self._online(d), "seen": d["seen"], "rev": d["rev"], "info": d["info"],
+                     "jobs": d["jobs"], "status": d["status"] if self._online(d) else ""}
+                    for (w, _), d in sorted(self._devs.items()) if w == who]
+
+    def set_jobs(self, who, device, rev, jobs):
+        """The browser changed a device's pairs. `rev` is the number it started from: if the pairs
+        changed meanwhile it has to look again first (False)."""
+        with self._cv:
+            d = self._dev(who, device)
+            if int(rev) != d["rev"]:
+                return None
+            d["jobs"], d["rev"] = self._sealed(jobs), d["rev"] + 1
+            self._cv.notify_all()
+            return d["rev"]
+
+    def tell(self, who, device, sealed):
+        """Pass a sealed message on to a device (start this pair, stop that one)."""
+        with self._cv:
+            d = self._dev(who, device)
+            if not self._online(d):
+                raise Offline("That device isn't connected right now.")
+            d["commands"].append({"sealed": self._sealed(sealed, 65536)})
+            self._cv.notify_all()
+
+    def ask(self, who, device, sealed, wait=ANSWER_WAIT):
+        """Pass a sealed question on to a device and wait for its sealed answer (the folders in a folder of it)."""
+        end = time.monotonic() + wait
+        with self._cv:
+            d = self._dev(who, device)
+            if not self._online(d):
+                raise Offline("That device isn't connected right now.")
+            req = secrets.token_hex(4)
+            d["asked"].add(req)
+            d["commands"].append({"req": req, "sealed": self._sealed(sealed, 65536)})
+            self._cv.notify_all()
+            while req not in d["answers"] and not self._closed:
+                left = end - time.monotonic()
+                if left <= 0:
+                    d["asked"].discard(req)
+                    raise Offline("That device didn't answer. Try again.")
+                self._cv.wait(left)
+            return d["answers"].pop(req, "")

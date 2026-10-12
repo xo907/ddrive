@@ -637,7 +637,31 @@ def client_from(s):
                            f"'{me()} connect {s['host']}' again.") from None
     if not secret.get("phrase"):             # saved by a version that signed in with a name and password
         raise HostError(0, f"Sign-in is by 24 words now. Run '{me()} connect {s['host']}' again.")
+    if s.get("e2e"):
+        # An end-to-end encrypted account: the words stay on this computer. The host gets the sign-in
+        # key made from them, and after that only what was sealed here (vault.py).
+        from . import vault, words
+        return HostClient(s["host"], cookie=secret.get("cookie", ""), auth=vault.auth_key(words.phrase_to_key(secret["phrase"])).hex())
     return HostClient(s["host"], secret["phrase"], secret.get("cookie", ""))
+
+
+def vault_from(s):
+    """The end-to-end encrypted account this computer is connected to, opened (its list of files read)."""
+    from . import vault, words
+    client = client_from(s)
+    secret = json.loads(secretbox.unprotect(s.get("protected") or ""))
+    return vault.Vault(client, words.phrase_to_key(secret["phrase"])).sync()
+
+
+def agent_from(s):
+    """What does the folder syncing for the account this computer is connected to (not started)."""
+    from . import litesync, words
+    client = client_from(s)
+    if not s.get("e2e"):
+        return litesync.Agent(client, s["device"], device_name(), mount_point=s.get("mount_point") or "")
+    secret = json.loads(secretbox.unprotect(s.get("protected") or ""))
+    return litesync.VaultAgent(client, words.phrase_to_key(secret["phrase"]), s["device"], device_name(),
+                               mount_point=s.get("mount_point") or "")
 
 
 def _pid_file():
@@ -686,20 +710,42 @@ def cmd_connect(args):
     address = args.address or input("Address of the host's dashboard (e.g. http://192.168.1.20:8765): ").strip()
     phrase = args.phrase or getpass.getpass("Your 24 words (the drive's recovery phrase, or your account's; input is hidden): ")
     phrase = " ".join(phrase.split())
-    client = HostClient(address, phrase)
-    client.login()
+    from . import vault, words
+    try:
+        key = words.phrase_to_key(phrase)
+    except ValueError as e:
+        print(f"[ERROR] That phrase isn't right: {e}.")
+        return 1
+    # First as an end-to-end encrypted account, which sends no words: only a sign-in key made from them.
+    e2e, client = True, HostClient(address, auth=vault.auth_key(key).hex())
+    try:
+        client.login()
+    except HostError as e:
+        if e.status != 401:
+            raise
+        e2e, client = False, HostClient(address, phrase)     # the owner, or an account from before 2.5.0: the words are sent
+        client.login()
     st = client.status()
     user = "the owner" if st.get("role", "owner") == "owner" else f"account {st.get('account')}"
     s = load_settings()
-    s.update(host=client.address, user=user,
+    s.update(host=client.address, user=user, e2e=e2e,
              protected=secretbox.protect(json.dumps({"phrase": phrase, "cookie": client.cookie}).encode("utf-8")))
     s.setdefault("mount_point", normalize_mount_point(""))
     save_settings(s)
-    print(f"[SUCCESS] Connected to {client.address} as {user}: DDrive {st.get('version')}, "
-          f"{st['stats']['files']} files ({format_size(st['stats']['bytes'])}).")
+    if e2e:
+        v = vault.Vault(client, key).sync()
+        files = [n for n in v.nodes.values() if not n["dir"]]
+        print(f"[SUCCESS] Connected to {client.address} as {user}, end-to-end encrypted: DDrive {st.get('version')}, "
+              f"{len(files)} files ({format_size(sum(n['size'] for n in files))}).")
+        print("          Your words stay on this computer; the host gets a sign-in key made from them and sealed files.")
+        print(f"          Next: '{me()} sync on' lets folders of this computer be synced (chosen on your account's page there),")
+        print(f"          and '{me()} ls', 'get' and 'put' list, download and upload. A drive letter comes in a later version.")
+    else:
+        print(f"[SUCCESS] Connected to {client.address} as {user}: DDrive {st.get('version')}, "
+              f"{st['stats']['files']} files ({format_size(st['stats']['bytes'])}).")
+        print(f"          Next: '{me()} mount' shows it as {s['mount_point']} on this computer.")
     if not client.secure and client.hostname not in ("localhost", "127.0.0.1", "::1"):
         print("          This address is plain http: fine on your own network; over the internet use the host's https address.")
-    print(f"          Next: '{me()} mount' shows it as {s['mount_point']} on this computer.")
     return 0
 
 
@@ -710,6 +756,12 @@ def cmd_mount(args):
     if args.mount and mp != s.get("mount_point"):
         s["mount_point"] = mp
         save_settings(s)
+    if s.get("e2e"):
+        print("[INFO] An end-to-end encrypted account can't be shown as a drive letter yet. Folder syncing "
+              f"('{me()} sync on'), '{me()} ls', 'get' and 'put' work.")
+        if not s.get("sync"):
+            return 1
+        return cmd_sync(argparse.Namespace(state="run", background=args.background, verbose=getattr(args, "verbose", False)))
     if FUSE_ERROR and s.get("sync"):         # nothing to show the drive with, but folders sync without that
         print(f"[INFO] The drive can't be shown here ({FUSE_ERROR.splitlines()[0]}). Folder syncing runs without it.")
         return cmd_sync(argparse.Namespace(state="run", background=args.background, verbose=getattr(args, "verbose", False)))
@@ -829,7 +881,7 @@ def cmd_sync(args):
             s["sync"] = False
             save_settings(s)
             try:
-                client_from(s).sync_call("bye", device=s.get("device"))
+                agent_from(s).bye()
             except HostError:
                 pass                         # an unreachable host forgets by itself
         pid = litesync.running_pid()
@@ -844,14 +896,14 @@ def cmd_sync(args):
     client = client_from(s)                  # on and run: only when there is a host
     if action == "on":
         s.setdefault("device", secrets.token_hex(8))
-        agent = litesync.Agent(client, s["device"], device_name(), mount_point=s.get("mount_point") or "")
+        agent = agent_from(s)
         agent.hello()                        # fails here, with a clear message, when the host can't do this
         s["sync"] = True
         save_settings(s)
         _sync_ensure()
         ok = _sync_running()
         print(f"[OK] Folder syncing is now ON{'' if ok else ', but it did not start (see ' + os.path.join(default_data_dir(), 'ddrive.log') + ')'}.")
-        print(f"     Open {client.address}, go to Sync, and add folders of {device_name()} there: everything about them\n"
+        print(f"     Open {client.address}, go to Sync{' on your account page' if s.get('e2e') else ''}, and add folders of {device_name()} there: everything about them\n"
               "     is done on that page. It lets whoever is signed in there with these 24 words choose any folder of\n"
               f"     this computer; '{me()} sync off' ends that.")
         if not autostart_enabled():
@@ -885,11 +937,18 @@ def cmd_status(args):
         return 0
     mp = normalize_mount_point(s.get("mount_point") or "")
     print(f"Host:        {s['host']} (signed in as {s.get('user')})")
-    print(f"On this PC:  {mp} ({'shown' if _is_mounted(mp) else 'not shown; lite mount'})")
+    if s.get("e2e"):
+        v = vault_from(s)
+        files = [n for n in v.nodes.values() if not n["dir"]]
+        print(f"Account:     end-to-end encrypted, {len(files)} files, {format_size(sum(n['size'] for n in files))}")
+    else:
+        print(f"On this PC:  {mp} ({'shown' if _is_mounted(mp) else 'not shown; lite mount'})")
     if s.get("sync"):
         from .litesync import running_pid
         print(f"Folders:     syncing is on{'' if running_pid() else ', but not running (lite sync on starts it)'}; "
               "they are chosen on the host's Sync page")
+    if s.get("e2e"):
+        return 0
     st = client_from(s).status()
     busy = len(st.get("uploads") or []) + (st.get("queued") or 0)
     print(f"Drive:       DDrive {st.get('version')}, {st['stats']['files']} files, {format_size(st['stats']['bytes'])}"
@@ -897,7 +956,79 @@ def cmd_status(args):
     return 0
 
 
+def _e2e_ls(s, args):
+    for n in vault_from(s).list("/" + (args.path or "").strip("/")):
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(n["mtime"])) if n.get("mtime") and not n["dir"] else " " * 16
+        print(f"{'<folder>' if n['dir'] else format_size(n['size']):>12}  {stamp}  {n['name']}")
+    return 0
+
+
+def _e2e_get(s, args):
+    """Download from an end-to-end encrypted account: fetched sealed, opened here."""
+    import base64
+    from . import vault
+    v = vault_from(s)
+    remote = "/" + args.remote.strip("/")
+    node = v.resolve(remote)
+    if node is None or not node["id"]:
+        raise HostError(404, f"Not found in your account: {remote}")
+
+    def fetch(n, target):
+        if n["dir"]:
+            os.makedirs(target, exist_ok=True)
+            for child in v._children(n["id"]):
+                fetch(child, os.path.join(target, child["name"]))
+            return
+        key, show = base64.b64decode(n["key"]), _progress(n["name"], n["size"])
+        with open(target + ".part", "wb") as out:
+            pos = 0
+            while True:
+                data = vault.open_range(key, lambda a, k: v._fetch(n["obj"], a, k), n["size"], pos, vault.PART)
+                out.write(data)
+                pos += len(data)
+                show(pos)
+                if pos >= n["size"]:
+                    break
+        os.replace(target + ".part", target)
+        if n.get("mtime"):
+            os.utime(target, (time.time(), n["mtime"]))
+        print(f"\r  {remote if n is node else n['name']} -> {target} ({format_size(n['size'])})")
+    local = args.local or node["name"]
+    fetch(node, os.path.join(local, node["name"]) if os.path.isdir(local) and not node["dir"] else local)
+    return 0
+
+
+def _e2e_put(s, args):
+    """Upload to an end-to-end encrypted account: sealed here, then sent."""
+    from . import vault
+    v = vault_from(s)
+    local = os.path.abspath(args.local)
+    if not os.path.exists(local):
+        print(f"[ERROR] Not found: {local}")
+        return 1
+    base = "/" + (args.remote or "").strip("/")
+
+    def send(src, dst):
+        if os.path.isdir(src):
+            if v.resolve(dst) is None:
+                v.mkdir(dst)
+            for name in sorted(os.listdir(src)):
+                send(os.path.join(src, name), posixpath.join(dst, name))
+            return
+        size = os.path.getsize(src)
+        with open(src, "rb") as f:
+            v.put(dst, read=f.read, size=size, mtime=os.path.getmtime(src))
+        print(f"  {src} -> {dst} ({format_size(size)})")
+    try:
+        send(local, posixpath.join(base, os.path.basename(local)))
+    except vault.VaultError as e:
+        raise HostError(400, str(e)) from None
+    return 0
+
+
 def cmd_ls(args):
+    if load_settings().get("e2e"):
+        return _e2e_ls(load_settings(), args)
     path = "/" + (args.path or "").strip("/")
     for e in client_from(load_settings()).list(path):
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(e["mtime"])) if e.get("mtime") else " " * 16
@@ -916,6 +1047,8 @@ def _progress(name, total):
 
 
 def cmd_get(args):
+    if load_settings().get("e2e"):
+        return _e2e_get(load_settings(), args)
     client = client_from(load_settings())
     remote = "/" + args.remote.strip("/")
     folder, name = posixpath.split(remote)
@@ -940,6 +1073,8 @@ def cmd_get(args):
 
 
 def cmd_put(args):
+    if load_settings().get("e2e"):
+        return _e2e_put(load_settings(), args)
     client = client_from(load_settings())
     local = os.path.abspath(args.local)
     if not os.path.exists(local):
@@ -1143,3 +1278,8 @@ def main(argv, verbose=False):
     except KeyboardInterrupt:
         print()
         return 130
+    except Exception as e:
+        if type(e).__name__ != "VaultError":         # (something about an end-to-end encrypted account, said in words)
+            raise
+        print(f"[ERROR] {e}")
+        return 1
