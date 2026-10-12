@@ -542,21 +542,24 @@ class Accounts:
             raise AccountError("That took too long. Start again to get a new phrase.")
         return self._make(key, invite, addr)
 
-    def create_e2e(self, auth: bytes, invite="", addr=None):
+    def create_e2e(self, auth: bytes, invite="", addr=None, owner=False):
         """Make an end-to-end encrypted account (vault.py). Its 24 words were made on the device and
         stay there; `auth` is what the device made from them to sign in with. To this computer that
         is the account's key: what it stores for the account is sealed once more with it, but
         everything it is handed was sealed on the device first, with keys it never gets."""
         if len(auth) != 32:
             raise AccountError("That isn't a sign-in key.")
-        return self._make(auth, invite, addr, e2e=True)
+        return self._make(auth, invite, addr, e2e=True, owner=owner)
 
-    def _make(self, key, invite, addr, e2e=False):
+    def _make(self, key, invite, addr, e2e=False, owner=False):
+        """owner: the owner makes it from their dashboard (to move their own files in): whether and how
+        many others may sign up doesn't come into it."""
         aid = account_id(key)
         with self._lock:
             if aid in self._recs:
                 return self._recs[aid]          # confirmed twice (a double click, a reload)
-            self._may_sign_up(invite, addr)
+            if not owner:
+                self._may_sign_up(invite, addr)
             code = str(invite or "").strip()
             rec = {"id": aid, "check": _check(key), "created": time.time(), "seen": time.time(),
                    "invite": code if code in self._invites else ""}

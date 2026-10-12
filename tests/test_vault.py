@@ -440,6 +440,43 @@ class VaultTest(helpers.DriveTest):
         c._json("/api/vault/share/revoke", {"id": s["id"]})
         self.assertEqual(visitor("POST", f"/o?id={vault.new_id()}&size=10&offset=0", b"x" * 10)[0], 404)
 
+    def test_the_owners_page_signs_in_to_an_account_too(self):
+        """Moving the drive into an end-to-end account from the dashboard (moving.js): the owner's page gets
+        a session of the account next to its own, good for the account's sealed things and nothing else."""
+        owner = lite.HostClient(self.address, words.key_to_phrase(bytes.fromhex(self.host.cfg.encryption_key)))
+        self.host.cfg.signup_mode = "closed"                           # the owner makes one whatever others may do
+        key = os.urandom(32)
+        auth = vault.auth_key(key).hex()
+        with self.assertRaises(lite.HostError) as e:
+            owner._json("/api/accounts/e2e", {"auth": auth})
+        self.assertEqual(e.exception.status, 404)
+        got = owner._json("/api/accounts/e2e", {"auth": auth, "create": True})
+        self.assertTrue(got["made"])
+        again = owner._json("/api/accounts/e2e", {"auth": auth})
+        self.assertEqual((again["id"], again["made"]), (got["id"], False))
+        with self.assertRaises(lite.HostError):
+            owner._json("/api/accounts/e2e", {"auth": "zz"})
+        with self.assertRaises(lite.HostError) as e:                   # an account can't hand out sessions
+            self.device.client._json("/api/accounts/e2e", {"auth": auth, "create": True})
+        self.assertEqual(e.exception.status, 403)
+        owner._json("/api/mkdir", {"path": "/Mine"})
+
+        def ask(path, session, cookie=owner.cookie):
+            conn = http.client.HTTPConnection("127.0.0.1", self.web.port, timeout=10)
+            conn.request("GET", path, headers={"Cookie": f"dd_session={cookie}", **({"X-DD-Account": session} if session else {})})
+            r = conn.getresponse()
+            data = r.read()
+            conn.close()
+            return r.status, data
+        self.assertEqual(ask("/api/vault", got["session"])[0], 200)                    # the account's sealed things: as the account
+        self.assertEqual(ask("/api/vault", "")[0], 403)                                # (the owner has none)
+        self.assertEqual(ask("/api/vault", "made.up")[0], 401)
+        self.assertEqual([i["name"] for i in json.loads(ask("/api/list?path=/", got["session"])[1])["items"]], ["Mine"])   # anything else: still the owner
+        # the account works like any other from there on
+        v = self.new_device(key)
+        v.put("/moved.txt", MARK)
+        self.assertEqual(self.new_device(key).read("/moved.txt"), MARK)
+
     def test_the_list_is_sealed_whole_now_and_then(self):
         v = self.device
         for i in range(5):

@@ -3,6 +3,28 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.14.0 (2026-10-11)
+
+- **"Move everything…" in Settings, under Accounts**: one button that copies your whole drive into an
+  end-to-end encrypted account, from the dashboard.
+- It is done **in the browser**, because the server may not do it: sealing needs the account's key,
+  and the point of such an account is that the server never has it. The page makes the account's 24
+  words (shown once, to write down) or takes the words of an account you have, and then goes through
+  the drive file by file: fetched as you see it, sealed in the browser, sent back sealed.
+- Folders, files with their dates and stars come along, and Notes, Contacts, Bookmarks and saved
+  Messages land where the account's pages look for them. A file that is in the account already with
+  the same size and date is skipped; one that changed becomes a new version there.
+- **Keep the tab open** while it runs; every file passes through your connection twice. It can be
+  stopped and carried on, and pressing the button again later (with the account's words) copies only
+  what is new. Nothing on the drive is changed or deleted; deleting the old drive is yours to do once
+  you have checked the account.
+- Not carried over: earlier versions, snapshots, share links, and folders that are hidden or
+  password-locked on the device you press it on (unlock them first).
+- For this the owner's page signs in to the account next to its own sign-in: a session of the
+  account that it sends along with the account's sealed requests only. The owner can make such an
+  account whatever the sign-up setting for others is.
+- `lite import` (2.13.0) does the same from a command line, without a browser tab.
+
 ## 2.13.0 (2026-10-11)
 
 - **A drive letter for end-to-end encrypted accounts.** `lite mount` now shows such an account as a

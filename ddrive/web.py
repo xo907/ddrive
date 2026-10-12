@@ -441,6 +441,12 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         return host in (name, name + ".local", name + ".lan") or host in extra
 
     def _cookie(self):
+        # A page may be signed in twice: as who the cookie says, and, for what it does with an end-to-end
+        # encrypted account's sealed things only, as that account (the owner's page moving the drive's files
+        # into one, moving.js). The second sign-in is a session like any other, sent in a header.
+        also = self.headers.get("X-DD-Account")
+        if also and self.path.startswith("/api/vault"):
+            return also
         for part in (self.headers.get("Cookie") or "").split(";"):
             k, _, v = part.strip().partition("=")
             if k == COOKIE:
@@ -701,7 +707,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                     return self._send(200, f.read(), "text/plain; charset=utf-8", {"Cache-Control": "public, max-age=86400"})
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
                                              "/manifest.webmanifest", "/share-upload.js", "/signin.js",
-                                             "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/vshare.js", "/vshare.css"):
+                                             "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/vshare.js", "/vshare.css",
+                                             "/moving.js"):
                 if route in ("/", "/index.html") and self._who() is None:
                     return self._signin()
                 # An end-to-end encrypted account gets the same dashboard as everybody: e2e-api.js, which it
@@ -1013,6 +1020,29 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._leave()
         accounts.delete(d.id)
         self._send(200, b'{"ok":true}', "application/json; charset=utf-8", {"Set-Cookie": self._cookie_for("", 0)})
+
+    def _post_api_accounts_e2e(self):
+        """The owner's page signs in to an end-to-end encrypted account next to the owner (and makes the
+        account first, when asked to), to move the drive's files into it: sealed in that page, with a key
+        that never comes here. What comes here is the account's sign-in key, as at any sign-in."""
+        body = self._body_json()
+        try:
+            auth = bytes.fromhex(str(body.get("auth") or ""))
+        except ValueError:
+            auth = b""
+        if len(auth) != 32:
+            raise ApiError(400, "That isn't a sign-in key.")
+        accounts = self.app.accounts
+        rec = accounts.find(auth)
+        made = False
+        if rec is None:
+            if not body.get("create"):
+                raise ApiError(404, "There is no end-to-end encrypted account with those words here.")
+            rec = accounts.create_e2e(auth, owner=True)
+            made = True
+        if not rec.get("e2e"):
+            raise ApiError(400, "Those words belong to an account of the earlier kind, which isn't end-to-end encrypted.")
+        self._json({"ok": True, "id": rec["id"], "made": made, "session": self.app.new_session(rec["id"])})
 
     def _get_api_accounts(self):
         """Everything about accounts, for the owner's Settings."""

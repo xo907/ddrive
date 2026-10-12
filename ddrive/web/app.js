@@ -3123,6 +3123,9 @@ async function accountsSection(into) {
     h("h2", {}, "Accounts"),
     h("p", { class: "muted", style: "margin:0 0 12px" }, "Let other people use this dashboard. An account is 24 words made here: no name, no password. Each one has its own storage, encrypted with its own words, and sees files, notes, bookmarks, contacts, messages and share links. Never your files, and nothing that manages the drive."),
     h("div", { class: "settings" },
+      row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
+          + "copied and sealed in this browser, so the server never gets the key. Nothing here is changed.",
+          h("button", { class: "btn small", onclick: () => window.moveToAccount() }, "Move everything…")),
       row("Who can make an account", mode[2],
           h("select", { "aria-label": "Who can make an account", onchange: (e) => save({ signup_mode: e.target.value }, "Saved") },
             SIGNUP_MODES.map(([k, label]) => h("option", { value: k, selected: k === d.mode }, label)))),

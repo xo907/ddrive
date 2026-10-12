@@ -1248,3 +1248,13 @@ main::-webkit-scrollbar-thumb { background: var(--line); }
 .heal-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line);
             border-radius: var(--radius); background: var(--panel); font-size: 13px; }
 .heal-fix span { flex: 1; min-width: 200px; }
+
+/* ------------------------------------------------------------------ moving the drive into an end-to-end account (moving.js) */
+.move .err { color: var(--accent); margin: 10px 0 0; }
+.move .t { font-weight: 600; }
+.move-list { columns: 3; margin: 0 0 12px; padding: 12px 12px 12px 36px; border: 1px solid var(--line); border-radius: 10px; font-variant-numeric: tabular-nums; }
+.move-list li { padding: 2px 0; break-inside: avoid; }
+.move-words { width: 100%; font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: inherit; resize: vertical; }
+.move-check { display: flex; gap: 8px; align-items: center; margin: 14px 0 0; }
+.move-check input { appearance: auto; width: 16px; height: 16px; min-width: 0; padding: 0; margin: 0; flex: none; accent-color: var(--accent); }
+.move-log { max-height: 160px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0 0 14px; }

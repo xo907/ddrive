@@ -127,9 +127,11 @@
 
   // ------------------------------------------------------------ talking to the server
   class Gone extends Error {}            // signed out (the session ran out)
+  let also = "";                         // a session of the account, for a page that is signed in as somebody else too (moving.js)
   async function call(path, opts = {}) {
     const headers = { ...(opts.headers || {}) };
     if (opts.method === "POST") headers["X-DD"] = "1";
+    if (also) headers["X-DD-Account"] = also;
     if (opts.json !== undefined) headers["Content-Type"] = "application/json";
     const r = await fetch(path, { method: opts.method || "GET", credentials: "same-origin", headers, signal: opts.signal,
                                   body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body });
@@ -346,6 +348,8 @@
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
                  newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64,
+                 /** Do what follows as this account (a session the server handed out), next to who the page is signed in as. */
+                 as: (session) => { also = String(session || ""); },
                  /** Seal a file and send it as an object to an address that takes them (a file request's). */
                  store: (where, id, key, blob, heard, signal) => Vault.prototype._store.call(null, id, key, blob, heard, signal, where) };
 })();

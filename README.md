@@ -644,6 +644,9 @@ Settings) decides who may make one:
 - **On their computers**: `lite mount` shows the account as a drive letter or folder (opened and
   sealed on that computer), file requests let others send them files sealed in the sender's browser,
   and `lite import <folder>` copies a whole folder in (the drive letter of a DDrive, to move in).
+- **Moving your own drive in**: Settings, Accounts, "Move everything…" copies the whole drive into
+  such an account from the dashboard. The browser does it (fetch, seal, send back), so the account's
+  key never reaches your computer's DDrive; keep the tab open while it runs.
 - **What it doesn't have**: Messages on the phone app (the Discord logger runs on a computer). And
   never: Settings, Log, Health and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
