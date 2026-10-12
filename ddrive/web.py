@@ -908,14 +908,20 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             return self._signin(f"Too many failed tries. Try again in {int(wait) + 1} seconds.", 429)
         if form.get("auth"):
             # An end-to-end encrypted account: its words stayed on the device, this is what it made from them.
+            # An admin account's words sign in the same way, as the owner.
             try:
-                rec = app.accounts.find(bytes.fromhex(form["auth"]))
+                auth = bytes.fromhex(form["auth"])
             except ValueError:
-                rec = None
-            ok = rec is not None and bool(rec.get("e2e"))
+                auth = b""
+            rec = app.accounts.find(auth)
+            admin = app.accounts.find_admin(auth) if rec is None else None
+            ok = admin is not None or (rec is not None and bool(rec.get("e2e")))
             app.note_login(addr, ok)
             if not ok:
                 return self._signin("Nobody here has an end-to-end encrypted account with those 24 words.", 401)
+            if admin is not None:
+                log.info("Web dashboard: admin account %s signed in from %s", admin["id"], addr)
+                return self._redirect("/", self._cookie_for(app.new_session("", admin=admin["id"])))
             return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
         try:
             key = words.phrase_to_key(form.get("phrase") or "")

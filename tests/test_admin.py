@@ -77,6 +77,36 @@ class AdminTest(helpers.DriveTest):
         self.assertEqual(self.get("/api/status", admin)[0], 401)
         self.assertIsNone(self.sign_in(phrase))
 
+    def sign_in_key(self, phrase):
+        """Sign in as the page does on https: with the sign-in key made from the words, not the words."""
+        from ddrive import vault
+        auth = vault.auth_key(words.phrase_to_key(phrase)).hex()
+        status, headers, _ = self.req("POST", "/login", urllib.parse.urlencode({"auth": auth}))
+        return headers["Set-Cookie"].split(";")[0] if status == 303 else None
+
+    def test_an_admin_signs_in_without_sending_its_words(self):
+        aid, phrase = self.make_admin()
+        admin = self.sign_in_key(phrase)
+        self.assertIsNotNone(admin)
+        status, st = self.get("/api/status", admin)
+        self.assertEqual((status, st["role"], st["admin"]), (200, "owner", aid))
+        self.assertNotIn(aid, self.acc._secrets)            # still no key of it here
+        # the sign-in key of other words, or of the owner's, signs nobody in
+        self.assertIsNone(self.sign_in_key(words.key_to_phrase(os.urandom(32))))
+        self.assertIsNone(self.sign_in_key(words.key_to_phrase(bytes.fromhex(self.d.cfg.encryption_key))))
+        # switched off: not this way either
+        self.assertEqual(self.post("/api/accounts/disable", {"id": aid, "off": True}, self.owner)[0], 200)
+        self.assertIsNone(self.sign_in_key(phrase))
+        self.assertEqual(self.get("/api/status", admin)[0], 401)
+
+    def test_an_admin_from_before_signs_in_with_its_words_once(self):
+        aid, phrase = self.make_admin()
+        with self.acc._lock:                                # as 2.16.0 to 2.17.1 made it
+            del self.acc._recs[aid]["auth"]
+        self.assertIsNone(self.sign_in_key(phrase))
+        self.assertIsNotNone(self.sign_in(phrase))          # the earlier way, which sends the words
+        self.assertIsNotNone(self.sign_in_key(phrase))
+
     def test_admins_dont_count_as_accounts(self):
         self.d.cfg.signup_mode = "public"
         self.d.cfg.accounts_max = 1

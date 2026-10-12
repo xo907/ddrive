@@ -3227,7 +3227,7 @@ function adminDialog(redraw) {
     go_.remove();
     note.disabled = true;
     result.replaceChildren(
-      h("p", { class: "muted", style: "margin:14px 0 8px" }, ["Admin account ", h("code", {}, r.id), " was made. These 24 words sign it in. They are shown only now: give them to that person, and to nobody else. On the sign-in page they are entered like any 24 words, then \"Send the words and sign in\"."]),
+      h("p", { class: "muted", style: "margin:14px 0 8px" }, ["Admin account ", h("code", {}, r.id), " was made. These 24 words sign it in. They are shown only now: give them to that person, and to nobody else."]),
       h("ol", { class: "phrase" }, r.phrase.split(" ").map((w) => h("li", {}, w))),
       h("div", { class: "modal-actions" }, h("button", { class: "btn ghost", type: "button", onclick: async () => {
         try { await navigator.clipboard.writeText(r.phrase); toast("Copied. Clear your clipboard once it is passed on."); } catch { toast("Could not copy"); }

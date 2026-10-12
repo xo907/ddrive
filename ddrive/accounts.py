@@ -37,7 +37,9 @@ An admin account (create_admin) is a co-owner: 24 words of its own that sign in 
 dashboard with everything the owner can do, except change how the owner signs in (passkeys, the
 recovery phrase, the WebDAV password). It has no storage of its own, so the computer keeps no key of
 it, only the check that recognises its words. Switching it off or deleting it ends its sessions at
-once: that is what makes it better than handing out the recovery phrase.
+once: that is what makes it better than handing out the recovery phrase. A browser signs it in like an
+end-to-end encrypted account, with the sign-in key it makes from the words (vault.auth_key) and not
+the words: "auth" in its record is the check that recognises that key (find_admin).
 """
 
 import gzip
@@ -59,7 +61,7 @@ from .crypto import KeyRing
 from .journal import Journal, OP_PREFIX, _hostname
 from .logbuf import hush_accounts, quiet
 from .shares import Shares
-from . import words
+from . import vault, words
 
 log = logging.getLogger("ddrive.accounts")
 
@@ -565,8 +567,8 @@ class Accounts:
         with self._lock:
             if self._broken:
                 raise AccountError("the list of accounts on this computer is damaged")
-            rec = {"id": aid, "check": _check(key), "created": time.time(), "seen": None, "invite": "",
-                   "admin": True, "note": str(note or "")[:80]}
+            rec = {"id": aid, "check": _check(key), "auth": _check(vault.auth_key(key)), "created": time.time(),
+                   "seen": None, "invite": "", "admin": True, "note": str(note or "")[:80]}
             self._recs[aid] = rec
             self._backup_wanted = self._backup_soon = True
             self._save()
@@ -650,9 +652,24 @@ class Accounts:
             if not rec.get("admin") and (self._secrets.get(aid) or {}).get("key") != key.hex():  # the keys could not be read here
                 self._secrets[aid] = {"key": key.hex(), "token": (self._secrets.get(aid) or {}).get("token", "")}
                 self._save()
+            if rec.get("admin") and not rec.get("auth"):    # made before admins signed in with a sign-in key
+                rec["auth"] = _check(vault.auth_key(key))
+                self._backup_wanted = True
+                self._save()
             rec["seen"] = time.time()
             self._dirty = True
             return rec
+
+    def find_admin(self, auth: bytes):
+        """The admin account a sign-in key (made in a browser from its 24 words) belongs to, or None."""
+        check = _check(auth)
+        with self._lock:
+            for rec in self._recs.values():
+                if rec.get("admin") and hmac.compare_digest(rec.get("auth") or "", check) and not rec.get("disabled"):
+                    rec["seen"] = time.time()
+                    self._dirty = True
+                    return rec
+        return None
 
     def active(self, aid):
         """The record of an account (with a drive of its own) that may be used right now, or None.

@@ -3,6 +3,16 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.17.2 (2026-10-12)
+
+- **An admin account's 24 words sign in at once.** Until now the sign-in page answered "No end-to-end
+  encrypted account here has these words" and wanted a second button pressed, which sent the words to
+  the server. Now the browser signs an admin in the way it signs in an end-to-end encrypted account:
+  with a sign-in key made from the words, so the words stay in the browser. The server keeps a check
+  that recognises that key, next to the one that recognises the words.
+- An admin account made before this version is asked for the second button once more ("Send the words
+  and sign in"); after that it signs in at once too. On a plain http address nothing changes.
+
 ## 2.17.1 (2026-10-12)
 
 - **Signing in with an admin account's words no longer looks like a failure.** The sign-in page tries
