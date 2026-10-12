@@ -103,19 +103,44 @@
   }
   /** A picture, painted in pieces at the size it is shown; the picture itself is let go of. */
   async function painted(parts, type, view) {
-    const bmp = await createImageBitmap(new Blob(parts, { type }));
+    // A moving picture (GIF, animated WebP) is opened frame by frame where the browser can do that; elsewhere its first frame is shown.
+    const blob = new Blob(parts, { type });
+    let decoder = null, frames = 1, first, fw, fh;
+    if (window.ImageDecoder && /gif|webp|avif/.test(type)) {
+      try {
+        decoder = new ImageDecoder({ data: await blob.arrayBuffer(), type });
+        await decoder.tracks.ready;
+        frames = decoder.tracks.selectedTrack.frameCount;
+        if (frames > 1) { first = (await decoder.decode({ frameIndex: 0 })).image; fw = first.displayWidth; fh = first.displayHeight; } else decoder = null;
+      } catch (e) { decoder = null; }
+    }
+    if (!decoder) { first = await createImageBitmap(blob); fw = first.width; fh = first.height; }
     const N = 4, dpr = Math.min(2, window.devicePixelRatio || 1);
-    const scale = Math.min(1, Math.min(view.clientWidth || 800, 1600) / bmp.width, Math.max(120, window.innerHeight - 330) / bmp.height);
-    const w = Math.max(N, Math.floor(bmp.width * scale / N) * N), h = Math.max(N, Math.floor(bmp.height * scale / N) * N);
+    const scale = Math.min(1, Math.min(view.clientWidth || 800, 1600) / fw, Math.max(120, window.innerHeight - 330) / fh);
+    const w = Math.max(N, Math.floor(fw * scale / N) * N), h = Math.max(N, Math.floor(fh * scale / N) * N);
     const box = el("div", { className: "tiles" });
     box.style.width = `${w}px`; box.style.height = `${h}px`;
     box.style.gridTemplateColumns = `repeat(${N}, 1fr)`;
+    const tiles = [];
     for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
       const cv = el("canvas", { width: Math.round(w / N * dpr), height: Math.round(h / N * dpr) });
-      cv.getContext("2d").drawImage(bmp, c * bmp.width / N, r * bmp.height / N, bmp.width / N, bmp.height / N, 0, 0, cv.width, cv.height);
+      tiles.push([cv, c, r]);
       box.append(cv);
     }
-    bmp.close();
+    const paint = (img) => { for (const [cv, c, r] of tiles) { const g = cv.getContext("2d"); g.clearRect(0, 0, cv.width, cv.height); g.drawImage(img, c * fw / N, r * fh / N, fw / N, fh / N, 0, 0, cv.width, cv.height); } };
+    paint(first);
+    first.close();
+    if (decoder) (async () => {
+      for (let i = 1; ; i = (i + 1) % frames) {
+        let img;
+        try { img = (await decoder.decode({ frameIndex: i })).image; } catch (e) { return; }
+        const wait = Math.max(20, (img.duration || 100000) / 1000);
+        if (view.contains(box)) paint(img);
+        img.close();
+        if (!view.contains(box) && i > 1) { decoder.close(); return; }       // something else is shown now
+        await new Promise((res) => setTimeout(res, wait));
+      }
+    })();
     // Shown only while it is held: a hand that holds can't drag out a snipping rectangle at the same time.
     const shield = el("div", { className: "shield" }, el("span", { textContent: "Press and hold to view" }));
     const hold = (on) => box.classList.toggle("on", on);

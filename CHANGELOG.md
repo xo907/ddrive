@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.15.3 (2026-10-12)
+
+- A GIF (or animated WebP) on a view-only share link moves again. Such a link paints pictures instead
+  of showing the file, which showed only the first frame; now the frames are opened one by one and
+  painted in turn (Chrome, Edge and other browsers that can; elsewhere the first frame is shown).
+
 ## 2.15.2 (2026-10-12)
 
 - The share link page (`/v/...`) fits in the window: no page scrollbar. A picture, film or text is
