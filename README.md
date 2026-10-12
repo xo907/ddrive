@@ -807,8 +807,10 @@ Ubuntu and Raspberry Pi OS (`ddrive-lite`), which contain only this.
 
 An app that makes a phone one of the computers on the host's Sync page: it backs up the camera roll,
 or any other folder of the phone, to the drive by itself, and can free the phone of what it has
-uploaded. Each release has **DDriveLite.apk**; install it by opening the file on the phone (Android
-8 or later; Android asks once whether your browser or file manager may install apps).
+uploaded. Get [**DDriveLite.apk**](https://github.com/xo907/ddrive/raw/main/android/release/DDriveLite.apk)
+(the signed app, kept in this repository under `android/release`) and install it by opening the
+file on the phone (Android 8 or later; Android asks once whether your browser or file manager may
+install apps).
 
 1. Open the app, give the address of the host's dashboard and your 24 words (the drive's recovery
    phrase, or the words of an [account](#accounts)), and turn on **Folder syncing**.

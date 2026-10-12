@@ -5,3 +5,5 @@ local.properties
 *.keystore
 *.apk
 .kotlin/
+# the signed app as it is handed out (built and signed on the owner's computer, see README)
+!release/*.apk
