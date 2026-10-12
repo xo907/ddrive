@@ -81,7 +81,7 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
 E2E_GET = frozenset("status account changelog vault vault/log vault/object vault/pending vault/sync vault/shares".split())
 E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
-    vault/share vault/share/update vault/share/revoke
+    vault/share vault/share/update vault/share/revoke vault/share/collect
     vault/sync/jobs vault/sync/tell vault/sync/ask vault/sync/forget
     vault/sync/hello vault/sync/poll vault/sync/report vault/sync/answer vault/sync/bye""".split())
 
@@ -694,6 +694,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._shared(route[3:], method)
             if route.startswith("/v/") and method == "GET":
                 return self._vshared(route[3:])
+            if route.startswith("/v/") and method == "POST":
+                return self._vshared_post(route[3:])
             if method == "GET" and route == "/wordlist.txt":       # the 2048 words a phrase is written in: not a secret
                 with open(os.path.join(os.path.dirname(STATIC), "wordlist.txt"), "rb") as f:
                     return self._send(200, f.read(), "text/plain; charset=utf-8", {"Cache-Control": "public, max-age=86400"})
@@ -1610,7 +1612,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _vshare_json(self, sid, rec, data):
         return {"id": sid, "created": rec.get("c"), "expires": rec.get("e"), "password": bool(rec.get("pwc")),
-                "views": rec.get("v", 0), "own": data.get("own", "")}
+                "views": rec.get("v", 0), "own": data.get("own", ""), "upload": bool(rec.get("up")),
+                "drops": data.get("drops") or [], "received": data.get("got", 0)}
+
+    def _vshare_lock(self):
+        return self.app.__dict__.setdefault("_vshare_lock", threading.Lock())
 
     def _post_api_vault_share(self):
         self._vault()
@@ -1619,6 +1625,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         own = secrets.token_urlsafe(12).replace("-", "a").replace("_", "b")
         self._vshare_keep(own, body)
         rec = {"vault": True, "c": time.time(), "e": _expiry(body.get("hours", 24 * 7)), "pwc": bool(body.get("password"))}
+        if body.get("upload"):                   # a file request: others send sealed files, to be collected by the account
+            try:
+                rec["up"] = max(1, min(100 * 1024, int(body.get("max_mb") or 2048))) * 1024 * 1024
+            except (TypeError, ValueError):
+                raise ApiError(400, "bad size limit") from None
         self.drive.index.share_put(own, rec)
         sid = self.app.shares.prefix + own
         self._json(dict(self._vshare_json(sid, rec, {"own": body.get("own", "")}), base=self.public_base()))
@@ -1660,6 +1671,76 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             pass
         self._json({"ok": True, "objs": got[1].get("objs") or []})       # (for the browser to tidy what nothing uses any more)
 
+    def _post_api_vault_share_collect(self):
+        """The account's browser took sealed files that came through a file request into its list."""
+        self._vault()
+        body = self._body_json()
+        sid = str(body.get("id") or "")
+        taken = {str(o) for o in body.get("objs") or []}
+        with self._vshare_lock():
+            got = self._vshare_all().get(sid)
+            if got is None:
+                raise ApiError(404, "That link no longer exists")
+            data = dict(got[1])
+            left = [d for d in data.get("drops") or [] if d.get("obj") not in taken]
+            data["got"] = data.get("got", 0) + len(data.get("drops") or []) - len(left)
+            data["drops"] = left
+            self._put_file(f"/sh/{sid.rpartition('.')[2]}", json.dumps(data).encode(), save="now")
+        self._json({"ok": True, "received": data["got"]})
+
+    def _vshared_post(self, rest):
+        """Somebody sending files through a file request of an end-to-end account: sealed objects, and for
+        each a sealed note (its name, size and key) that only the account can open."""
+        sid, _, tail = rest.partition("/")
+        got = None
+        if re.fullmatch(r"[\w-]+\.[\w-]+", sid):
+            try:
+                self._enter(sid.partition(".")[0])
+                got = self._vshare_all().get(sid)
+            except AccountError:
+                got = None
+        if got is None or not got[0].get("up"):
+            return self._error(404, "This link has expired")
+        rec, data = got
+        own = sid.rpartition(".")[2]
+        if len(data.get("drops") or []) >= 2000:
+            return self._error(429, "Too much is waiting here already. Try again once it was collected.")
+        if tail == "o":
+            q = self._query()
+            path = self._object_path(q.get("id"))
+            try:
+                size, offset = int(q.get("size") or 0), int(q.get("offset") or 0)
+            except ValueError:
+                raise ApiError(400, "bad size or offset") from None
+            from .vault import sealed_size
+            if size < 0 or offset < 0 or size > sealed_size(rec["up"]):
+                raise ApiError(413, f"Files up to {rec['up'] // (1024 * 1024)} MB can be sent here.")
+            if self.drive.index.resolve(path) is not None:
+                raise ApiError(409, "That is here already")
+            self.drive.index.makedirs(posixpath.dirname(path))
+            return self._take_part(path, size, offset, None)
+        if tail == "n":
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 16 * 1024:
+                raise ApiError(413, "request too large")
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+                oid, sealed = str(body.get("obj") or ""), str(body.get("sealed") or "")
+            except (ValueError, AttributeError):
+                raise ApiError(400, "invalid JSON") from None
+            node = self.drive.index.resolve(self._object_path(oid))
+            if node is None or node["is_dir"] or not re.fullmatch(r"[A-Za-z0-9+/=]{40,12000}", sealed):
+                raise ApiError(400, "That file didn't arrive whole. Send it again.")
+            with self._vshare_lock():
+                data = dict(self._vshare_data(own) or data)
+                drops = list(data.get("drops") or [])
+                if all(d.get("obj") != oid for d in drops):
+                    drops.append({"obj": oid, "sealed": sealed, "at": time.time()})
+                data["drops"] = drops
+                self._put_file(f"/sh/{own}", json.dumps(data).encode(), save="now")
+            return self._json({"ok": True})
+        return self._error(404, "not found")
+
     def _vshared(self, rest):
         """What somebody with a link gets: the page that opens it, the sealed description, sealed objects."""
         sid, _, tail = rest.partition("/")
@@ -1678,6 +1759,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             return self._error(404, "This link has expired")
         rec, data = got
         if tail == "m":
+            if rec.get("up"):
+                return self._json({"sealed": data["sealed"], "password": bool(rec.get("pwc")), "expires": rec.get("e"),
+                                   "upload": True, "max": rec["up"]})
             self.app.shares.viewed(sid)
             return self._json({"sealed": data["sealed"], "password": bool(rec.get("pwc")), "expires": rec.get("e")})
         if tail.startswith("o/") and tail[2:] in (data.get("objs") or []):

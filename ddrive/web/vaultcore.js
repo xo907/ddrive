@@ -271,14 +271,14 @@
 
     // ---------- files
     /** Seal a Blob piece by piece and send it as object `id`. heard({bytes, note}) tells how it is going. */
-    async _store(id, key, blob, heard = () => {}, signal) {
+    async _store(id, key, blob, heard = () => {}, signal, where = "/api/vault/object") {
       const size = blob.size, count = chunksOf(size), total = sealedSize(size);
       let offset = 0, part = [new Uint8Array([...MAGIC, CHUNK_LOG])];
       const post = async () => {
         const body = new Blob(part);
         part = [];
         for (;;) {
-          const got = await call(`/api/vault/object?id=${id}&size=${total}&offset=${offset}`,
+          const got = await call(`${where}?id=${id}&size=${total}&offset=${offset}`,
                                  { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal });
           if (got.wait) { heard({ note: "Waiting for the server: " + got.wait }); await sleep(15000); continue; }
           if (!got.ok) throw new Error("The server lost its place in this file. Upload it again.");
@@ -345,5 +345,7 @@
   }
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
-                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64 };
+                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64,
+                 /** Seal a file and send it as an object to an address that takes them (a file request's). */
+                 store: (where, id, key, blob, heard, signal) => Vault.prototype._store.call(null, id, key, blob, heard, signal, where) };
 })();

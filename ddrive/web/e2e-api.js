@@ -860,18 +860,63 @@
     const path = `/v/${s.id}#${own.r.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`, n = v.nodes.get(own.id);
     index();
     return { id: s.id, path, url: base ? base + path : "", direct_path: "", direct: "", lan: [], item: n && pathOf.get(n.id) || null, dir: !!own.dir,
-             created: s.created, expires: s.expires, password: !!own.pw, download: own.download !== false, views: s.views || 0, upload: false };
+             created: s.created, expires: s.expires, password: !!own.pw, download: own.download !== false,
+             views: own.upload ? s.received || 0 : s.views || 0, upload: !!own.upload };
   }
   async function sharesNow() {
     const got = await DDV.call("/api/vault/shares"), out = [];
     for (const s of got.items) { try { out.push([s, await DDV.openMessage(v.meta, s.own), got.base]); } catch (e) { /* not sealed by this account */ } }
     return out;
   }
-  GET.shares = async () => ({ items: (await sharesNow()).map(([s, own, base]) => shareJson(s, own, base)) });
+  // A file request: whoever has the link sends files into a folder. Their browser seals each file with a key
+  // of its own and writes a note (name, size, that key) sealed with the link's key. The server keeps both
+  // and can open neither; this browser, which kept the link's key sealed for itself, takes them into the list.
+  const AAD_DROP = enc.encode("ddv1 drop");
+  let collecting = null;
+  E.collect = () => collecting || (collecting = (async () => {
+    let taken = 0;
+    for (const [s, own] of await sharesNow()) {
+      if (!own.upload || !(s.drops || []).length) continue;
+      const key = await DDV.fileKey(DDV.unb64(own.k)), ops = [], bad = [];
+      index();
+      const folder = v.nodes.get(own.id), parent = folder && pathOf.has(folder.id) ? folder.id : "";
+      const names = new Set((kids.get(parent) || []).map((n) => n.name));
+      for (const d of s.drops) {
+        try {
+          const note = JSON.parse(dec.decode(await DDV.unseal(key, DDV.unb64(d.sealed), AAD_DROP)));
+          if (note.obj !== d.obj || typeof note.key !== "string" || DDV.unb64(note.key).length !== 32 || !(note.size >= 0)) throw new Error("bad note");
+          let name = String(note.name || "file").replace(/[\\/\x00-\x1f]/g, "_").replace(/^\.+/, "").slice(0, 180) || "file";
+          const dot = name.lastIndexOf("."), stem = dot > 0 ? name.slice(0, dot) : name, tail = dot > 0 ? name.slice(dot) : "";
+          for (let i = 2; names.has(name); i++) name = `${stem} (${i})${tail}`;        // nothing is ever overwritten
+          names.add(name);
+          ops.push({ op: "put", id: DDV.newId(), parent, name, dir: false, size: Math.floor(note.size), mtime: +note.mtime || d.at || now(), obj: d.obj, key: note.key,
+                     at: d.at || now(), by: "a file request" });
+        } catch (e) { bad.push(d.obj); }          // not sealed with this link's key: not kept
+      }
+      for (let i = 0; i < ops.length; i += 200) await v._send(...ops.slice(i, i + 200));
+      await DDV.call("/api/vault/share/collect", { method: "POST", json: { id: s.id, objs: s.drops.map((d) => d.obj) } });
+      if (bad.length) await DDV.call("/api/vault/delete", { method: "POST", json: { ids: bad } }).catch(() => null);
+      taken += ops.length;
+    }
+    if (taken) E.say(`${taken} file${taken === 1 ? "" : "s"} arrived through a file request`);
+    return taken;
+  })().finally(() => { collecting = null; }));
+  GET.shares = async () => { await E.collect().catch(() => null); return { items: (await sharesNow()).map(([s, own, base]) => shareJson(s, own, base)) }; };
   POST.share = async (b) => {
-    if (b.upload) throw new Fail(400, "File requests aren't there for end-to-end encrypted accounts yet: the files would have to be sealed for you by whoever sends them.");
     const path = clean(b.path), n = at(path);
     if (!n.id) throw new Fail(400, "Share a folder or file, not the whole account");
+    if (b.upload) {
+      if (!n.dir) throw new Fail(400, "A file request needs a folder for the files to arrive in");
+      const secret = crypto.getRandomValues(new Uint8Array(32));
+      const base = await crypto.subtle.importKey("raw", enc.encode(b.password || ""), "PBKDF2", false, ["deriveBits"]);
+      const raw = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: secret, iterations: b.password ? 300000 : 1 }, base, 256));
+      const mb = Math.max(1, Math.min(100 * 1024, +b.max_mb || 2048));
+      const own = { r: DDV.b64(secret), k: DDV.b64(raw), id: n.id, dir: true, pw: !!b.password, upload: true };
+      const sealed = DDV.b64(await DDV.seal(await DDV.fileKey(raw), enc.encode(JSON.stringify({ v: 1, name: n.name, upload: true, max: mb * 1024 * 1024 })), AAD_SHARE));
+      const s = await DDV.call("/api/vault/share", { method: "POST", json: { objs: [], sealed, own: await DDV.sealMessage(v.meta, own), hours: b.hours === undefined ? 168 : b.hours,
+                                                                              password: !!b.password, upload: true, max_mb: mb } });
+      return shareJson(s, own, s.base);
+    }
     const secret = crypto.getRandomValues(new Uint8Array(32)), download = b.download !== false;
     const own = { r: DDV.b64(secret), id: n.id, dir: !!n.dir, pw: !!b.password, download };
     const s = await DDV.call("/api/vault/share", { method: "POST", json: { ...(await shareSealed(n, path, secret, b.password, download)), own: await DDV.sealMessage(v.meta, own),
@@ -883,6 +928,8 @@
     if (!found) throw new Fail(404, "That link no longer exists");
     const [, own] = found, body = { id: b.id };
     if ("hours" in b) body.hours = b.hours;
+    if (own.upload && b.password) throw new Fail(400, "A file request's password is part of its key. Make a new request to change it.");
+    if (own.upload) { delete b.password; delete b.download; }
     const download = "download" in b ? b.download !== false : own.download !== false;
     if ("password" in b || download !== (own.download !== false)) {
       // a new password is a new key: what is shared is sealed again (as it is now). Keeping the old password isn't possible without it.
@@ -897,6 +944,7 @@
     return shareJson(s, own, s.base);
   };
   POST["shares/revoke"] = async (b) => {
+    await E.collect().catch(() => null);         // what arrived is taken in first
     const r = await DDV.call("/api/vault/share/revoke", { method: "POST", json: { id: b.id } });
     await drop(r.objs || []);
     return { ok: true };
@@ -1128,6 +1176,8 @@
     const old = [...v.nodes.values()].filter((n) => n.trash && n.trash.at < now() - 30 * 86400).map((n) => n.id);
     if (old.length) POST.purge({ uids: old }).catch(() => null);
     setTimeout(() => E.autoSnapshot().catch(() => null), 30000);
+    setTimeout(() => E.collect().catch(() => null), 4000);            // files that came through file requests
+    setInterval(() => { if (!document.hidden) E.collect().catch(() => null); }, 60000);
     setInterval(() => v.sync().catch(() => null), 15000);          // what another device of this account did shows up by itself
     document.addEventListener("visibilitychange", () => { if (!document.hidden) v.sync().catch(() => null); });
   })();

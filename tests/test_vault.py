@@ -323,6 +323,123 @@ class VaultTest(helpers.DriveTest):
             lite.HostClient(self.address, words.key_to_phrase(bytes.fromhex(self.host.cfg.encryption_key)))._json("/api/vault/shares")
         self.assertIn(e.exception.status, (403, 404))
 
+    def test_the_account_as_a_drive_letter(self):
+        """What a drive letter does with an end-to-end account (lite.LiteFS on lite.VaultClient): files are
+        opened and sealed on the computer, and the host still sees nothing."""
+        import errno
+        fs = lite.LiteFS(lite.VaultClient(lite.HostClient(self.address, auth=self.auth), self.key, "my laptop"),
+                         tmp_dir=os.path.join(self.tmp, "lite-tmp"), block=64 * 1024, cache_bytes=256 * 1024)
+
+        def save(path, data):
+            fh = fs.create(path, 0o644)
+            for off in range(0, len(data), 50000):
+                fs.write(path, data[off:off + 50000], off, fh)
+            fs.flush(path, fh)
+            fs.release(path, fh)
+
+        def load(path, offset=0, size=None):
+            fh = fs.open(path, os.O_RDONLY)
+            try:
+                return fs.read(path, fs.getattr(path)["st_size"] if size is None else size, offset, fh)
+            finally:
+                fs.release(path, fh)
+        big = MARK + os.urandom(2_500_000)
+        fs.mkdir("/Work", 0o755)
+        save("/Work/report.bin", big)
+        save("/Work/notes.txt", MARK + b" typed in an editor")
+        self.assertEqual(sorted(fs.readdir("/Work", None)), [".", "..", "notes.txt", "report.bin"])
+        self.assertEqual(fs.getattr("/Work/report.bin")["st_size"], len(big))
+        self.assertEqual(load("/Work/report.bin"), big)
+        self.assertEqual(load("/Work/report.bin", 1_048_570, 20), big[1_048_570:1_048_590])
+        v = self.new_device()                                          # another device of the account
+        self.assertEqual(v.read("/Work/notes.txt"), MARK + b" typed in an editor")
+        self.assertEqual(v.resolve("/Work/notes.txt")["by"], "my laptop")
+        v.put("/Work/from the phone.txt", b"added elsewhere", mtime=1_700_000_000)
+        time.sleep(lite.LIST_SECONDS + 0.2)
+        self.assertEqual(load("/Work/from the phone.txt"), b"added elsewhere")
+        self.assertEqual(fs.getattr("/Work/from the phone.txt")["st_mtime"], 1_700_000_000)
+        # changing a file, saving over one the way programs do, renaming, deleting
+        fh = fs.open("/Work/notes.txt", os.O_RDWR)
+        fs.write("/Work/notes.txt", b"TYPED", len(MARK) + 1, fh)
+        fs.release("/Work/notes.txt", fh)
+        self.assertEqual(load("/Work/notes.txt"), MARK + b" TYPED in an editor")
+        save("/Work/notes.tmp", b"second draft")
+        fs.rename("/Work/notes.tmp", "/Work/notes.txt")
+        self.assertEqual(load("/Work/notes.txt"), b"second draft")
+        fs.rename("/Work/report.bin", "/report.bin")
+        self.assertEqual(load("/report.bin", 0, 10), big[:10])
+        with self.assertRaises(OSError) as e:
+            fs.rmdir("/Work")
+        self.assertEqual(e.exception.errno, errno.ENOTEMPTY)
+        fs.unlink("/Work/notes.txt")
+        fs.unlink("/Work/from the phone.txt")
+        fs.rmdir("/Work")
+        self.assertEqual(sorted(fs.readdir("/", None)), [".", "..", "report.bin"])
+        with self.assertRaises(OSError) as e:
+            fs.getattr("/Work/notes.txt")
+        self.assertEqual(e.exception.errno, errno.ENOENT)
+        v.sync()                                                       # what was deleted is kept under Deleted
+        self.assertIn("/Work", [n["trash"]["path"] for n in v.nodes.values() if n.get("trash")])
+        for folder, _, files in os.walk(os.path.join(self.tmp, "aaaa")):
+            for f in files:
+                with open(os.path.join(folder, f), "rb") as fh:
+                    data = fh.read()
+                for needle in (MARK, b"report.bin", b"notes.txt", b"second draft"):
+                    self.assertNotIn(needle, data, os.path.join(folder, f))
+
+    def test_a_file_request_takes_sealed_files_from_anybody(self):
+        """A file request of an end-to-end account: somebody without an account sends sealed objects and,
+        for each, a sealed note. The host keeps them for the account's browser and can open neither."""
+        c = self.device.client
+        sealed, own = base64.b64encode(os.urandom(80)).decode(), base64.b64encode(os.urandom(90)).decode()
+        s = c._json("/api/vault/share", {"objs": [], "sealed": sealed, "own": own, "hours": 24, "upload": True, "max_mb": 1})
+        self.assertEqual((s["upload"], s["drops"], s["received"]), (True, [], 0))
+
+        def visitor(method, tail, body=None, headers=None, sid=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.web.port, timeout=10)
+            conn.request(method, f"/v/{sid or s['id']}{tail}", body, {"X-DD": "1", **(headers or {})})
+            r = conn.getresponse()
+            data = r.read()
+            conn.close()
+            return r.status, data
+        self.assertEqual(json.loads(visitor("GET", "/m")[1]), {"sealed": sealed, "password": False, "expires": s["expires"],
+                                                                "upload": True, "max": 1024 * 1024})
+        # the sender's browser seals the file with a key of its own (here: the reference client's sealing)
+        key, oid = os.urandom(32), vault.new_id()
+        content = MARK + os.urandom(300_000)
+        src = io.BytesIO(content)
+        obj = b"".join(vault.seal_stream(key, src.read, len(content)))
+        self.assertEqual(len(obj), vault.sealed_size(len(content)))
+        status, body = visitor("POST", f"/o?id={oid}&size={len(obj)}&offset=0", obj[:200_000])
+        self.assertEqual((status, json.loads(body)["offset"]), (200, 200_000))
+        status, body = visitor("POST", f"/o?id={oid}&size={len(obj)}&offset=200000", obj[200_000:])
+        self.assertTrue(json.loads(body)["done"], body)
+        note = base64.b64encode(os.urandom(120)).decode()               # (sealed with the link's key by the sender's browser)
+        self.assertEqual(visitor("POST", "/n", json.dumps({"obj": oid, "sealed": note}))[0], 200)
+        self.assertEqual(visitor("POST", "/n", json.dumps({"obj": oid, "sealed": note}))[0], 200)         # twice: kept once
+        # what a sender may not do
+        self.assertEqual(visitor("POST", f"/o?id={vault.new_id()}&size={vault.sealed_size(1024 * 1024) + 1}&offset=0", b"x")[0], 413)
+        self.assertEqual(visitor("POST", f"/o?id={oid}&size=10&offset=0", b"x" * 10)[0], 409)             # not over what is there
+        self.assertEqual(visitor("POST", "/n", json.dumps({"obj": vault.new_id(), "sealed": note}))[0], 400)
+        self.assertEqual(visitor("POST", "/o?id=../../x&size=1&offset=0", b"x")[0], 400)
+        self.assertEqual(visitor("GET", f"/o/{oid}")[0], 404)            # senders see nothing of the folder, not even their own file
+        # the account's browser finds the note, opens the file with the key from it, and takes it into its list
+        drops = c._json("/api/vault/shares")["items"][0]["drops"]
+        self.assertEqual([(d["obj"], d["sealed"]) for d in drops], [(oid, note)])
+        self.assertEqual(vault.open_range(key, lambda a, n: self.device._fetch(oid, a, n), len(content), 0, None), content)
+        self.assertEqual(c._json("/api/vault/share/collect", {"id": s["id"], "objs": [oid]})["received"], 1)
+        again = c._json("/api/vault/shares")["items"][0]
+        self.assertEqual((again["drops"], again["received"]), ([], 1))
+        for folder, _, files in os.walk(os.path.join(self.tmp, "aaaa")):
+            for f in files:
+                with open(os.path.join(folder, f), "rb") as fh:
+                    self.assertNotIn(MARK, fh.read(), os.path.join(folder, f))
+        # an ordinary link takes no files, and a request that was turned off takes none either
+        plain = c._json("/api/vault/share", {"objs": [], "sealed": sealed, "own": own})
+        self.assertEqual(visitor("POST", f"/o?id={vault.new_id()}&size=10&offset=0", b"x" * 10, sid=plain["id"])[0], 404)
+        c._json("/api/vault/share/revoke", {"id": s["id"]})
+        self.assertEqual(visitor("POST", f"/o?id={vault.new_id()}&size=10&offset=0", b"x" * 10)[0], 404)
+
     def test_the_list_is_sealed_whole_now_and_then(self):
         v = self.device
         for i in range(5):
@@ -626,8 +743,22 @@ class VaultSyncTest(VaultTest):
         with open(back, "rb") as f:
             self.assertEqual(f.read(), b"typed on the laptop")
         self.assertEqual(run("get", "/nothing.txt")[0], 1)
+        # moving in: a whole folder (the drive letter of a DDrive, say) is copied into the account, and again only what is new
+        self.put("Photos/2019/beach.jpg", MARK + b" a photo", age=5_000_000)
+        self.put("Contacts/Contacts.vcf", b"BEGIN:VCARD\r\nFN:Ada\r\nEND:VCARD\r\n")
+        code, text = run("import", self.here, "/")
+        self.assertEqual(code, 0, text)
+        self.assertIn("2 file(s) copied", text)                        # (notes.txt is there already: not copied twice)
+        v = self.new_device()
+        self.assertEqual(v.read("/Photos/2019/beach.jpg"), MARK + b" a photo")
+        self.assertAlmostEqual(v.resolve("/Photos/2019/beach.jpg")["mtime"], time.time() - 5_000_000, delta=5)
+        self.assertEqual(v.read("/Contacts/Contacts.vcf"), b"BEGIN:VCARD\r\nFN:Ada\r\nEND:VCARD\r\n")
+        self.put("Photos/2020/new.jpg", b"one more")
+        code, text = run("import", self.here, "/")
+        self.assertIn("1 file(s) copied", text)
+        self.assertTrue(os.path.exists(os.path.join(self.here, "Photos", "2019", "beach.jpg")))     # nothing is deleted here
+        self.assertEqual(run("import", os.path.join(self.tmp, "nowhere"))[0], 1)
         self.assertEqual(run("ls", "/no such folder")[0], 1)
-        self.assertEqual(run("mount")[0], 1)                           # no drive letter for these yet, said in words
         self.assertIn("end-to-end", run("status")[1])
         # the owner's words still connect the earlier way
         owner = words.key_to_phrase(bytes.fromhex(self.host.cfg.encryption_key))

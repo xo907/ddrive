@@ -3,6 +3,29 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.13.0 (2026-10-11)
+
+- **A drive letter for end-to-end encrypted accounts.** `lite mount` now shows such an account as a
+  drive letter (Windows) or a folder (Linux), as it does for other accounts: open, save, rename and
+  delete files in any program. Files are fetched sealed and opened on your computer, and what you
+  save is sealed there before it is sent; the server sees none of it. What you delete goes to the
+  account's Deleted page. This is the same in DDrive and in DDrive Lite (`ddrive lite mount` /
+  `ddrive-lite mount`).
+- **File requests for end-to-end encrypted accounts.** "Request files" on a folder makes a link for
+  others to send you files, with an expiry, a size limit and an optional password. The sender needs
+  no account: their browser seals each file with a key of its own and puts that key, with the name
+  and size, in a note sealed with the key in the link. The server keeps both and can open neither.
+  Your dashboard takes what arrived into the folder the next time it is open (nothing is ever
+  overwritten), and Activity says it came through a file request.
+- **Moving in: `lite import <folder> [folder in the account]`** copies a whole folder into an
+  end-to-end account, keeping its folders and the files' dates. Point it at the drive letter of your
+  DDrive (`ddrive lite import Z:\`) to bring everything over, including Notes, Contacts, Bookmarks
+  and saved Discord messages, which the account's pages then show. Run it again to carry on where it
+  stopped; only what is new or changed is copied, and nothing is deleted on either side. Stars,
+  earlier versions, snapshots and share links of the old drive are not carried over.
+- With this, nothing an ordinary account has is missing from an end-to-end one, except Messages on
+  the phone app (it runs on a computer).
+
 ## 2.12.0 (2026-10-11)
 
 - **End-to-end encrypted accounts get Messages**, the last page they were missing: the Discord logger

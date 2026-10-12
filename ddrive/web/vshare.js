@@ -18,7 +18,7 @@
 
   async function keyFrom(secret, password) {
     const base = await crypto.subtle.importKey("raw", enc.encode(password || ""), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: secret, iterations: password ? 300000 : 1 }, base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: secret, iterations: password ? 300000 : 1 }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
   async function readRange(f, start, end, key) {
     if (!f.size || start > end) return new Uint8Array(0);
@@ -79,6 +79,44 @@
     } catch (e) { view.replaceChildren(el("p", { className: "err", textContent: e.message })); }
   }
 
+  // A file request: files go into somebody's folder. Each is sealed here with a key of its own; that key,
+  // with the file's name and size, goes in a note sealed with the link's key. The server can open neither.
+  function request(m, key) {
+    document.title = `Send files · DDrive`;
+    $("title").textContent = `Send files into “${m.name}”`;
+    $("note").textContent = `Files up to ${size(m.max)} each. They are encrypted in your browser before they leave it; you can't see what is in the folder.`;
+    const list = el("div"), pick = el("input", { type: "file", multiple: true });
+    const box = el("div", { className: "pw" }, pick);
+    let busy = Promise.resolve();
+    async function send(file, row, state) {
+      if (file.size > m.max) { state.textContent = "too big"; state.className = "size err"; return; }
+      try {
+        const raw = crypto.getRandomValues(new Uint8Array(32)), obj = DDV.newId();
+        await DDV.store(`/v/${sid}/o`, obj, await DDV.fileKey(raw), file, (p) => {
+          if (p.bytes !== undefined) state.textContent = `${Math.floor(p.bytes / (file.size || 1) * 100)}%`;
+          if (p.note) state.textContent = "waiting…";
+        });
+        const note = { name: file.name, size: file.size, mtime: (file.lastModified || Date.now()) / 1000, obj, key: DDV.b64(raw) };
+        const r = await fetch(`/v/${sid}/n`, { method: "POST", headers: { "Content-Type": "application/json", "X-DD": "1" },
+                                              body: JSON.stringify({ obj, sealed: DDV.b64(await DDV.seal(key, enc.encode(JSON.stringify(note)), enc.encode("ddv1 drop"))) }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "It could not be sent");
+        state.textContent = "sent";
+      } catch (e) { state.textContent = e.message || "failed"; state.className = "size err"; }
+    }
+    const add = (files) => {
+      for (const file of files) {
+        const state = el("span", { className: "size", textContent: "waiting" }), row = el("div", { className: "row" }, el("span", { className: "name", textContent: file.name }),
+                                                                                           el("span", { className: "size", textContent: size(file.size) }), state);
+        list.append(row);
+        busy = busy.then(() => send(file, row, state));
+      }
+    };
+    pick.onchange = () => { add(pick.files); pick.value = ""; };
+    document.addEventListener("dragover", (e) => e.preventDefault());
+    document.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files) add(e.dataTransfer.files); });
+    $("files").replaceChildren(box, list);
+  }
+
   function render(m) {
     document.title = `${m.name} · DDrive`;
     $("title").textContent = m.name;
@@ -103,7 +141,10 @@
     const r = await fetch(`/v/${sid}/m`).catch(() => null);
     if (!r || !r.ok) return say("This link has expired", "Ask for a new one.");
     const info = await r.json(), sealed = DDV.unb64(info.sealed);
-    const open = async (password) => JSON.parse(dec.decode(await DDV.unseal(await keyFrom(secret, password), sealed, enc.encode("ddv1 share"))));
+    let key;
+    const open = async (password) => { key = await keyFrom(secret, password); return JSON.parse(dec.decode(await DDV.unseal(key, sealed, enc.encode("ddv1 share")))); };
+    const render0 = render;
+    render = (m) => (m.upload ? request(m, key) : render0(m));
     if (!info.password) {
       try { render(await open("")); } catch (e) { say("This link can't be opened", "Its key doesn't fit. Ask for the whole link again."); }
       return;

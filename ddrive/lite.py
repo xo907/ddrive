@@ -2,6 +2,7 @@
 
     lite connect <address>      sign in to the host's dashboard address (asks for your 24 words)
     lite mount [-m X:] [-b]     show the host's drive as a drive letter / folder on this computer
+    lite import <folder> [to]   copy a whole folder into an end-to-end encrypted account (run again to carry on)
     lite stop                   take it away again
     lite autostart on|off       show it by itself when this computer starts
     lite sync on|off            let folders of this computer be synced with the drive; which ones is
@@ -20,6 +21,7 @@ computer and account (secretbox.py), in lite.json next to where the full program
 """
 
 import argparse
+import base64
 import collections
 import errno
 import getpass
@@ -249,6 +251,91 @@ class HostClient:
 
     def delete(self, path):
         self._json("/api/delete", {"path": path})
+
+
+class VaultClient:
+    """An end-to-end encrypted account, as the drive letter (LiteFS) asks a host for files. The host has
+    them sealed only, so what LiteFS asks is answered here: files are fetched sealed and opened on this
+    computer, and what is written is sealed here before it is sent. Two copies of the account's list are
+    kept: one to look things up in (quick, so a folder opens while a big file is still being sent) and
+    one that changes are made with."""
+
+    def __init__(self, client, key, name=""):
+        from . import vault
+        self._vault = vault
+        self.address = client.address
+        self.look, self.work = vault.Vault(client, key), vault.Vault(client, key)
+        self.look.name = self.work.name = name
+        self._look_lock, self._work_lock = threading.RLock(), threading.RLock()
+        self._synced = 0.0
+
+    def _fresh(self, now=False):
+        with self._look_lock:
+            if now or time.monotonic() - self._synced > LIST_SECONDS:
+                self.look.sync()
+                self._synced = time.monotonic()
+
+    def _node(self, path):
+        with self._look_lock:
+            self._fresh()
+            node = self.look.resolve(path)
+            if node is None:
+                raise HostError(404, f"Not found: {path}")
+            return dict(node)
+
+    def status(self):
+        self._fresh(now=True)
+        return {"e2e": True}
+
+    def list(self, path):
+        path = "/" + path.strip("/")
+        with self._look_lock:
+            node = self._node(path)
+            if not node["dir"]:
+                raise HostError(404, f"Not found: {path}")
+            return [{"name": n["name"], "path": posixpath.join(path, n["name"]), "dir": bool(n["dir"]), "size": n.get("size") or 0,
+                     "mtime": n.get("mtime") or 0} for n in self.look._children(node["id"])]
+
+    def read(self, path, start, size):
+        node = self._node(path)
+        if node["dir"] or size <= 0 or start >= node["size"]:
+            return b""
+        return self._vault.open_range(base64.b64decode(node["key"]), lambda a, n: self.look._fetch(node["obj"], a, n),
+                                      node["size"], start, size)
+
+    def download(self, path, out, progress=None):
+        node, done = self._node(path), 0
+        while done < node["size"]:
+            data = self._vault.open_range(base64.b64decode(node["key"]), lambda a, n: self.look._fetch(node["obj"], a, n),
+                                          node["size"], done, PART)
+            out.write(data)
+            done += len(data)
+            if progress:
+                progress(done)
+        return done
+
+    def _change(self, fn):
+        with self._work_lock:
+            try:
+                self.work.sync()
+                fn(self.work)
+            except self._vault.VaultError as e:
+                text = str(e)
+                raise HostError(404 if text.startswith("Not found") else 409 if "already exists" in text else 400, text) from None
+        self._fresh(now=True)
+
+    def upload(self, path, src, size, mtime=None):
+        self._change(lambda v: v.put(path, read=src.read, size=size, mtime=mtime))
+        return {"ok": True}
+
+    def mkdir(self, path):
+        self._change(lambda v: v.mkdir(path))
+
+    def move(self, src, dst):
+        self._change(lambda v: v.move(src, dst))
+
+    def delete(self, path):                  # kept under Deleted in the account until it is purged there
+        self._change(lambda v: v.delete(path))
 
 
 # ---------------------------------------------------------------------- the drive letter / folder
@@ -739,7 +826,8 @@ def cmd_connect(args):
               f"{len(files)} files ({format_size(sum(n['size'] for n in files))}).")
         print("          Your words stay on this computer; the host gets a sign-in key made from them and sealed files.")
         print(f"          Next: '{me()} sync on' lets folders of this computer be synced (chosen on your account's page there),")
-        print(f"          and '{me()} ls', 'get' and 'put' list, download and upload. A drive letter comes in a later version.")
+        print(f"          '{me()} mount' shows your files as a drive (opened and sealed on this computer),")
+        print(f"          and '{me()} ls', 'get' and 'put' list, download and upload.")
     else:
         print(f"[SUCCESS] Connected to {client.address} as {user}: DDrive {st.get('version')}, "
               f"{st['stats']['files']} files ({format_size(st['stats']['bytes'])}).")
@@ -756,12 +844,6 @@ def cmd_mount(args):
     if args.mount and mp != s.get("mount_point"):
         s["mount_point"] = mp
         save_settings(s)
-    if s.get("e2e"):
-        print("[INFO] An end-to-end encrypted account can't be shown as a drive letter yet. Folder syncing "
-              f"('{me()} sync on'), '{me()} ls', 'get' and 'put' work.")
-        if not s.get("sync"):
-            return 1
-        return cmd_sync(argparse.Namespace(state="run", background=args.background, verbose=getattr(args, "verbose", False)))
     if FUSE_ERROR and s.get("sync"):         # nothing to show the drive with, but folders sync without that
         print(f"[INFO] The drive can't be shown here ({FUSE_ERROR.splitlines()[0]}). Folder syncing runs without it.")
         return cmd_sync(argparse.Namespace(state="run", background=args.background, verbose=getattr(args, "verbose", False)))
@@ -782,6 +864,10 @@ def cmd_mount(args):
         print(f"[ERROR] It did not come up. See {os.path.join(default_data_dir(), 'ddrive.log')}")
         return 1
     _logging(getattr(args, "verbose", False))
+    if s.get("e2e"):                         # an end-to-end encrypted account: opened and sealed on this computer
+        from . import words
+        secret = json.loads(secretbox.unprotect(s.get("protected") or ""))
+        client = VaultClient(client, words.phrase_to_key(secret["phrase"]), device_name())
     client.status()                          # fails here, with a clear message, rather than inside the mount
     if sys.platform != "win32":
         os.makedirs(mp, exist_ok=True)
@@ -1026,6 +1112,61 @@ def _e2e_put(s, args):
     return 0
 
 
+def cmd_import(args):
+    """Copy a whole folder of this computer into the end-to-end encrypted account, keeping its folders and
+    the files' dates. Meant for moving in: the drive letter of a DDrive (Z:\\) or any other folder. It is
+    one pass of a folder backup, so running it again carries on where it stopped and copies only what
+    is new or changed; nothing is deleted on either side."""
+    import hashlib
+    s = load_settings()
+    if not s.get("e2e"):
+        print(f"[ERROR] This copies a folder into an end-to-end encrypted account. Connect to one first ('{me()} connect <address>').")
+        return 1
+    local = os.path.abspath(args.local)
+    if not os.path.isdir(local):
+        print(f"[ERROR] Not a folder on this computer: {local}")
+        return 1
+    from . import litesync, sync, vault, words
+    secret = json.loads(secretbox.unprotect(s.get("protected") or ""))
+    v = vault.Vault(client_from(s), words.phrase_to_key(secret["phrase"])).sync()
+    v.name = device_name()
+    data_dir = os.path.join(default_data_dir(), "lite")
+    remote = "/" + (args.remote or "").strip("/")
+    job = dict(sync.JOB_DEFAULTS, id="import-" + hashlib.sha256(f"{local}|{remote}".encode()).hexdigest()[:8], name="Import",
+               local=local, remote=remote, mode="backup", trigger="manual", exclude=[], enabled=True)
+    state = os.path.join(data_dir, "import")
+    os.makedirs(state, exist_ok=True)
+    count = {"n": 0, "total": 0}
+
+    def progress(file=None, action=None, total=None, total_bytes=None, note=None, **more):
+        if total is not None and total != count["total"]:
+            count["total"] = total
+            print(f"  {total} file(s) to copy, {format_size(total_bytes or 0)}. Each is sealed here before it is sent.")
+        if file is not None:
+            count["n"] += 1
+            print(f"  [{count['n']}/{count['total']}] {file}")
+        if note:
+            print(f"      {note}")
+    print(f"Copying {local} into {remote} of your account at {s['host']} ...")
+    run = sync.Run(litesync.VaultDrive(v, data_dir), job, state, settle=0, progress=progress)
+    try:
+        r = run.run()
+    except sync.SyncError as e:
+        print(f"[ERROR] {e}")
+        return 1
+    except (KeyboardInterrupt, InterruptedError):
+        print(f"\n[INFO] Stopped. Run the same command again to carry on: what is there already isn't copied twice.")
+        return 130
+    for line in run.problems:
+        print(f"  [WARN] {line}")
+    if r.get("errors"):
+        print(f"[WARN] {r['up']} file(s) copied ({format_size(r['bytes'])}), {r['errors']} could not be. Run the same command again for those.")
+        return 1
+    print(f"[SUCCESS] {r['up']} file(s) copied ({format_size(r['bytes'])}); {r['files']} in the folder, all in your account now. "
+          "Nothing was deleted here.")
+    return 0
+
+
 def cmd_ls(args):
     if load_settings().get("e2e"):
         return _e2e_ls(load_settings(), args)
@@ -1255,6 +1396,10 @@ def main(argv, verbose=False):
     p = sub.add_parser("put", help="Upload a file or folder to the host")
     p.add_argument("local")
     p.add_argument("remote", nargs="?", default="/", help="Folder on the host to put it in (default: the top)")
+    p = sub.add_parser("import", help="Copy a whole folder (a DDrive's drive letter, say) into your end-to-end encrypted "
+                                      "account; run again to carry on")
+    p.add_argument("local", help="The folder on this computer, e.g. Z:\\")
+    p.add_argument("remote", nargs="?", default="/", help="Folder in the account to copy it into (default: the top)")
     sub.add_parser("disconnect", help="Forget the host and the sign-in")
     p = sub.add_parser("autostart", help="Show the drive by itself when this computer starts: on, off or status")
     p.add_argument("state", nargs="?", choices=["on", "off", "status"])
@@ -1270,7 +1415,7 @@ def main(argv, verbose=False):
         return 0
     try:
         return {"connect": cmd_connect, "mount": cmd_mount, "stop": cmd_stop, "status": cmd_status, "ls": cmd_ls,
-                "get": cmd_get, "put": cmd_put, "disconnect": cmd_disconnect, "autostart": cmd_autostart,
+                "get": cmd_get, "put": cmd_put, "import": cmd_import, "disconnect": cmd_disconnect, "autostart": cmd_autostart,
                 "sync": cmd_sync, "menu": cmd_menu}[args.action](args)
     except HostError as e:
         print(f"[ERROR] {e}")

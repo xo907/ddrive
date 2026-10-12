@@ -641,10 +641,11 @@ Settings) decides who may make one:
   too: your computer passes those messages on unread. `lite ls`, `get` and `put` work as well; a
   drive letter doesn't yet. The [phone app](#ddrive-lite-for-android) does the same: connected with
   the account's words it backs up the phone's folders sealed.
-- **What it doesn't have yet**, because each of these needs work done on the person's own device that
-  your computer used to do with the files in the clear: file requests, and a drive letter through
-  DDrive Lite. Their pages aren't shown for these accounts. And never: Settings, Log, Health
-  and anything else that manages the drive or the computer.
+- **On their computers**: `lite mount` shows the account as a drive letter or folder (opened and
+  sealed on that computer), file requests let others send them files sealed in the sender's browser,
+  and `lite import <folder>` copies a whole folder in (the drive letter of a DDrive, to move in).
+- **What it doesn't have**: Messages on the phone app (the Discord logger runs on a computer). And
+  never: Settings, Log, Health and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
   computer, which keeps their keys, so they trust you with them; they open the full dashboard). The
   sign-in page tries a typed phrase as an end-to-end account first, without sending it, and only sends
