@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import posixpath
 import socket
 import struct
 import threading
@@ -47,6 +48,7 @@ class FakeAccount:
     calls = 0
     gone = False                 # Discord no longer has the attachments
     refreshed = []
+    downloaded = []              # every address something was fetched from
 
     def __init__(self, token):
         self.token = token
@@ -79,6 +81,7 @@ class FakeAccount:
 
     def download(self, url):
         type(self).downloads += 1
+        self.downloaded.append(url)
         if self.gone or "ex=1&" in url:                               # removed, or a link that ran out
             raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
         if "format=webp&width=400" in url:                            # the small preview Discord makes
@@ -439,7 +442,12 @@ class ChatWebTest(helpers.DriveTest):
     def attachments(self):
         """Shown and opened from Discord while it is there; from the copy on the drive when it is gone."""
         pic, doc = self.get("/api/chat/messages?files=1&source=live")["messages"][0]["attachments"]
-        self.assertEqual((pic["preview"], doc.get("preview")), ("/Discord/Direct messages/Anna [500]/files/previews/9820.webp", None))
+        # only the attachments themselves are kept: no small copy of a picture is made or downloaded
+        files = "/Discord/Direct messages/Anna [500]/files"
+        self.assertEqual((pic.get("preview"), doc.get("preview")), (None, None))
+        self.assertEqual(sorted(c["name"] for c in self.d.index.children(self.d.index.resolve(files)["id"])),
+                         sorted(posixpath.basename(a["path"]) for a in (pic, doc)))
+        self.assertFalse(any("width=400" in u for u in FakeAccount.downloaded))
         at = "id=82&a=" + pic["id"]
         self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[2], b"\x89PNG from Discord")
         status, headers, _ = self.req("GET", "/api/chat/open?" + at)
@@ -448,8 +456,26 @@ class ChatWebTest(helpers.DriveTest):
         self.assertEqual(self.req("GET", "/api/chat/preview?id=82&a=" + doc["id"])[0], 404)       # not a picture
 
         FakeAccount.gone = True
-        helpers.DriveTest.write(self.d, pic["preview"], b"\x89PNG kept on the drive")
+        self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[0], 404)      # gone from Discord: no picture of it here
+        # one that a version before 2.19.0 kept is still shown...
+        kept = f"{files}/previews/{pic['id']}.webp"
+        helpers.DriveTest.write(self.d, kept, b"\x89PNG kept on the drive")
+        helpers.DriveTest.write(self.d, "/Discord/Servers/Book Club [300]/general [400]/files/previews/1.webp", b"\x89PNG another")
+        helpers.DriveTest.write(self.d, "/Discord/Servers/Book Club [300]/general [400]/files/1-previews.png", b"an attachment")
+        store = self.d.chat.store
+        row = json.loads(store.get("82")["attachments"])
+        row[0]["preview"] = kept
+        store._run("UPDATE messages SET attachments=? WHERE id='82'", (json.dumps(row),))
         self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[2], b"\x89PNG kept on the drive")
+        # ...until all of them are removed, from every conversation, for good; the attachments stay
+        self.assertEqual(self.post("/api/chat/previews/clear", {})[1], {"ok": True, "files": 2, "bytes": 34})
+        self.assertIsNone(self.d.index.resolve(kept))
+        self.assertIsNone(self.d.index.resolve(f"{files}/previews"))
+        self.assertIsNone(self.d.index.resolve("/Discord/Servers/Book Club [300]/general [400]/files/previews"))
+        self.assertIsNotNone(self.d.index.resolve("/Discord/Servers/Book Club [300]/general [400]/files/1-previews.png"))
+        self.assertIsNotNone(self.d.index.resolve(pic["path"]))
+        self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[0], 404)
+        self.assertEqual(self.post("/api/chat/previews/clear", {})[1]["files"], 0)
         status, headers, _ = self.req("GET", "/api/chat/open?" + at)
         self.assertEqual((status, headers["Location"]), (303, "/api/file?path=" + urllib.parse.quote(pic["path"])))
         self.assertEqual(self.req("GET", headers["Location"])[2], b"hello")

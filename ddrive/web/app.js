@@ -4002,6 +4002,14 @@ function drawSaved(body) {
           const w = await attempt(() => api("/api/chat/rebuild", {}));
           if (w) { toast(`Read ${plural(w.files, "file")}`); load(); }
         } },
+        { label: "Delete saved previews", icon: "trash", run: async () => {
+          if (!await ask({ title: "Delete every saved preview?", ok: "Delete them", danger: true,
+                           text: `Earlier versions kept a small copy of each picture and video next to the attachment itself (in “files/previews” of every conversation in ${chat.folder}). `
+                                 + "This removes all of those small copies, everywhere on the drive, for good. The attachments themselves and the messages stay. No new previews are saved any more." })) return;
+          toast("Deleting the previews…");
+          const w = await attempt(() => api("/api/chat/previews/clear", {}));
+          if (w) { toast(w.files ? `${plural(w.files, "preview")} deleted, ${size(w.bytes)} freed` : "There are no saved previews"); load(); }
+        } },
       ], r.right - 220, r.bottom + 4, "Messages");
     } }, icon("more")));
   body.replaceChildren(h("div", { class: "ch-filters" }, search, place),

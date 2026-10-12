@@ -731,6 +731,13 @@ class VaultSyncTest(VaultTest):
         fake.gone = True                                               # Discord no longer has it: the sealed copy in the account
         self.assertEqual(ask("GET", "chat/open", {"id": "2", "a": "920"})["redirect"],
                          "/api/file?path=/Discord/Direct%20messages/Anna%20%5B500%5D/files/920-notes.txt")
+        # a small copy of a picture that a version before 2.19.0 kept is removed; the attachment stays
+        old = self.new_device()
+        old.mkdir("/Discord/Direct messages/Anna [500]/files/previews")
+        old.put("/Discord/Direct messages/Anna [500]/files/previews/920.webp", b"small")
+        self.assertEqual(ask("POST", "chat/previews/clear", body={})["json"], {"ok": True, "files": 1, "bytes": 5})
+        self.assertEqual(ask("POST", "chat/previews/clear", body={})["json"]["files"], 0)
+        self.assertIsNone(old.sync().resolve("/Discord/Direct messages/Anna [500]/files/previews/920.webp"))
         # the logger records what arrives, with what an edited message said before
         self.assertEqual(ask("POST", "chat/logger", body={"on": True})["status"], 200)
         gw = test_chat.FakeGateway.last

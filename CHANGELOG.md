@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.19.0 (2026-10-12)
+
+- **Discord messages: only the attachment itself is saved.** Until now a small preview of every
+  picture and video was downloaded and stored next to it (in `files/previews`), so each one was on
+  the drive twice. No preview is made or downloaded any more: an attachment is saved once, as it was
+  sent.
+- **Delete saved previews.** Messages → the ⋯ button → "Delete saved previews" removes every preview
+  that was stored before, in all conversations on the drive at once, for good (they don't go to
+  Deleted). The attachments and the messages stay. It works for end-to-end encrypted accounts too,
+  where the account's own computer does it.
+- In the Messages list a picture is still shown small while Discord has it: that comes straight from
+  Discord and nothing of it is kept. One that is gone from Discord has no small picture any more; it
+  still opens from the copy on the drive.
+
 ## 2.18.2 (2026-10-12)
 
 - **"Manage the drive" has a menu of its own.** For an admin the left (on a phone: bottom) menu was

@@ -728,6 +728,13 @@ class ChatHandlers:
         read, _ = self.chat.store.rebuild()
         self._json({"ok": True, "files": read})
 
+    def _post_api_chat_previews_clear(self):
+        """Remove every saved preview of an attachment, in all conversations (chatstore.clear_previews)."""
+        self._chat_guard()
+        self._body_json()
+        count, size = self.chat.store.clear_previews()
+        self._json({"ok": True, "files": count, "bytes": size})
+
     def _get_api_chat_messages(self):
         self._chat_guard()
         found = self.chat.store.messages(self._query())

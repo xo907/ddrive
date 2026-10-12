@@ -153,6 +153,12 @@ class AccountAsDrive:
             self.v.sync()
             self._synced = time.monotonic()
 
+    def sync_now(self):
+        """Bring it up to date right now: before something that has to see all there is."""
+        with self.lock:
+            self.v.sync()
+            self._synced = time.monotonic()
+
     def save_token(self, token):
         """The Discord token stays on this computer: in a file only this user can read."""
         if not token:

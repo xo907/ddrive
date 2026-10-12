@@ -844,8 +844,11 @@ one device only.
 The logger writes what it recorded to the drive within half a minute (until then a message is marked
 "text not on the drive yet"), and joins a day's small files into one the day after. Attachments are
 uploaded right away and are not kept on the computer. The dashboard shows and opens them from Discord
-itself while they are still there (it checks first); the copy on your drive, and a small preview of
-each picture and video, is the backup that is used once Discord no longer has them. Other
+itself while they are still there (it checks first); the copy on your drive is the backup that is used
+once Discord no longer has them. Only the attachment itself is saved, as it was sent: no smaller copy
+of a picture or video is made or downloaded next to it. (Versions before 2.19.0 kept one, in a
+`previews` folder inside each conversation's `files`. Messages → ⋯ → **Delete saved previews** removes
+all of those, from every conversation, for good.) Other
 devices read these files, so Messages works on all of them. Deleting a file removes its messages
 from the lists. `/Discord` can be [password-locked](#password-locked-folders): recording carries on,
 and the messages are hidden in the dashboard until you unlock it.

@@ -17,8 +17,10 @@ through the messages quickly. It holds text only and is only a copy: it is fille
 the drive, and what is in it but not on the drive yet (file_id 0) is written there by the next flush,
 within half a minute. Attachments are never kept on the computer: they go through the drive's upload
 folder and are gone from it once uploaded. The dashboard shows and opens them from Discord itself
-while they are still there; the copy on the drive (the file, and for pictures and videos a small
-preview in files/previews/) is the backup for when Discord no longer has them.
+while they are still there; the copy on the drive is the backup for when Discord no longer has them.
+Only the attachment itself is kept, as it was sent: no smaller picture of it is made or downloaded.
+(Versions before 2.19.0 also kept one of each picture and video, in files/previews/: those are still
+shown where they exist, and clear_previews removes them all.)
 """
 
 import contextlib
@@ -295,7 +297,6 @@ class ChatStore:
                         with contextlib.closing(api.download(a["url"])) as src:
                             self.d.fs.put_file(path, src, stop=stop.is_set if stop is not None else None)
                         saved += 1
-                        self._save_preview(api, a, posixpath.dirname(path))
                 a["path"] = path
             except InterruptedError:
                 raise
@@ -303,20 +304,47 @@ class ChatStore:
                 log.debug("attachment %s of message %s: %s", a.get("filename"), m.get("id"), e)
         return saved
 
-    def _save_preview(self, api, a, folder):
-        """Keep a small picture of an image or video attachment (Discord makes it) on the drive too, to
-        show what it was once Discord no longer has it."""
-        if not is_media(a) or not a.get("url"):
-            return
-        try:
-            with contextlib.closing(api.download(preview_url(a["url"]))) as src:
-                data = src.read(PREVIEW_MAX + 1)
-            if len(data) <= PREVIEW_MAX and picture_type(data):
-                path = f"{folder}/previews/{a.get('id')}.webp"
-                self._write(path, data)
-                a["preview"] = path
-        except Exception as e:
-            log.debug("preview of %s: %s", a.get("filename"), e)
+    def clear_previews(self):
+        """Remove, for good, every small picture of an attachment that versions before 2.19.0 kept next
+        to the attachment itself (.../files/previews/), in every conversation on the drive. The
+        attachments stay. Returns (how many files, how many bytes)."""
+        idx, fs = self.d.index, self.d.fs
+        purge = getattr(idx, "purge_node", None)         # (an end-to-end account's unlink is for good already)
+        count = size = 0
+        sync_now = getattr(self.d, "sync_now", None)     # (an end-to-end account: what its other devices wrote too)
+        if sync_now is not None:
+            sync_now()
+        with self.io, self._everything():
+            root = idx.resolve(FOLDER)
+            todo = [(root, FOLDER)] if root is not None and root["is_dir"] else []
+            while todo:
+                node, path = todo.pop()
+                for c in idx.children(node["id"]):
+                    cpath = f"{path}/{c['name']}"
+                    if not c["is_dir"]:
+                        continue
+                    if c["name"] != "previews" or posixpath.basename(path) != "files":
+                        todo.append((c, cpath))
+                        continue
+                    for p in idx.children(c["id"]):
+                        if p["is_dir"]:
+                            continue
+                        try:
+                            if purge is not None:
+                                purge(p["id"])
+                            else:
+                                fs.unlink(f"{cpath}/{p['name']}")
+                            count += 1
+                            size += p["size"] or 0
+                        except Exception as e:
+                            log.debug("preview %s/%s could not be removed: %s", cpath, p["name"], e)
+                    try:
+                        fs.rmdir(cpath)                  # (left where a drive has no such thing, or it isn't empty)
+                    except Exception:
+                        pass
+        if count:
+            log.info("Removed %d saved preview(s) of Discord attachments (%d bytes).", count, size)
+        return count, size
 
     # ------------------------------------------------------------ onto the drive
     def _makedirs(self, path):
