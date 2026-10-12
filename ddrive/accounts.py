@@ -540,6 +540,18 @@ class Accounts:
             fresh = False
         if not fresh:
             raise AccountError("That took too long. Start again to get a new phrase.")
+        return self._make(key, invite, addr)
+
+    def create_e2e(self, auth: bytes, invite="", addr=None):
+        """Make an end-to-end encrypted account (vault.py). Its 24 words were made on the device and
+        stay there; `auth` is what the device made from them to sign in with. To this computer that
+        is the account's key: what it stores for the account is sealed once more with it, but
+        everything it is handed was sealed on the device first, with keys it never gets."""
+        if len(auth) != 32:
+            raise AccountError("That isn't a sign-in key.")
+        return self._make(auth, invite, addr, e2e=True)
+
+    def _make(self, key, invite, addr, e2e=False):
         aid = account_id(key)
         with self._lock:
             if aid in self._recs:
@@ -548,6 +560,8 @@ class Accounts:
             code = str(invite or "").strip()
             rec = {"id": aid, "check": _check(key), "created": time.time(), "seen": time.time(),
                    "invite": code if code in self._invites else ""}
+            if e2e:
+                rec["e2e"] = True
             self._recs[aid] = rec
             self._secrets[aid] = {"key": key.hex(), "token": ""}
             if code in self._invites:
@@ -568,7 +582,8 @@ class Accounts:
                 self._save()
             shutil.rmtree(self.folder(aid), ignore_errors=True)
             raise AccountError("The account's storage could not be set up right now. Try again in a moment.") from None
-        log.info("Account %s was created%s.", aid, " with an invite" if rec["invite"] else "")
+        log.info("Account %s was created%s%s.", aid, " with an invite" if rec["invite"] else "",
+                 " (end-to-end encrypted)" if e2e else "")
         return rec
 
     # ------------------------------------------------------------ signing in

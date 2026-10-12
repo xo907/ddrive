@@ -62,7 +62,7 @@ class HostClient:
     """The host's dashboard, as a program sees it. Keeps one connection per thread and signs in again
     by itself when the session has run out."""
 
-    def __init__(self, address, phrase="", cookie="", timeout=60.0):
+    def __init__(self, address, phrase="", cookie="", timeout=60.0, auth=""):
         address = address.strip().rstrip("/")
         u = urllib.parse.urlsplit(address if "://" in address else "http://" + address)
         if u.scheme not in ("http", "https") or not u.hostname:
@@ -71,6 +71,7 @@ class HostClient:
         self.hostname, self.port = u.hostname, u.port or (443 if self.secure else 80)
         self.address = f"{u.scheme}://{u.netloc}"
         self.phrase, self.cookie = phrase, cookie
+        self.auth = auth                     # an end-to-end encrypted account signs in with this (vault.py); its words stay here
         self.timeout = timeout
         self._local = threading.local()
         self._login_lock = threading.Lock()
@@ -100,7 +101,7 @@ class HostClient:
             if method == "POST":
                 h["X-DD"] = "1"
             resp = self._send(method, path, body, h)
-            if resp.status == 401 and attempt == 0 and self.phrase:
+            if resp.status == 401 and attempt == 0 and (self.phrase or self.auth):
                 resp.read()
                 self.login(stale=h["Cookie"])
                 if hasattr(body, "seek"):
@@ -121,7 +122,7 @@ class HostClient:
         with self._login_lock:
             if stale is not None and stale != f"dd_session={self.cookie}":
                 return                       # another thread signed in meanwhile
-            form = urllib.parse.urlencode({"phrase": self.phrase})
+            form = urllib.parse.urlencode({"auth": self.auth} if self.auth else {"phrase": self.phrase})
             resp = self._send("POST", "/login", form, {"Content-Type": "application/x-www-form-urlencoded"})
             resp.read()
             cookie = ""

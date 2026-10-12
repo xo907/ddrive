@@ -75,9 +75,19 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
     lite/sync/hello lite/sync/poll lite/sync/report lite/sync/answer lite/sync/bye""".split())
 
 
-def account_may(method, route):
+# An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
+# the above it gets next to nothing: what it could ask for would need the files in the clear.
+E2E_GET = frozenset("status account changelog vault vault/log vault/object".split())
+E2E_POST = frozenset("logout account/delete vault/log vault/snapshot vault/object vault/delete".split())
+
+
+def account_may(method, route, e2e=False):
     name = route[5:].strip("/") if route.startswith("/api/") else None
     if name is None:
+        return False
+    if e2e:
+        return name in (E2E_GET if method == "GET" else E2E_POST)
+    if name == "vault" or name.startswith("vault/"):
         return False
     if name == "chat" or name.startswith("chat/"):          # their own Discord messages
         return True
@@ -371,6 +381,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     # account's share links), from that account's own drive: `drive` and `app` are then the account's.
     _acct = None
     _space = None
+    _e2e = False                 # the account being served is end-to-end encrypted (vault.py)
 
     @property
     def app(self):
@@ -685,9 +696,12 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             if method == "POST" and self.headers.get("X-DD") != "1":
                 return self._error(403, "missing X-DD header")
             if who:                              # an account: its own drive, and only what accounts may do
-                if not account_may(method, route):
-                    return self._error(403, "Only the owner of this drive can do that.")
+                e2e = bool((self.server.app.accounts.active(who) or {}).get("e2e"))
+                if not account_may(method, route, e2e):
+                    return self._error(403, "An end-to-end encrypted account's files are only opened on your own device."
+                                       if e2e else "Only the owner of this drive can do that.")
                 self._enter(who)
+                self._e2e = e2e
             # Pages that refresh by themselves don't count as using an unlocked folder.
             self.drive.fs.scope.unlocked = self.app.open_locks(self._cookie(), touch=route not in _BACKGROUND_ROUTES)
             fn = getattr(self, f"_{method.lower()}_{route.strip('/').replace('/', '_').replace('-', '_')}", None)
@@ -738,6 +752,17 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         form = self._form()
         if wait:
             return self._signin(f"Too many failed tries. Try again in {int(wait) + 1} seconds.", 429)
+        if form.get("auth"):
+            # An end-to-end encrypted account: its words stayed on the device, this is what it made from them.
+            try:
+                rec = app.accounts.find(bytes.fromhex(form["auth"]))
+            except ValueError:
+                rec = None
+            ok = rec is not None and bool(rec.get("e2e"))
+            app.note_login(addr, ok)
+            if not ok:
+                return self._signin("Nobody here has an end-to-end encrypted account with those 24 words.", 401)
+            return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
         try:
             key = words.phrase_to_key(form.get("phrase") or "")
         except ValueError as e:
@@ -776,6 +801,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if wait:
             return page(_signup_page(mode, invite, f"Too many tries. Try again in {int(wait) + 1} seconds."), 429)
         try:
+            if form.get("step") == "e2e":            # made in the browser: the words never came here
+                try:
+                    auth = bytes.fromhex(form.get("auth") or "")
+                except ValueError:
+                    auth = b""
+                rec = accounts.create_e2e(auth, invite, addr)
+                return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
             if form.get("step") == "confirm":
                 rec = accounts.create(form.get("phrase"), form.get("ticket"), invite, addr)
                 return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
@@ -825,7 +857,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         st = d.index.stats(max_age=2)
         if self._acct is not None:               # an account sees its own storage, nothing of the computer
             return self._json({
-                "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True,
+                "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True, "e2e": self._e2e,
                 "stats": st, "uploads": self._uploads(), "downloads": len(d.cache.active), "queued": len(d.uploader._pending),
                 "quota": {"bytes": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]},
                 "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
@@ -1311,6 +1343,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _post_api_upload_part(self):
         path, size, offset, mtime = self._part_args()
+        self._take_part(path, size, offset, mtime)
+
+    def _take_part(self, path, size, offset, mtime):
+        """One part of a file that is sent in parts; answers how far it is, and "done" with the last one."""
         n = int(self.headers.get("Content-Length") or 0)
         if n > PART_MAX or offset + n > size:
             raise ApiError(413 if n > PART_MAX else 400, "that part is too big")
@@ -1365,6 +1401,152 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         node = self.drive.index.resolve(path)
         self._json({"ok": True, "done": True, "offset": size, "path": path, "size": size,
                     "mtime": node["mtime"] if node else None})
+
+    # ---------- end-to-end encrypted accounts (vault.py)
+    # To this computer such an account is sealed objects under random names (/o/..) and a numbered
+    # sequence of sealed changes to a list it can't read (/log/..), all of it files of the account's
+    # drive like any others, so that they are stored on Discord, repaired and counted the same way.
+    _vault_lock = threading.Lock()
+
+    def _vault(self):
+        if not self._e2e:
+            raise ApiError(403, "This is for end-to-end encrypted accounts.")
+        return self.drive
+
+    @staticmethod
+    def _object_path(oid):
+        oid = str(oid or "")
+        if not re.fullmatch(r"[0-9a-f]{32}", oid):
+            raise ApiError(400, "bad object id")
+        return f"/o/{oid[:2]}/{oid}"
+
+    def _vault_state(self, d):
+        """(the number of the last change, where the last sealed whole list is or None)."""
+        snap = None
+        node = d.index.resolve("/snap")
+        if node is not None and not node["is_dir"]:
+            try:
+                snap = json.loads(d.fs.read_file(node["id"], 0, node["size"]))
+            except ValueError:
+                snap = None
+        last = int(snap["seq"]) if snap else 0
+        folder = d.index.resolve("/log")
+        if folder is not None:
+            for c in d.index.children(folder["id"]):
+                if c["name"].isdigit():
+                    last = max(last, int(c["name"]))
+        return last, snap
+
+    def _vault_write(self, d, path, data):
+        fh = d.fs.create(path, 0o644, wait=False)
+        try:
+            d.fs.write(path, data, 0, fh)
+        finally:
+            d.fs.release(path, fh)
+
+    def _get_api_vault(self):
+        d = self._vault()
+        last, snap = self._vault_state(d)
+        st = d.index.stats(max_age=2)
+        self._json({"seq": last, "snapshot": snap, "quota": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]})
+
+    def _get_api_vault_log(self):
+        """The sealed changes after number `after`, in order (and where the last sealed whole list is)."""
+        d = self._vault()
+        try:
+            after = int(self._query().get("after") or 0)
+        except ValueError:
+            after = 0
+        last, snap = self._vault_state(d)
+        batches, size, more = [], 0, False
+        folder = d.index.resolve("/log")
+        if folder is not None:
+            for c in sorted((c for c in d.index.children(folder["id"]) if c["name"].isdigit()), key=lambda c: int(c["name"])):
+                if int(c["name"]) <= after:
+                    continue
+                if size > 8 * 1024 * 1024:
+                    more = True
+                    break
+                data = d.fs.read_file(c["id"], 0, c["size"])
+                size += len(data)
+                batches.append([int(c["name"]), base64.b64encode(data).decode("ascii")])
+        self._json({"seq": last, "snapshot": snap, "batches": batches, "more": more})
+
+    def _post_api_vault_log(self):
+        """Take a batch of sealed changes and give it the next number."""
+        d = self._vault()
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= 4 * 1024 * 1024:
+            raise ApiError(413 if n else 400, "that batch of changes is too big" if n else "nothing to add")
+        data = self.rfile.read(n)
+        if len(data) != n:
+            raise ApiError(400, "upload was cut off")
+        with self._vault_lock:
+            seq = self._vault_state(d)[0] + 1
+            d.index.makedirs("/log")
+            self._vault_write(d, f"/log/{seq:012d}", data)
+        self._json({"ok": True, "seq": seq})
+
+    def _post_api_vault_snapshot(self):
+        """The list as it was after change `seq` is in object `object` now: the changes up to it can go."""
+        d = self._vault()
+        body = self._body_json()
+        try:
+            seq, size = int(body.get("seq")), int(body.get("size"))
+        except (TypeError, ValueError):
+            raise ApiError(400, "bad snapshot") from None
+        path = self._object_path(body.get("object"))
+        if d.index.resolve(path) is None:
+            raise ApiError(404, "that object isn't here")
+        with self._vault_lock:
+            last, old = self._vault_state(d)
+            if seq > last or (old and seq < int(old["seq"])):
+                raise ApiError(409, "that is not where the list is")
+            self._vault_write(d, "/snap", json.dumps({"seq": seq, "object": body["object"], "size": size}).encode("utf-8"))
+            folder = d.index.resolve("/log")
+            for c in (d.index.children(folder["id"]) if folder is not None else []):
+                if c["name"].isdigit() and int(c["name"]) <= seq:
+                    d.fs.unlink(f"/log/{c['name']}")
+            if old and old.get("object") != body["object"]:
+                try:
+                    d.fs.unlink(self._object_path(old["object"]))
+                except (OSError, ApiError):
+                    pass
+        self._json({"ok": True})
+
+    def _get_api_vault_object(self):
+        d = self._vault()
+        path = self._object_path(self._query().get("id"))
+        node = d.index.resolve(path)
+        if node is None or node["is_dir"]:
+            raise ApiError(404, "that object isn't here")
+        self._stream(node, download=True)
+
+    def _post_api_vault_object(self):
+        """A sealed object, sent in parts (as files are, see above): ?id=&size=&offset=."""
+        d = self._vault()
+        q = self._query()
+        path = self._object_path(q.get("id"))
+        try:
+            size, offset = int(q.get("size") or 0), int(q.get("offset") or 0)
+        except ValueError:
+            raise ApiError(400, "bad size or offset") from None
+        if size < 0 or offset < 0:
+            raise ApiError(400, "bad size or offset")
+        d.index.makedirs(posixpath.dirname(path))
+        self._take_part(path, size, offset, None)
+
+    def _post_api_vault_delete(self):
+        d = self._vault()
+        ids = self._body_json().get("ids") or []
+        gone = 0
+        for oid in ids[:10000]:
+            try:
+                d.fs.unlink(self._object_path(oid))
+                gone += 1
+            except OSError:
+                pass
+        self._json({"ok": True, "deleted": gone})
 
     def _get_api_zip(self):
         q = self._query()
