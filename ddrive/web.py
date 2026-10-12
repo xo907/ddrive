@@ -25,6 +25,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import secrets
 import socket
 import threading
 import time
@@ -78,8 +79,9 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("status account changelog vault vault/log vault/object vault/pending vault/sync".split())
+E2E_GET = frozenset("status account changelog vault vault/log vault/object vault/pending vault/sync vault/shares".split())
 E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
+    vault/share vault/share/update vault/share/revoke
     vault/sync/jobs vault/sync/tell vault/sync/ask vault/sync/forget
     vault/sync/hello vault/sync/poll vault/sync/report vault/sync/answer vault/sync/bye""".split())
 
@@ -690,12 +692,14 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._passkey_login()
             if route.startswith("/s/") and method in ("GET", "POST"):
                 return self._shared(route[3:], method)
+            if route.startswith("/v/") and method == "GET":
+                return self._vshared(route[3:])
             if method == "GET" and route == "/wordlist.txt":       # the 2048 words a phrase is written in: not a secret
                 with open(os.path.join(os.path.dirname(STATIC), "wordlist.txt"), "rb") as f:
                     return self._send(200, f.read(), "text/plain; charset=utf-8", {"Cache-Control": "public, max-age=86400"})
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
                                              "/manifest.webmanifest", "/share-upload.js", "/signin.js",
-                                             "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js"):
+                                             "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/vshare.js", "/vshare.css"):
                 if route in ("/", "/index.html") and self._who() is None:
                     return self._signin()
                 # An end-to-end encrypted account gets the same dashboard as everybody: e2e-api.js, which it
@@ -1547,6 +1551,141 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         d.index.makedirs(posixpath.dirname(path))
         self._take_part(path, size, offset, None)
 
+    # ------------------------------------------------------------ end-to-end accounts: share links
+    # The link carries the key, after the # (the part of an address a browser sends nowhere). What the host
+    # keeps of a link is which sealed objects it may hand out and a sealed description of them it can't
+    # read; a password, if there is one, is part of the key, so it never comes here either.
+    def _vshare_data(self, own):
+        node = self.drive.index.resolve(f"/sh/{own}")
+        if node is None or node["is_dir"]:
+            return None
+        cache = self.app.__dict__.setdefault("_vshares", {})
+        key = (node["mtime"], node["size"], node["version"])
+        if cache.get(own, (None,))[0] != key:
+            try:
+                data = json.loads(self.drive.fs.read_file(node["id"], 0, node["size"] or 0))
+            except ValueError:
+                return None
+            cache[own] = (key, data)
+        return cache[own][1]
+
+    def _vshare_all(self):
+        """{link id: (record, what is kept for it)} for the account's links that still work."""
+        out = {}
+        for sid, rec in self.app.shares.all().items():
+            if rec.get("vault"):
+                data = self._vshare_data(sid.rpartition(".")[2])
+                if data is not None:
+                    out[sid] = (rec, data)
+        return out
+
+    def _vshare_objects(self):
+        return {o for _, data in self._vshare_all().values() for o in data.get("objs") or []}
+
+    def _vshare_body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 24 * 1024 * 1024:
+            raise ApiError(413, "That is too much for one link. Share a smaller folder.")
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            raise ApiError(400, "invalid JSON") from None
+        return body
+
+    def _vshare_keep(self, own, body, old=None):
+        data = dict(old or {})
+        if "objs" in body:
+            objs = body.get("objs")
+            if not isinstance(objs, list) or len(objs) > 50000 or not all(isinstance(o, str) and re.fullmatch(r"[0-9a-f]{32}", o) for o in objs):
+                raise ApiError(400, "bad objects")
+            data["objs"] = objs
+        for key in ("sealed", "own"):
+            if key in body:
+                if not isinstance(body[key], str) or not re.fullmatch(r"[A-Za-z0-9+/=]*", body[key]):
+                    raise ApiError(400, "bad sealed part")
+                data[key] = body[key]
+        if not data.get("sealed") or "objs" not in data:
+            raise ApiError(400, "missing sealed part")
+        self._put_file(f"/sh/{own}", json.dumps(data).encode(), save="now")
+
+    def _vshare_json(self, sid, rec, data):
+        return {"id": sid, "created": rec.get("c"), "expires": rec.get("e"), "password": bool(rec.get("pwc")),
+                "views": rec.get("v", 0), "own": data.get("own", "")}
+
+    def _post_api_vault_share(self):
+        self._vault()
+        body = self._vshare_body()
+        from .shares import _expiry
+        own = secrets.token_urlsafe(12).replace("-", "a").replace("_", "b")
+        self._vshare_keep(own, body)
+        rec = {"vault": True, "c": time.time(), "e": _expiry(body.get("hours", 24 * 7)), "pwc": bool(body.get("password"))}
+        self.drive.index.share_put(own, rec)
+        sid = self.app.shares.prefix + own
+        self._json(dict(self._vshare_json(sid, rec, {"own": body.get("own", "")}), base=self.public_base()))
+
+    def _get_api_vault_shares(self):
+        self._vault()
+        items = [self._vshare_json(sid, rec, data) for sid, (rec, data) in self._vshare_all().items()]
+        items.sort(key=lambda x: -(x["created"] or 0))
+        self._json({"items": items, "base": self.public_base()})
+
+    def _post_api_vault_share_update(self):
+        self._vault()
+        body = self._vshare_body()
+        sid = str(body.get("id") or "")
+        got = self._vshare_all().get(sid)
+        if got is None:
+            raise ApiError(404, "That link no longer exists")
+        own = sid.rpartition(".")[2]
+        rec = self.drive.index.share_get(own)
+        if "hours" in body:
+            from .shares import _expiry
+            rec["e"] = _expiry(body["hours"])
+        if "password" in body:
+            rec["pwc"] = bool(body["password"])
+        if any(k in body for k in ("objs", "sealed", "own")):
+            self._vshare_keep(own, body, got[1])
+        self.drive.index.share_put(own, rec)
+        self._json(dict(self._vshare_json(sid, dict(rec, v=got[0].get("v", 0)), self._vshare_data(own) or {}), base=self.public_base()))
+
+    def _post_api_vault_share_revoke(self):
+        self._vault()
+        sid = str(self._body_json().get("id") or "")
+        got = self._vshare_all().get(sid)
+        if got is None or not self.app.shares.revoke(sid):
+            raise ApiError(404, "That link no longer exists")
+        try:
+            self.drive.fs.unlink(f"/sh/{sid.rpartition('.')[2]}")
+        except OSError:
+            pass
+        self._json({"ok": True, "objs": got[1].get("objs") or []})       # (for the browser to tidy what nothing uses any more)
+
+    def _vshared(self, rest):
+        """What somebody with a link gets: the page that opens it, the sealed description, sealed objects."""
+        sid, _, tail = rest.partition("/")
+        got = None
+        if re.fullmatch(r"[\w-]+\.[\w-]+", sid):
+            try:
+                self._enter(sid.partition(".")[0])
+                got = self._vshare_all().get(sid)
+            except AccountError:
+                got = None
+        if tail == "":
+            path = os.path.join(STATIC, "vshare.html")
+            with open(path, "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8", _VSHARE_HEADERS)
+        if got is None:
+            return self._error(404, "This link has expired")
+        rec, data = got
+        if tail == "m":
+            self.app.shares.viewed(sid)
+            return self._json({"sealed": data["sealed"], "password": bool(rec.get("pwc")), "expires": rec.get("e")})
+        if tail.startswith("o/") and tail[2:] in (data.get("objs") or []):
+            node = self.drive.index.resolve(self._object_path(tail[2:]))
+            if node is not None and not node["is_dir"]:
+                return self._stream(node, download=True)
+        return self._error(404, "not found")
+
     def _get_api_vault_pending(self):
         """The objects that are here but not yet stored on Discord (a device that moves files off itself
         waits for them to be)."""
@@ -1636,7 +1775,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         d = self._vault()
         ids = self._body_json().get("ids") or []
         gone = 0
+        shared = self._vshare_objects()          # what a link still hands out stays until the link is gone
         for oid in ids[:10000]:
+            if oid in shared:
+                continue
             try:
                 d.fs.unlink(self._object_path(oid))
                 gone += 1
@@ -2550,7 +2692,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             except AccountError:
                 gone = True
         rec = None if gone else self.app.shares.get(sid)
-        root = self.drive.index.get_by_uid(rec["u"]) if rec else None
+        root = self.drive.index.get_by_uid(rec["u"]) if rec and rec.get("u") else None
         if root is None:
             return self._send(404, _share_message("This link has expired", "Ask for a new one.").encode(),
                               "text/html; charset=utf-8", _SHARE_HEADERS)
@@ -2805,6 +2947,14 @@ def _kind(name):
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     return next((k for k, exts in _KINDS.items() if ext in exts.split()), "file")
 
+
+_VSHARE_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src blob:; "
+                               "frame-src blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex, nofollow",
+    "Cache-Control": "no-store",
+}
 
 _SHARE_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; media-src 'self'; "

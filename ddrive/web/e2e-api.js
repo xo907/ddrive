@@ -214,7 +214,7 @@
       const ds = await devices().catch(() => []), jobs = ds.flatMap((d) => d.jobs);
       return { host: "", mount: "", version: (E.status || {}).version || "", stats: stats(), starred: starred().slice(0, 12), recent: recent(8), history: activity().slice(0, 8),
                sync: { jobs: jobs.length, running: jobs.filter((j) => j.status.state === "running").length, problems: jobs.filter((j) => j.status.state === "error").length },
-               devices: Math.max(1, ds.length), shares: 0, dav: false };
+               devices: Math.max(1, ds.length), shares: await DDV.call("/api/vault/shares").then((r) => r.items.length, () => 0), dav: false };
     },
     async list(q) {
       const path = clean(q.get("path")), n = at(path, "dir");
@@ -274,7 +274,6 @@
                largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: 0, saved: {},
                deleted: { count: [...v.nodes.values()].filter((n) => n.trash).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
-    async shares() { return { items: [] }; },
     async locks() { return { count: 0, open: [], minutes: 0, mount: "", host: "" }; },
     async sync() {
       return { jobs: [], running: null, can_edit: false, local: false, remote_edit: false, host: "", mount: "", windows: false, home: "", account: true,
@@ -839,6 +838,69 @@
     return true;
   }
   E.zip = (paths) => { const parts = []; return zipTo(zipMembers(paths), (b) => { parts.push(b); }).then(() => new Blob(parts)); };      // (for tests)
+
+  // ------------------------------------------------------------ share links: the key is in the link
+  // A link is 32 random bytes after the # of its address, which a browser sends nowhere. With them (and the
+  // password, if one was set, which makes it part of the key) the description of what is shared is sealed:
+  // names, sizes and the keys of the files. The server keeps that sealed description and hands out the sealed
+  // files it lists; it can open neither. What we need to show the link again is kept there sealed for us.
+  const AAD_SHARE = enc.encode("ddv1 share");
+  async function shareKey(secret, password) {
+    const base = await crypto.subtle.importKey("raw", enc.encode(password || ""), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: secret, iterations: password ? 300000 : 1 }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  /** What a link to an entry hands out now: {objs, sealed}. */
+  async function shareSealed(n, path, secret, password, download) {
+    index();
+    const files = n.dir ? liveFiles().filter(([p]) => p.startsWith(path + "/")).map(([p, f]) => [p.slice(path.length + 1), f]) : [[n.name, n]];
+    const listed = { v: 1, name: n.name, dir: !!n.dir, download: !!download, files: files.map(([p, f]) => ({ path: p, size: f.size, mtime: f.mtime, obj: f.obj, key: f.key })) };
+    return { objs: [...new Set(files.map(([, f]) => f.obj))], sealed: DDV.b64(await DDV.seal(await shareKey(secret, password), enc.encode(JSON.stringify(listed)), AAD_SHARE)) };
+  }
+  function shareJson(s, own, base) {
+    const path = `/v/${s.id}#${own.r.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`, n = v.nodes.get(own.id);
+    index();
+    return { id: s.id, path, url: base ? base + path : "", direct_path: "", direct: "", lan: [], item: n && pathOf.get(n.id) || null, dir: !!own.dir,
+             created: s.created, expires: s.expires, password: !!own.pw, download: own.download !== false, views: s.views || 0, upload: false };
+  }
+  async function sharesNow() {
+    const got = await DDV.call("/api/vault/shares"), out = [];
+    for (const s of got.items) { try { out.push([s, await DDV.openMessage(v.meta, s.own), got.base]); } catch (e) { /* not sealed by this account */ } }
+    return out;
+  }
+  GET.shares = async () => ({ items: (await sharesNow()).map(([s, own, base]) => shareJson(s, own, base)) });
+  POST.share = async (b) => {
+    if (b.upload) throw new Fail(400, "File requests aren't there for end-to-end encrypted accounts yet: the files would have to be sealed for you by whoever sends them.");
+    const path = clean(b.path), n = at(path);
+    if (!n.id) throw new Fail(400, "Share a folder or file, not the whole account");
+    const secret = crypto.getRandomValues(new Uint8Array(32)), download = b.download !== false;
+    const own = { r: DDV.b64(secret), id: n.id, dir: !!n.dir, pw: !!b.password, download };
+    const s = await DDV.call("/api/vault/share", { method: "POST", json: { ...(await shareSealed(n, path, secret, b.password, download)), own: await DDV.sealMessage(v.meta, own),
+                                                                            hours: b.hours === undefined ? 168 : b.hours, password: !!b.password } });
+    return shareJson(s, own, s.base);
+  };
+  POST["shares/update"] = async (b) => {
+    const found = (await sharesNow()).find(([s]) => s.id === b.id);
+    if (!found) throw new Fail(404, "That link no longer exists");
+    const [, own] = found, body = { id: b.id };
+    if ("hours" in b) body.hours = b.hours;
+    const download = "download" in b ? b.download !== false : own.download !== false;
+    if ("password" in b || download !== (own.download !== false)) {
+      // a new password is a new key: what is shared is sealed again (as it is now). Keeping the old password isn't possible without it.
+      if (!("password" in b) && own.pw) throw new Fail(400, "Type the link's password again to change this (it is part of the key, and isn't kept anywhere).");
+      const n = v.nodes.get(own.id);
+      index();
+      if (!n || !pathOf.has(n.id)) throw new Fail(404, "What this link pointed to was deleted. Turn the link off.");
+      Object.assign(own, { pw: !!b.password, download });
+      Object.assign(body, await shareSealed(n, pathOf.get(n.id), DDV.unb64(own.r), b.password || "", download), { own: await DDV.sealMessage(v.meta, own), password: !!b.password });
+    }
+    const s = await DDV.call("/api/vault/share/update", { method: "POST", json: body });
+    return shareJson(s, own, s.base);
+  };
+  POST["shares/revoke"] = async (b) => {
+    const r = await DDV.call("/api/vault/share/revoke", { method: "POST", json: { id: b.id } });
+    await drop(r.objs || []);
+    return { ok: true };
+  };
 
   const PASS = /^(account|account\/delete|changelog|vault(\/.*)?)$/;        // about the account itself: the server's to answer
 

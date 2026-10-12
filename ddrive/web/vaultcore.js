@@ -345,5 +345,5 @@
   }
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
-                 newId, fileKey, unseal, chunkLabel, chunksOf, b64, unb64 };
+                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64 };
 })();

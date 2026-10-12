@@ -5,7 +5,7 @@
   <text x="350" y="23" fill="#8b949e" font-size="13" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">run.bat</text>
   <g font-family="Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace" font-size="14" fill="#c9d1d9">
     <text x="22" y="64"><tspan fill="#ffffff" font-weight="700">X </tspan><tspan fill="#f85149" font-weight="700">O</tspan><tspan x="74" fill="#ffffff" font-weight="700">DDrive</tspan><tspan x="190" fill="#8b949e">encrypted drive in your Discord channel</tspan></text>
-    <text x="74" y="84" fill="#8b949e">Made by XO.ST  |  v2.10.0</text>
+    <text x="74" y="84" fill="#8b949e">Made by XO.ST  |  v2.11.0</text>
     <text x="22" y="118">Drive <tspan fill="#ffffff" font-weight="700">Z:</tspan> <tspan fill="#3fb950">RUNNING</tspan><tspan fill="#8b949e">  |  </tspan>1,284 files, 38.4 GB in Discord</text>
     <text x="22" y="152" fill="#ffffff" font-weight="700">Main menu</text>
     <text x="42" y="173"><tspan fill="#f85149">1</tspan><tspan x="66">Start the drive</tspan></text>

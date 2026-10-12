@@ -622,8 +622,9 @@ Settings) decides who may make one:
   one that leaks the words. Every service that encrypts in a web page has this limit.
 - **What an account has**: the same dashboard as you. Home, Files (upload, also by dropping; preview;
   rename, move, copy, delete; stars; search; earlier versions), the Gallery with thumbnails, Notes,
-  Bookmarks, Contacts, Sync, Activity, Snapshots, Deleted (kept 30 days) and Storage, and folders
-  as a ZIP. What needs the web (a bookmark's
+  Bookmarks, Contacts, Sync, Shared, Activity, Snapshots, Deleted (kept 30 days) and Storage, and
+  folders as a ZIP. A share link carries its key after the `#`, which browsers send nowhere: your
+  computer hands the visitor sealed pieces and the visitor's browser opens them. What needs the web (a bookmark's
   preview, saving a file from a link) is done by one of the person's own devices, a computer with
   DDrive Lite or the phone app, asked through your computer in a sealed message, so your computer
   doesn't learn which pages or files those are. A layer in the browser (`e2e-api.js`) answers the
@@ -640,7 +641,7 @@ Settings) decides who may make one:
   drive letter doesn't yet. The [phone app](#ddrive-lite-for-android) does the same: connected with
   the account's words it backs up the phone's folders sealed.
 - **What it doesn't have yet**, because each of these needs work done on the person's own device that
-  your computer used to do with the files in the clear: messages, share links, and a drive letter
+  your computer used to do with the files in the clear: messages, file requests, and a drive letter
   through DDrive Lite. Their pages aren't shown for these accounts. And never: Settings, Log, Health
   and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your

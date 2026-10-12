@@ -3,6 +3,25 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.11.0 (2026-10-11)
+
+- **End-to-end encrypted accounts get share links**, and the Shared page with them: a file or a
+  folder for someone else, with an expiry, an optional password, and view-only if you like.
+- **The key is in the link.** A link ends in `#` and 43 characters: 32 random bytes that a browser
+  never sends to any server. With them the browser seals a description of what is shared (names,
+  sizes, and the keys of those files). The server keeps that sealed description and hands out the
+  sealed files it lists, and nothing else of the account; it can open neither. The page the visitor
+  gets (`/v/...`) opens them in the visitor's browser: pictures, video, music, PDF and text are shown
+  there, anything can be downloaded.
+- **A password is part of the key**, not something the server checks: without it the description
+  can't be opened even by someone who has the link, and the server never learns it. For the same
+  reason changing a link's password or its view-only setting asks for the password again.
+- A shared folder is the folder as it was when the link was made (or last changed). What a link
+  hands out stays on the server while the link works, also if the file is replaced or deleted
+  meanwhile. Turning a link off ends it at once.
+- Not for these accounts yet: file requests (links for others to send you files), which need the
+  sender's browser to seal for you. Messages is the one page still to come.
+
 ## 2.10.0 (2026-10-11)
 
 - **End-to-end encrypted accounts get Activity, Snapshots and folders as a ZIP.** All three are worked

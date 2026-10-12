@@ -267,6 +267,62 @@ class VaultTest(helpers.DriveTest):
         with self.assertRaises(Exception):
             other._fetch(first["obj"], 0, 10)
 
+    def test_a_link_hands_out_sealed_things_only(self):
+        """A share link of an end-to-end account: the key is in the link and never comes here. The host
+        keeps a sealed description and gives out exactly the sealed objects the link names."""
+        v = self.device
+        v.put("/holiday.txt", MARK + b" on the beach", mtime=1_700_000_000)
+        v.put("/private.txt", MARK + b" not shared", mtime=1_700_000_000)
+        shared, private = v.resolve("/holiday.txt"), v.resolve("/private.txt")
+        c = v.client
+        sealed = base64.b64encode(os.urandom(200)).decode()              # (the browser seals this with the link's key)
+        own = base64.b64encode(os.urandom(60)).decode()
+        s = c._json("/api/vault/share", {"objs": [shared["obj"]], "sealed": sealed, "own": own, "hours": 24, "password": True})
+        self.assertEqual((s["own"], s["password"], s["views"]), (own, True, 0))
+        self.assertAlmostEqual(s["expires"], time.time() + 86400, delta=60)
+        self.assertEqual([x["id"] for x in c._json("/api/vault/shares")["items"]], [s["id"]])
+
+        def visit(tail, headers=None):                                   # somebody with the link, signed in nowhere
+            conn = http.client.HTTPConnection("127.0.0.1", self.web.port, timeout=10)
+            conn.request("GET", f"/v/{s['id']}{tail}", headers=headers or {})
+            r = conn.getresponse()
+            body = r.read()
+            conn.close()
+            return r.status, body, r
+        status, page, r = visit("")
+        self.assertEqual(status, 200)
+        self.assertIn(b"/vshare.js", page)
+        self.assertIn("script-src 'self'", r.getheader("Content-Security-Policy"))
+        self.assertEqual(json.loads(visit("/m")[1]), {"sealed": sealed, "password": True, "expires": s["expires"]})
+        status, body, _ = visit(f"/o/{shared['obj']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(vault.open_range(base64.b64decode(shared["key"]), lambda a, n: body[a:a + n], shared["size"], 0, None), MARK + b" on the beach")
+        self.assertNotIn(MARK, body)
+        self.assertEqual(visit(f"/o/{shared['obj']}", {"Range": "bytes=0-4"})[1], b"DDV1" + bytes([20]))
+        self.assertEqual(visit(f"/o/{private['obj']}")[0], 404)          # only what the link names
+        self.assertEqual(visit("/o/" + "0" * 32)[0], 404)
+        self.assertEqual(c._json("/api/vault/shares")["items"][0]["views"], 1)
+        # what a link hands out isn't forgotten while the link works, whatever a device asks
+        c._json("/api/vault/delete", {"ids": [shared["obj"], private["obj"]]})
+        self.assertEqual(visit(f"/o/{shared['obj']}")[0], 200)
+        with self.assertRaises(lite.HostError):
+            v._fetch(private["obj"], 0, 5)
+        # a change (another password is another key: sealed again by the browser), then no link
+        again = base64.b64encode(os.urandom(100)).decode()
+        u = c._json("/api/vault/share/update", {"id": s["id"], "hours": 0, "sealed": again, "password": False})
+        self.assertEqual((u["expires"], u["password"], u["own"]), (None, False, own))
+        self.assertEqual(json.loads(visit("/m")[1])["sealed"], again)
+        with self.assertRaises(lite.HostError):
+            c._json("/api/vault/share", {"objs": ["../../etc"], "sealed": sealed, "own": own})
+        self.assertEqual(c._json("/api/vault/share/revoke", {"id": s["id"]})["objs"], [shared["obj"]])
+        self.assertEqual((visit("/m")[0], visit(f"/o/{shared['obj']}")[0]), (404, 404))
+        self.assertEqual(c._json("/api/vault/shares")["items"], [])
+        # the other kind of link address doesn't open these, and an owner's account has none of this
+        self.assertEqual(visit("")[0], 200)                              # (the page itself says the link has expired)
+        with self.assertRaises(lite.HostError) as e:
+            lite.HostClient(self.address, words.key_to_phrase(bytes.fromhex(self.host.cfg.encryption_key)))._json("/api/vault/shares")
+        self.assertIn(e.exception.status, (403, 404))
+
     def test_the_list_is_sealed_whole_now_and_then(self):
         v = self.device
         for i in range(5):
