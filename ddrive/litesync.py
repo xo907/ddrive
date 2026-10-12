@@ -565,6 +565,7 @@ class VaultAgent(Agent):
 
     def __init__(self, client, key, device, name, data_dir=None, mount_point=""):
         self.vault = vault.Vault(client, key)
+        self.vault.name = name
         self.fetches = []                    # files being saved from web addresses, for the dashboard to show
         self.fetch_private = False           # only addresses on the internet are fetched (as the host does it)
         self._fetch_lock = threading.Lock()

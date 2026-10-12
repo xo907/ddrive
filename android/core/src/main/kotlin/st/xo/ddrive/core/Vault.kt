@@ -139,6 +139,8 @@ class Vault(val client: HostClient, key: ByteArray) {
     private var seq = 0L
     private var since = 0
     private val lock = Any()
+    @Volatile var name = ""                                  // this device, for the account's list of what happened
+    private val snaps = HashMap<String, Set<String>>()       // a snapshot's object -> the objects that snapshot refers to
 
     // ------------------------------------------------------------ the list of files
     /** Bring the list up to date with what the host has. */
@@ -278,9 +280,26 @@ class Vault(val client: HostClient, key: ByteArray) {
         return out
     }
 
-    /** Have the host forget objects, except those something in the list still uses. */
+    /** Have the host forget objects, except those something in the list still uses, and those a snapshot
+     *  of the account (the list as it was on a day, a sealed file) still refers to. */
     private fun drop(objects: List<String>) {
-        val used = synchronized(lock) { nodes.values.flatMap { objectsOf(it) }.toSet() }
+        if (objects.isEmpty()) return
+        val used = synchronized(lock) { nodes.values.flatMap { objectsOf(it) }.toHashSet() }
+        try {
+            for (n in synchronized(lock) { nodes.values.filter { it.has("snap") && it.optString("obj").isNotEmpty() } }) {
+                val obj = n.getString("obj")
+                used += synchronized(snaps) { snaps[obj] } ?: run {
+                    val out = ByteArrayOutputStream()
+                    readObject(Base64.getDecoder().decode(n.getString("key")), obj, n.getLong("size"), out, null)
+                    val entries = JSONObject(out.toString("UTF-8")).optJSONArray("entries") ?: JSONArray()
+                    val kept = (0 until entries.length()).mapNotNull { entries.optJSONObject(it)?.optString("obj")?.takeIf { o -> o.isNotEmpty() } }.toSet()
+                    synchronized(snaps) { snaps[obj] = kept }
+                    kept
+                }
+            }
+        } catch (e: Exception) {
+            return                               // a snapshot can't be read right now: nothing is forgotten
+        }
         val gone = JSONArray()
         for (o in objects.distinct()) if (o !in used) gone.put(o)
         if (gone.length() > 0) try {
@@ -300,7 +319,7 @@ class Vault(val client: HostClient, key: ByteArray) {
             val n = resolve(made)
             if (n == null) {
                 send(JSONObject().put("op", "put").put("id", Seal.newId()).put("parent", parent.getString("id")).put("name", part)
-                    .put("dir", true).put("size", 0).put("mtime", now()))
+                    .put("dir", true).put("size", 0).put("mtime", now()).put("at", now()).put("by", name))
             } else if (!n.optBoolean("dir")) throw VaultError("$made in your account is a file")
         }
     }
@@ -388,6 +407,7 @@ class Vault(val client: HostClient, key: ByteArray) {
         val dropped = ArrayList<String>()
         if (old == null) {
             entry.put("id", Seal.newId()).put("parent", up.getString("id")).put("name", path.substringAfterLast('/')).put("dir", false)
+                .put("at", now()).put("by", name)
         } else {                                 // replaced: what it was is kept as an earlier version
             for (k in old.keys()) if (k != "thumb") entry.put(k, old.get(k))
             old.optJSONObject("thumb")?.optString("obj")?.let { dropped.add(it) }

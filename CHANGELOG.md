@@ -3,6 +3,26 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.10.0 (2026-10-11)
+
+- **End-to-end encrypted accounts get Activity, Snapshots and folders as a ZIP.** All three are worked
+  out in the browser; the server takes no part beyond handing over sealed pieces.
+- **Activity** lists what was added, changed, moved and deleted, and by which device. It is read off
+  the list of files itself: an entry now says when it came and from which device (the dashboard, a
+  computer's name, the phone's name). Nothing separate is recorded, so what was purged for good is
+  gone from it too, and entries from before this version show without a device.
+- **Snapshots**: "Take snapshot now" keeps the whole account as it is, and while the dashboard is open
+  one is taken by itself once a day and kept 30 days. Open one to browse it, restore a file, a folder
+  or everything into a "Restored ..." folder. A snapshot is a sealed file holding the list of that
+  moment; restoring makes new names for the same sealed content, so nothing is uploaded again.
+  What a snapshot refers to stays on the server until the snapshot is deleted, also when a computer
+  or the phone replaces or removes the file in the meantime (DDrive Lite and the phone app 2.10.0
+  check for that; update them with the server).
+- **Download as ZIP** for a folder or a selection: the files are opened and put together in the
+  browser. Up to 4 GB and 65,000 files in one ZIP; in Chrome and Edge a big one is written straight
+  to disk.
+- Still to come for these accounts: Shared links and Messages.
+
 ## 2.9.0 (2026-10-11)
 
 - **End-to-end encrypted accounts get Contacts, Bookmarks and "Save from a link".** The same pages as

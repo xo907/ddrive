@@ -91,6 +91,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
 
     init {
         dir.mkdirs()
+        vault?.name = name
         try {
             val saved = JSONObject(statusFile.readText()).optJSONObject("jobs")
             if (saved != null) for (k in saved.keys()) {

@@ -468,6 +468,27 @@ class AgentTest {
     }
 
     @Test
+    fun whatASnapshotRefersToIsKept() {
+        // the dashboard keeps snapshots (the list as it was, a sealed file in no folder): a phone that replaces a file
+        // again and again must not have the host forget what a snapshot holds
+        val (key, client) = newAccount()
+        val v = Vault(client, key)
+        v.name = "my phone"
+        v.sync()
+        val f = put("diary.txt", "as it was on the day of the snapshot".toByteArray())
+        v.put("/diary.txt", f, f.length(), 1_700_000_000.0)
+        assertEquals("ok my phone", python("snap ${hex(key)} /diary.txt"))      // (and the list says which device added it)
+        v.sync()
+        for (n in 0 until 13) {
+            f.writeText("rewritten $n")
+            v.put("/diary.txt", f, f.length(), 1_700_000_100.0 + n)
+        }
+        assertEquals(1, v.fileCount)                                             // the snapshot is not a file of the account
+        assertNull(v.resolve("/~snapshots"))
+        assertEquals(hex(java.security.MessageDigest.getInstance("SHA-256").digest("as it was on the day of the snapshot".toByteArray())), python("kept ${hex(key)}"))
+    }
+
+    @Test
     fun thePhoneFetchesWhatTheHostMayNotSee() {
         // a bookmark's preview and a file saved from a web address: the phone reads the site, the host passes sealed messages on
         val png = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 13, 10, 26, 10) + ByteArray(300) { 5 }

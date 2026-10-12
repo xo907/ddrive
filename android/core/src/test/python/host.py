@@ -7,12 +7,16 @@ opened by the others and the other way round:
     sha <key hex> <path>            the SHA-256 of the file at that path, as that client opens it
     put <key hex> <path> <text>     store a small file there
     upload                          have the host store everything it holds on "Discord"
+    snap <key hex> <path>           keep a snapshot of the account that holds the file at that path (as the dashboard does)
+    kept <key hex>                  the SHA-256 of that file as the snapshot has it
 """
+import base64
 import hashlib
 import json
 import os
 import sys
 import tempfile
+import time
 
 repo = sys.argv[1]
 sys.path.insert(0, repo)
@@ -43,6 +47,20 @@ for line in sys.stdin:
         v = vault.Vault(lite.HostClient(f"http://127.0.0.1:{web.port}", auth=vault.auth_key(key).hex()), key).sync()
         if cmd[0] == "sha":
             print(hashlib.sha256(v.read(cmd[2].replace("%20", " "))).hexdigest(), flush=True)
+        elif cmd[0] == "snap":
+            was = dict(v.resolve(cmd[2]))
+            listing = json.dumps({"v": 1, "at": time.time(), "entries": [
+                {k: was[k] for k in ("id", "parent", "name", "dir", "size", "mtime", "obj", "key")}]}).encode()
+            key2, oid, sid = os.urandom(32), vault.new_id(), vault.new_id()
+            v._store(oid, key2, listing, None, len(listing))
+            v._send({"op": "put", "id": sid, "parent": "~snapshots", "name": sid, "dir": False, "size": len(listing), "mtime": time.time(),
+                     "obj": oid, "key": base64.b64encode(key2).decode(), "snap": {"at": time.time(), "label": "Manual", "files": 1, "bytes": was["size"]}})
+            print("ok " + was.get("by", ""), flush=True)
+        elif cmd[0] == "kept":
+            snap = next(n for n in v.nodes.values() if n.get("snap"))
+            e = json.loads(vault.open_range(base64.b64decode(snap["key"]), lambda a, n: v._fetch(snap["obj"], a, n), snap["size"], 0, None))["entries"][0]
+            data = vault.open_range(base64.b64decode(e["key"]), lambda a, n: v._fetch(e["obj"], a, n), e["size"], 0, None)
+            print(hashlib.sha256(data).hexdigest(), flush=True)
         elif cmd[0] == "put":
             v.put(cmd[2].replace("%20", " "), cmd[3].encode("utf-8"), mtime=1_700_000_000)
             print("ok", flush=True)

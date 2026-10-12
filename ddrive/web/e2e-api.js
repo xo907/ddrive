@@ -87,7 +87,7 @@
   const objectsOf = (n) => [n.obj, ...(n.versions || []).map((x) => x.obj), n.thumb && n.thumb !== -1 ? n.thumb.obj : null].filter(Boolean);
   /** Have the server forget objects, except those something in the list still uses. */
   async function drop(objects) {
-    const used = new Set();
+    const used = await snapKeeps();            // (what a snapshot still refers to stays)
     for (const n of v.nodes.values()) for (const o of objectsOf(n)) used.add(o);
     const gone = [...new Set(objects)].filter((o) => o && !used.has(o));
     if (gone.length) await DDV.call("/api/vault/delete", { method: "POST", json: { ids: gone } }).catch(() => null);
@@ -130,7 +130,7 @@
     if (old && old.dir) throw new Fail(400, `${path} is a folder`);
     const raw = crypto.getRandomValues(new Uint8Array(32)), obj = DDV.newId();
     await v._store(obj, await DDV.fileKey(raw), blob, heard, signal);
-    let n = { id: DDV.newId(), parent: up.id, name, dir: false }, dropped = [];
+    let n = { id: DDV.newId(), parent: up.id, name, dir: false, at: now(), by: ME }, dropped = [];
     if (old) {
       n = { ...old };
       if (n.thumb && n.thumb !== -1) dropped.push(n.thumb.obj);
@@ -212,7 +212,7 @@
     },
     async home() {
       const ds = await devices().catch(() => []), jobs = ds.flatMap((d) => d.jobs);
-      return { host: "", mount: "", version: (E.status || {}).version || "", stats: stats(), starred: starred().slice(0, 12), recent: recent(8), history: [],
+      return { host: "", mount: "", version: (E.status || {}).version || "", stats: stats(), starred: starred().slice(0, 12), recent: recent(8), history: activity().slice(0, 8),
                sync: { jobs: jobs.length, running: jobs.filter((j) => j.status.state === "running").length, problems: jobs.filter((j) => j.status.state === "error").length },
                devices: Math.max(1, ds.length), shares: 0, dav: false };
     },
@@ -274,10 +274,8 @@
                largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: 0, saved: {},
                deleted: { count: [...v.nodes.values()].filter((n) => n.trash).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
-    async history() { return { items: [] }; },
     async shares() { return { items: [] }; },
     async locks() { return { count: 0, open: [], minutes: 0, mount: "", host: "" }; },
-    async snapshots() { return { items: [] }; },
     async sync() {
       return { jobs: [], running: null, can_edit: false, local: false, remote_edit: false, host: "", mount: "", windows: false, home: "", account: true,
                devices: await devices(), modes: MODES.map(([id, label, direction, text]) => ({ id, label, direction, text })),
@@ -318,7 +316,7 @@
       const path = clean(b.path), cut = path.lastIndexOf("/");
       const up = at(path.slice(0, cut) || "/", "dir");
       if (byPath.has(path)) throw new Fail(409, "Something with that name already exists");
-      await v._send({ op: "put", id: DDV.newId(), parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now() });
+      await v._send({ op: "put", id: DDV.newId(), parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now(), at: now(), by: ME });
       return { ok: true, path };
     },
     async move(b) {
@@ -327,14 +325,14 @@
       if (byPath.has(to)) throw new Fail(409, "Something with that name already exists");
       const up = at(to.slice(0, cut) || "/", "dir");
       if (under(n.id).includes(up.id)) throw new Fail(400, "A folder can't be moved into itself");
-      await v._send({ op: "move", id: n.id, parent: up.id, name: to.slice(cut + 1) });
+      await v._send({ op: "move", id: n.id, parent: up.id, name: to.slice(cut + 1) }, { op: "set", id: n.id, fields: { moved: { at: now(), from: clean(b.from) } } });
       return { ok: true, path: to };
     },
     async copy(b) {                              // the same sealed content under a second name: nothing is sent again
       const n = at(b.from, "file"), to = clean(b.to), cut = to.lastIndexOf("/");
       if (byPath.has(to)) throw new Fail(409, "Something with that name already exists");
       const up = at(to.slice(0, cut) || "/", "dir");
-      await v._send({ op: "put", id: DDV.newId(), parent: up.id, name: to.slice(cut + 1), dir: false, size: n.size, mtime: n.mtime, obj: n.obj, key: n.key });
+      await v._send({ op: "put", id: DDV.newId(), parent: up.id, name: to.slice(cut + 1), dir: false, size: n.size, mtime: n.mtime, obj: n.obj, key: n.key, at: now(), by: ME });
       return { ok: true, path: to };
     },
     async delete(b) {                            // kept under Deleted until it is purged there
@@ -672,6 +670,176 @@
   };
   POST["fetch/cancel"] = async (b) => { for (const d of (await devices()).filter((x) => x.online)) await tell(d, { do: "fetch-cancel", id: b.id }).catch(() => null); return { ok: true }; };
 
+  // ------------------------------------------------------------ activity: read off the list itself
+  // An entry says when it came and from where (at, by), what it was before (versions), where it was moved
+  // from (moved) and when it was deleted (trash). That is all there is to tell, and nothing else is kept.
+  const ME = "the dashboard";
+  function activity() {
+    index();
+    const out = [];
+    for (const n of v.nodes.values()) {
+      if (n.snap) continue;
+      const path = pathOf.get(n.id) || (n.trash && n.trash.path), exists = pathOf.has(n.id);
+      if (!path) continue;                       // inside a deleted folder: the folder's own line says it
+      const row = (at, kind, more) => out.push({ at, kind, path, is_dir: !!n.dir, size: n.size || 0, exists, me: (n.by || "") === ME,
+                                                 device_name: n.by || "one of your devices", ...more });
+      const versions = n.versions || [];
+      row(n.at || (versions.length ? versions[versions.length - 1].mtime : n.mtime) || 0, n.dir ? "mkdir" : "add");
+      for (const x of versions) if (x.at) row(x.at, "edit");
+      if (n.moved && n.moved.at) row(n.moved.at, "move", { src: n.moved.from });
+      if (n.trash) row(n.trash.at, "delete");
+    }
+    out.sort((a, b) => b.at - a.at);
+    out.forEach((a, i) => { a.id = out.length - i; });
+    return out;
+  }
+  GET.history = async (q) => {
+    const limit = Math.max(1, Math.min(300, +q.get("limit") || 100)), before = +q.get("before") || Infinity;
+    return { items: activity().filter((a) => a.id < before).slice(0, limit) };
+  };
+
+  // ------------------------------------------------------------ snapshots: the list as it was, sealed and kept
+  // A snapshot is a sealed file holding the list of that moment. Its entry sits in the list under a parent
+  // that isn't a folder, so it is in no folder and every client carries it along. What a snapshot still
+  // refers to is not forgotten by the server while the snapshot exists.
+  const SNAPS = "~snapshots", AUTO_EVERY = 24 * 3600, AUTO_KEEP = 30 * 86400;
+  const snapCache = new Map();                  // a snapshot's entries, by its object
+  const snaps = () => [...v.nodes.values()].filter((n) => n.snap && !n.trash).sort((a, b) => b.snap.at - a.snap.at);
+  async function snapEntries(n) {
+    if (!snapCache.has(n.obj)) snapCache.set(n.obj, JSON.parse(dec.decode(await readRange(n, 0, n.size - 1))).entries || []);
+    return snapCache.get(n.obj);
+  }
+  /** The objects all snapshots refer to. */
+  async function snapKeeps() {
+    const used = new Set();
+    for (const n of snaps()) for (const e of await snapEntries(n).catch(() => [])) if (e.obj) used.add(e.obj);
+    return used;
+  }
+  function snapPaths(entries) {                 // [path, entry] for everything in a snapshot
+    const kids = new Map(), out = [];
+    for (const e of entries) { if (!kids.has(e.parent)) kids.set(e.parent, []); kids.get(e.parent).push(e); }
+    const walk = (id, path) => { for (const e of kids.get(id) || []) { const p = (path === "/" ? "" : path) + "/" + e.name; out.push([p, e]); if (e.dir) walk(e.id, p); } };
+    walk("", "/");
+    return out;
+  }
+  async function takeSnapshot(label, keep) {
+    index();
+    const entries = [...byPath.values()].map((n) => ({ id: n.id, parent: n.parent, name: n.name, dir: !!n.dir, size: n.size || 0, mtime: n.mtime || 0,
+                                                       ...(n.dir ? {} : { obj: n.obj, key: n.key }) }));
+    const files = entries.filter((e) => !e.dir), at = now();
+    const blob = new Blob([JSON.stringify({ v: 1, at, entries })]);
+    const raw = crypto.getRandomValues(new Uint8Array(32)), obj = DDV.newId(), id = DDV.newId();
+    await v._store(obj, await DDV.fileKey(raw), blob);
+    await v._send({ op: "put", id, parent: SNAPS, name: id, dir: false, size: blob.size, mtime: at, obj, key: DDV.b64(raw),
+                    snap: { at, label, files: files.length, bytes: files.reduce((s, e) => s + e.size, 0), keep_until: keep ? at + keep : null } });
+    snapCache.set(obj, entries);
+    return id;
+  }
+  async function dropSnapshots(list) {
+    if (!list.length) return;
+    const objects = [];
+    for (const n of list) { objects.push(n.obj); for (const e of await snapEntries(n).catch(() => [])) if (e.obj) objects.push(e.obj); snapCache.delete(n.obj); }
+    await v._send(...list.map((n) => ({ op: "del", id: n.id })));
+    await drop(objects);
+  }
+  /** Once a day while the dashboard is open: a snapshot, kept 30 days. */
+  E.autoSnapshot = async () => {
+    const all = snaps(), t = now();
+    await dropSnapshots(all.filter((n) => n.snap.keep_until && n.snap.keep_until < t));
+    index();
+    if (byPath.size && !all.some((n) => t - n.snap.at < AUTO_EVERY)) await takeSnapshot("Automatic", AUTO_KEEP);
+  };
+  const snapOf = (id) => { const n = v.nodes.get(String(id)); if (!n || !n.snap || n.trash) throw new Fail(404, "no such snapshot"); return n; };
+  GET.snapshots = async () => ({ items: snaps().map((n) => ({ id: n.id, ...n.snap })) });
+  GET.snapshot = async (q) => {
+    const path = clean(q.get("path")), depth = path === "/" ? 0 : path.split("/").length - 1;
+    const items = snapPaths(await snapEntries(snapOf(q.get("id")))).filter(([p]) => p.split("/").length - 1 === depth + 1 && (path === "/" || p.startsWith(path + "/")))
+      .map(([p, e]) => ({ name: e.name, path: p, dir: !!e.dir, size: e.size, mtime: e.mtime }));
+    items.sort((a, b) => (b.dir - a.dir) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    return { path, items };
+  };
+  POST["snapshots/create"] = async (b) => ({ ok: true, id: await takeSnapshot(String(b.label || "Manual").slice(0, 60), 0) });
+  POST["snapshots/delete"] = async (b) => {
+    const want = new Set((b.ids || []).map(String)), list = snaps().filter((n) => b.all || want.has(n.id));
+    if (!list.length) throw new Fail(404, "no such snapshot");
+    await dropSnapshots(list);
+    return { ok: true, count: list.length };
+  };
+  POST["snapshots/restore"] = async (b) => {     // copied into a new folder: the same sealed content under new names, nothing is sent again
+    const sn = snapOf(b.id), from = clean(b.path), d = new Date(sn.snap.at * 1000), two = (x) => String(x).padStart(2, "0");
+    const all = snapPaths(await snapEntries(sn)), picked = all.filter(([p]) => from === "/" || p === from || p.startsWith(from + "/"));
+    if (!picked.length) throw new Fail(404, "nothing to restore there");
+    index();
+    const folder = "/" + freeName("", `Restored ${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}.${two(d.getMinutes())}`);
+    const top = DDV.newId(), ids = new Map(), ops = [{ op: "put", id: top, parent: "", name: folder.slice(1), dir: true, size: 0, mtime: now(), at: now(), by: ME }];
+    const root = from === "/" ? "" : (all.find(([p]) => p === from) || [0, {}])[1].parent;
+    for (const [, e] of picked) ids.set(e.id, DDV.newId());
+    for (const [, e] of picked) ops.push({ op: "put", id: ids.get(e.id), parent: e.parent === root ? top : ids.get(e.parent) || top, name: e.name, dir: !!e.dir, size: e.size, mtime: e.mtime,
+                                           at: now(), by: ME, ...(e.dir ? {} : { obj: e.obj, key: e.key }) });
+    for (let i = 0; i < ops.length; i += 200) await v._send(...ops.slice(i, i + 200));
+    return { ok: true, files: picked.filter(([, e]) => !e.dir).length, folder };
+  };
+
+  // ------------------------------------------------------------ a folder (or a few things) as one ZIP, put together here
+  const CRC = (() => { const t = new Uint32Array(256); for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[i] = c >>> 0; } return t; })();
+  const crc32 = (crc, bytes) => { let c = crc ^ -1; for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 255] ^ (c >>> 8); return (c ^ -1) >>> 0; };
+  function zipMembers(paths) {
+    index();
+    const out = [];
+    for (const path of paths) {
+      const n = at(path), cut = path === "/" ? 0 : path.lastIndexOf("/") + 1;
+      for (const [p, m] of live()) if (p === path || path === "/" || p.startsWith(path + "/")) out.push([p.slice(cut).replace(/^\/+/, "") + (m.dir ? "/" : ""), m]);
+      void n;
+    }
+    return out;
+  }
+  async function zipTo(members, write) {
+    const le = (n, ...vals) => { const b = new Uint8Array(n), dv = new DataView(b.buffer); let o = 0; for (const [size, val] of vals) { if (size === 2) dv.setUint16(o, val, true); else dv.setUint32(o, val >>> 0, true); o += size; } return b; };
+    const central = [];
+    let offset = 0;
+    const put = async (bytes) => { await write(bytes); offset += bytes.length; };
+    for (const [name, n] of members) {
+      const nb = enc.encode(name), d = new Date((n.mtime || now()) * 1000), start = offset;
+      const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), date = (Math.max(0, d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+      const size = n.dir ? 0 : n.size, flags = 0x0800 | (n.dir ? 0 : 8);     // names in UTF-8; the checksum follows the content
+      await put(le(30, [4, 0x04034b50], [2, 20], [2, flags], [2, 0], [2, time], [2, date], [4, 0], [4, n.dir ? 0 : 0], [4, n.dir ? 0 : 0], [2, nb.length], [2, 0]));
+      await put(nb);
+      let crc = 0;
+      if (!n.dir) {
+        const C = DDV.CHUNK * 4;
+        for (let pos = 0; pos < size; pos += C) { const part = await readRange(n, pos, Math.min(size, pos + C) - 1); crc = crc32(crc, part); await put(part); }
+        await put(le(16, [4, 0x08074b50], [4, crc], [4, size], [4, size]));
+      }
+      central.push([le(46, [4, 0x02014b50], [2, 0x031e], [2, 20], [2, flags], [2, 0], [2, time], [2, date], [4, crc], [4, size], [4, size], [2, nb.length], [2, 0], [2, 0], [2, 0], [2, 0],
+                       [4, n.dir ? 0x41ed0010 : 0x81a40000], [4, start]), nb]);
+    }
+    const dirStart = offset;
+    for (const [head, nb] of central) { await put(head); await put(nb); }
+    await put(le(22, [4, 0x06054b50], [2, 0], [2, 0], [2, central.length], [2, central.length], [4, offset - dirStart], [4, dirStart], [2, 0]));
+  }
+  async function downloadZip(paths, name) {
+    const members = zipMembers(paths), total = members.reduce((s, [, n]) => s + (n.dir ? 0 : n.size), 0);
+    if (!members.length) throw new Error("There is nothing in there to download");
+    if (members.length > 65000 || total > 3900 * 1024 * 1024) throw new Error("That is too much for one ZIP (4 GB or 65,000 files at most). Download it folder by folder.");
+    if (window.showSaveFilePicker && total > 64 * 1024 * 1024) {
+      let handle;
+      try { handle = await window.showSaveFilePicker({ suggestedName: name }); } catch (e) { return false; }
+      const out = await handle.createWritable();
+      try { await zipTo(members, (b) => out.write(b)); await out.close(); } catch (e) { await out.abort().catch(() => null); throw e; }
+    } else {
+      if (total > 1500 * 1024 * 1024) throw new Error("This browser can only download a ZIP this big with Chrome or Edge, which write it straight to disk.");
+      const parts = [];
+      await zipTo(members, (b) => { parts.push(b); });
+      const blob = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
+      const a = document.createElement("a");
+      a.href = blob; a.download = name; a.style.display = "none";
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(blob), 60000);
+    }
+    return true;
+  }
+  E.zip = (paths) => { const parts = []; return zipTo(zipMembers(paths), (b) => { parts.push(b); }).then(() => new Blob(parts)); };      // (for tests)
+
   const PASS = /^(account|account\/delete|changelog|vault(\/.*)?)$/;        // about the account itself: the server's to answer
 
   async function answer(url, init) {
@@ -705,7 +873,12 @@
   /** A download app.js asks for by address: opened here and saved (straight to disk where the browser can). True when it was taken on. */
   E.download = function (address, name) {
     const url = new URL(address, location.href);
-    if (url.pathname === "/api/zip") { E.say("Downloading a folder as a ZIP isn't there for end-to-end encrypted accounts yet. Download its files one by one."); return true; }
+    if (url.pathname === "/api/zip") {
+      const paths = url.searchParams.get("paths") ? JSON.parse(url.searchParams.get("paths")) : [url.searchParams.get("path") || "/"];
+      E.say("Putting the ZIP together…");
+      downloadZip(paths.map(clean), name || "DDrive.zip").then((ok) => { if (ok) E.say(`Downloaded ${name || "DDrive.zip"}`); }, (e) => E.say(e.message || "The download failed"));
+      return true;
+    }
     if (url.pathname === "/api/contacts/export") {
       const want = new Set((url.searchParams.get("uids") || "").split(",").filter(Boolean));
       readBook().then((items) => {
@@ -831,6 +1004,7 @@
     // what was deleted more than 30 days ago goes for good
     const old = [...v.nodes.values()].filter((n) => n.trash && n.trash.at < now() - 30 * 86400).map((n) => n.id);
     if (old.length) POST.purge({ uids: old }).catch(() => null);
+    setTimeout(() => E.autoSnapshot().catch(() => null), 30000);
     setInterval(() => v.sync().catch(() => null), 15000);          // what another device of this account did shows up by itself
     document.addEventListener("visibilitychange", () => { if (!document.hidden) v.sync().catch(() => null); });
   })();

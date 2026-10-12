@@ -237,6 +237,36 @@ class VaultTest(helpers.DriveTest):
         self.assertIn(b"e2e-api.js", mine)
         self.assertLess(mine.index(b"e2e-api.js"), mine.index(b'"/app.js"'))
 
+    def test_what_a_snapshot_refers_to_is_kept(self):
+        """The dashboard keeps snapshots: the list as it was, a sealed file whose entry is in no folder.
+        A device that replaces a file again and again must not have the host forget what a snapshot holds."""
+        v = self.new_device()
+        v.name = "my laptop"
+        v.put("/diary.txt", b"as it was on the day of the snapshot", mtime=1_700_000_000)
+        first = dict(v.resolve("/diary.txt"))
+        self.assertEqual((first["by"], first["at"] > 1_700_000_000), ("my laptop", True))       # who added it and when, for Activity
+        listing = json.dumps({"v": 1, "at": time.time(), "entries": [
+            {k: first[k] for k in ("id", "parent", "name", "dir", "size", "mtime", "obj", "key")}]}).encode()
+        key, oid, sid = os.urandom(32), vault.new_id(), vault.new_id()
+        v._store(oid, key, listing, None, len(listing))
+        v._send({"op": "put", "id": sid, "parent": "~snapshots", "name": sid, "dir": False, "size": len(listing), "mtime": time.time(),
+                 "obj": oid, "key": base64.b64encode(key).decode(), "snap": {"at": time.time(), "label": "Manual", "files": 1, "bytes": 36}})
+        other = self.new_device()                                      # another device: it has to find the snapshot itself
+        for n in range(vault.VERSIONS_KEPT + 3):
+            other.put("/diary.txt", b"rewritten %d" % n, mtime=1_700_000_100 + n)
+        self.assertEqual(len(other.resolve("/diary.txt")["versions"]), vault.VERSIONS_KEPT)
+        self.assertNotIn(first["obj"], [x["obj"] for x in other.resolve("/diary.txt")["versions"]])
+        kept = vault.open_range(base64.b64decode(first["key"]), lambda a, n: other._fetch(first["obj"], a, n), first["size"], 0, None)
+        self.assertEqual(kept, b"as it was on the day of the snapshot")
+        self.assertEqual([n["name"] for n in other.files()], ["diary.txt"])          # the snapshot is in no folder
+        self.assertIsNone(other.resolve("/~snapshots"))
+        # without the snapshot, the next rewrite lets go of it
+        other._send({"op": "del", "id": sid})
+        other.put("/diary.txt", b"once more", mtime=1_700_000_200)
+        other._drop([first["obj"]])
+        with self.assertRaises(Exception):
+            other._fetch(first["obj"], 0, 10)
+
     def test_the_list_is_sealed_whole_now_and_then(self):
         v = self.device
         for i in range(5):

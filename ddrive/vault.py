@@ -192,6 +192,8 @@ class Vault:
         self.since_snapshot = 0
         self.snapshot_object = None
         self._kids = None                # folder id -> {name: node}, made when asked for
+        self.name = ""                   # this device, for the account's list of what happened
+        self._snaps = {}                 # a snapshot's object -> the objects that snapshot refers to
 
     # ------------------------------------------------------------ the list of files
     def sync(self):
@@ -306,7 +308,8 @@ class Vault:
             raise VaultError(f"Not found: {parent}")
         if self.resolve(path) is not None:
             raise VaultError("Something with that name already exists")
-        self._send({"op": "put", "id": new_id(), "parent": up["id"], "name": name, "dir": True, "size": 0, "mtime": time.time()})
+        self._send({"op": "put", "id": new_id(), "parent": up["id"], "name": name, "dir": True, "size": 0, "mtime": time.time(),
+                    "at": time.time(), "by": self.name})
 
     def move(self, src, dst):
         node = self.resolve(src)
@@ -335,8 +338,18 @@ class Vault:
         return [o for o in out if o]
 
     def _drop(self, objects):
-        """Have the host forget objects, except those something in the list still uses."""
+        """Have the host forget objects, except those something in the list still uses, and those a
+        snapshot of the account (the list as it was on a day, a sealed file) still refers to."""
         used = {o for n in self.nodes.values() for o in self._objects(n)}
+        try:
+            for n in self.nodes.values():
+                if n.get("snap") and n.get("obj"):
+                    if n["obj"] not in self._snaps:
+                        data = open_range(base64.b64decode(n["key"]), lambda a, k, o=n["obj"]: self._fetch(o, a, k), n["size"], 0, None)
+                        self._snaps[n["obj"]] = {e.get("obj") for e in json.loads(data).get("entries") or [] if e.get("obj")}
+                    used |= self._snaps[n["obj"]]
+        except Exception:                        # a snapshot can't be read right now: nothing is forgotten
+            return
         gone = [o for o in dict.fromkeys(objects) if o not in used]
         if gone:
             self.client._json("/api/vault/delete", {"ids": gone})
@@ -426,7 +439,7 @@ class Vault:
         size = len(data) if data is not None else size
         key, oid = os.urandom(32), new_id()
         self._store(oid, key, data, read, size, stop=stop, hear=hear)
-        entry = {"id": new_id(), "parent": up["id"], "name": name, "dir": False}
+        entry = {"id": new_id(), "parent": up["id"], "name": name, "dir": False, "at": time.time(), "by": self.name}
         dropped = []
         if old is not None:                      # replaced: what it was is kept as an earlier version
             entry = {k: v for k, v in old.items() if k != "thumb"}
