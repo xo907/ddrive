@@ -3285,11 +3285,11 @@ async function accountsSection(into) {
     h("h2", {}, `${plural(d.accounts.length, "account")}`),
     d.accounts.length ? h("div", { class: "settings" }, d.accounts.map((a) => row(
         [h("code", {}, a.id), a.admin && h("span", { class: "tag", style: "margin-left:8px" }, "Admin"), a.e2e && h("span", { class: "tag", style: "margin-left:8px" }, "End-to-end"),
-         !a.e2e && h("span", { class: "tag busy", style: "margin-left:8px" }, a.admin ? "Can't sign in" : "Earlier kind"),
+         !a.e2e && h("span", { class: "tag busy", style: "margin-left:8px" }, a.admin ? "Needs new words" : "Earlier kind"),
          a.moving && h("span", { class: "tag busy", style: "margin-left:8px" }, "Moving"), a.note && ` · ${a.note}`,
          status && status.admin === a.id && h("span", { class: "tag", style: "margin-left:8px" }, "You"),
          a.disabled && h("span", { class: "tag busy", style: "margin-left:8px" }, "Switched off"), a.open && !a.disabled && h("span", { class: "tag", style: "margin-left:8px" }, "In use")],
-        a.admin && !a.e2e ? `Made ${when(a.created)}, before admin accounts were end-to-end encrypted: it can't sign in any more. Delete it and make a new one.`
+        a.admin && !a.e2e ? `Made ${when(a.created)}, before admin accounts were end-to-end encrypted. Sign out and sign in with its 24 words (then “Send the words and sign in”): the browser makes new words, and it becomes an end-to-end encrypted admin. Or delete it and make a new one.`
                 : `${a.admin ? "Manages the drive · " : ""}${plural(a.files, "file")}, ${size(a.bytes)} · made ${when(a.created)}${a.seen ? " · last signed in " + ago(a.seen) : a.admin ? " · not signed in yet" : ""}${a.invite ? " · invite " + a.invite : ""}`
                   + (a.e2e ? "" : " · not end-to-end encrypted: it can only be read, until its owner moves it into an account that is"),
         h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },

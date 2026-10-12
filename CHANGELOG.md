@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.18.1 (2026-10-12)
+
+- **An admin account from before 2.18.0 becomes an end-to-end encrypted one by signing in.** 2.18.0
+  only said such an account can't sign in any more. Now, signing in with its 24 words (then "Send the
+  words and sign in") opens a page where the browser makes 24 new words: once they are saved and
+  confirmed, the account is an end-to-end encrypted admin with those, keeps its note, and the old
+  words stop working. It needs an https address (or the computer itself). Under Settings → Accounts
+  such an account is marked "Needs new words" and says how.
+
 ## 2.18.0 (2026-10-12)
 
 - **Admin accounts are end-to-end encrypted.** An admin is now an ordinary end-to-end encrypted

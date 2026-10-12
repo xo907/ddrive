@@ -774,6 +774,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._send(405, b"Method not allowed", "text/plain")
             if method == "POST" and route == "/login":
                 return self._login()
+            if method == "POST" and route == "/login/admin":
+                return self._admin_upgrade()
             if route == "/signup":
                 return self._signup(method)
             if method == "GET" and route in ("/terms", "/privacy"):
@@ -962,17 +964,49 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         else:
             rec = app.accounts.find(key)             # (the words came here: an account of the earlier kind)
             if rec is not None and rec.get("admin") and not rec.get("e2e"):
+                # An admin from before admins were end-to-end encrypted. Its words are right, and this
+                # computer made them, so they sign nothing in any more: the browser makes new ones, and
+                # the account becomes an end-to-end encrypted admin with those (_admin_upgrade).
                 app.note_login(addr, True)
-                log.warning("Web dashboard: admin account %s from before admins were end-to-end encrypted tried to "
-                            "sign in from %s", rec["id"], addr)
-                return self._signin("This admin account was made before admin accounts were end-to-end encrypted, and "
-                                    "can't sign in any more. Ask the owner to make you a new one.", 403)
+                log.info("Web dashboard: admin account %s (from before admins were end-to-end encrypted) is offered "
+                         "new words, from %s", rec["id"], addr)
+                html = _admin_upgrade_page(rec["id"], self._upgrade_ticket(rec["id"]))
+                return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", _PAGE_HEADERS)
             who = rec["id"] if rec is not None else None
         app.note_login(addr, who is not None)
         if who is None:
             log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
             return self._signin("Those are 24 valid words, but nobody here has that phrase.", 401)
         self._redirect("/", self._cookie_for(app.new_session(who)))
+
+    UPGRADE_MINUTES = 30                 # how long an admin from before has to write its new words down
+
+    def _upgrade_ticket(self, aid, until=None):
+        until = int(until or time.time() + self.UPGRADE_MINUTES * 60)
+        sig = hmac.new(self.server.app._secret(b"admin-upgrade"), f"{aid}:{until}".encode(), hashlib.sha256).hexdigest()
+        return f"{aid}.{until}.{sig}"
+
+    def _admin_upgrade(self):
+        """An admin account from before admins were end-to-end encrypted becomes one: it signed in with
+        its old words (which gave it the ticket), its browser made 24 new ones, and this is the sign-in
+        key made from those. The old record, and with it the old words, is gone."""
+        app = self.server.app
+        form = self._form()
+        aid, _, rest = str(form.get("ticket") or "").partition(".")
+        until = rest.partition(".")[0]
+        try:
+            fresh = int(until) > time.time() and hmac.compare_digest(self._upgrade_ticket(aid, int(until)), form.get("ticket") or "")
+            auth = bytes.fromhex(form.get("auth") or "")
+        except ValueError:
+            fresh, auth = False, b""
+        if not fresh:
+            return self._signin("That took too long. Sign in with the admin account's words again to get new ones.", 400)
+        try:
+            rec = app.accounts.upgrade_admin(aid, auth)
+        except AccountError as e:
+            return self._signin(str(e), 400)
+        log.warning("Web dashboard: admin account %s is end-to-end encrypted now, as %s (from %s).", aid, rec["id"], self._addr())
+        self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
 
     def _signup(self, method):
         """Making an account: the page gives 24 new words, and the account exists once they are confirmed."""
@@ -3339,6 +3373,38 @@ def _signup_page(mode, invite="", error="", phrase="", ticket=""):
     </form>
   </div>
   {back}<script src="/vaultcore.js"></script><script src="/e2e.js"></script>""")
+
+
+def _admin_upgrade_page(aid, ticket):
+    """What an admin account from before admins were end-to-end encrypted gets when it signs in: new
+    words, made by e2e.js in the browser as for a new account (the same ids), instead of the dashboard."""
+    return _plain_page(f"""<h1>New words for your admin account</h1>
+  <p class="muted">Admin accounts are end-to-end encrypted now: their 24 words are made in the browser and never reach
+  the server. The words of admin account <code>{_esc(aid)}</code> were made by the server, so they can't be used any more.
+  <b>Your browser makes new ones here.</b> With them this becomes an admin account with storage of its own that the
+  server can't read, which manages the drive as before but no longer opens the owner's files.</p>
+  <p class="err" id="e2e-err" role="alert" hidden></p>
+  <div id="e2e-start">
+    <button class="btn" id="e2e-make" type="button">Get my 24 new words</button>
+  </div>
+  <p class="err" id="e2e-no" hidden>The words are made in the browser, and a browser only does that on an https address
+  (or on the computer itself). Open this site by its https address and sign in again.</p>
+  <div id="e2e-words" hidden>
+    <p class="muted">These words <b>are</b> your admin account from now on. They sign you in, and they are the key your own
+    files are encrypted with. Write them down in this order, or keep them in a password manager.</p>
+    <ol class="phrase" id="words"></ol>
+    <p class="muted small"><button class="link" id="copy" type="button" hidden>Copy the words</button></p>
+    <p class="muted"><b>They are shown only now, and only here.</b> Nobody can look them up or reset them. Your old words
+    stop working once you confirm.</p>
+    <form method="post" action="/login/admin" id="e2e-form">
+      <input type="hidden" name="auth" value="">
+      <input type="hidden" name="invite" value="">
+      <input type="hidden" name="ticket" value="{_esc(ticket)}">
+      <label class="tick"><input type="checkbox" name="saved" value="1" required> I have saved these 24 words</label>
+      <button class="btn" type="submit">Use the new words</button>
+    </form>
+  </div>
+  <p class="muted small"><a href="/">Not now</a></p><script src="/vaultcore.js"></script><script src="/e2e.js"></script>""")
 
 
 _LEGAL_LINKS = '<p class="muted small legal-links"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>'

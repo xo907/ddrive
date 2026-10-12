@@ -716,8 +716,10 @@ why an admin is better than handing out your recovery phrase. Admins don't count
 accounts*; `accounts list`, `disable`, `enable` and `delete` work on them as on any account.
 
 Admin accounts made by 2.16.0 to 2.17.2 were of another kind (their words were made by your computer,
-and they signed in as you, files included). They can't sign in any more: delete them in the list and
-make new ones.
+and they signed in as you, files included). Those words sign nothing in any more. Signing in with
+them (then "Send the words and sign in") opens a page where the browser makes 24 new words; with
+those the account becomes an end-to-end encrypted admin, and the old words stop working. In the list
+such an account is marked "Needs new words"; you can also delete it and make a new one.
 
 How it works: the admin's page asks for its own files as any end-to-end encrypted account does, and
 says so with a header (`X-DD-Admin: 1`) when it asks something of the drive itself. Your computer

@@ -8,6 +8,7 @@ import hmac
 import io
 import json
 import os
+import re
 import time
 import urllib.parse
 from unittest import mock
@@ -187,17 +188,30 @@ class AdminTest(helpers.DriveTest):
         self.assertTrue(self.acc.admin_ok(aid))
         self.assertEqual(self.ask("GET", "/api/settings", admin)[0], 200)
 
-    def test_an_admin_from_before_cant_sign_in(self):
-        # as 2.16.0 to 2.17.2 made them: words made here, no storage, signed in as the owner
+    def old_admin(self):
+        """An admin as 2.16.0 to 2.17.2 made them: words made here, no storage, signed in as the owner."""
         key = os.urandom(32)
         aid = accounts.account_id(key)
         with self.acc._lock:
             self.acc._recs[aid] = {"id": aid, "check": accounts._check(key), "created": 1.0, "seen": None, "invite": "",
                                    "admin": True, "note": "old"}
             self.acc._save()
-        status, _, page = self.req("POST", "/login", urllib.parse.urlencode({"phrase": words.key_to_phrase(key)}))
-        self.assertEqual(status, 403)
-        self.assertIn(b"can&#39;t sign in any more", page)
+        return aid, key
+
+    def old_sign_in(self, key):
+        """An admin from before signs in with its words: (status, the page, the ticket on it or None)."""
+        status, headers, page = self.req("POST", "/login", urllib.parse.urlencode({"phrase": words.key_to_phrase(key)}))
+        self.assertNotIn("Set-Cookie", headers)             # the old words sign nothing in
+        ticket = re.search(rb'name="ticket" value="([^"]*)"', page)
+        return status, page, ticket.group(1).decode() if ticket else None
+
+    def test_an_admin_from_before_cant_sign_in(self):
+        aid, key = self.old_admin()
+        status, page, ticket = self.old_sign_in(key)
+        self.assertEqual(status, 200)
+        self.assertIn(b"New words for your admin account", page)
+        self.assertIn(b"e2e-make", page)                    # the browser makes them (e2e.js)
+        self.assertNotIn(b'name="phrase"', page)
         self.assertIsNone(self.sign_in_key(key))
         self.assertFalse(self.acc.admin_ok(aid))
         self.assertIsNone(self.acc.active(aid))
@@ -205,6 +219,43 @@ class AdminTest(helpers.DriveTest):
         self.assertEqual((listed[aid]["admin"], listed[aid]["e2e"]), (True, False))
         self.assertEqual(self.post("/api/accounts/delete", {"id": aid}, self.owner)[0], 200)
         self.assertNotIn(aid, self.acc._recs)
+        # deleted: its ticket is worth nothing
+        form = {"ticket": ticket, "auth": vault.auth_key(os.urandom(32)).hex()}
+        self.assertEqual(self.req("POST", "/login/admin", urllib.parse.urlencode(form))[0], 400)
+        self.assertEqual(self.acc.count(), 0)
+
+    def test_an_admin_from_before_gets_new_words(self):
+        aid, key = self.old_admin()
+        _, _, ticket = self.old_sign_in(key)
+        new = os.urandom(32)                                # the 24 new words its browser makes
+        auth = vault.auth_key(new).hex()
+        # not without the ticket its old words gave it, nor with one made up or for another account
+        for bad in ("", "x.y.z", ticket[:-1] + ("0" if ticket[-1] != "0" else "1"), ticket.replace(aid, "0" * 16),
+                    f"{aid}.{int(time.time()) - 5}.{ticket.rsplit('.', 1)[1]}"):
+            self.assertEqual(self.req("POST", "/login/admin", urllib.parse.urlencode({"ticket": bad, "auth": auth}))[0], 400, bad)
+        self.assertEqual(self.req("POST", "/login/admin", urllib.parse.urlencode({"ticket": ticket, "auth": "abcd"}))[0], 400)
+        self.assertIn(aid, self.acc._recs)
+        status, headers, _ = self.req("POST", "/login/admin", urllib.parse.urlencode({"ticket": ticket, "auth": auth}))
+        self.assertEqual(status, 303)
+        admin = headers["Set-Cookie"].split(";")[0]
+        # it is an end-to-end encrypted admin now, under a new id, with the note it had
+        st = self.get("/api/status", admin)[1]
+        self.assertEqual((st["role"], st["e2e"], st["admin"]), ("account", True, True))
+        self.assertNotEqual(st["account"], aid)
+        self.assertEqual(self.ask("GET", "/api/settings", admin)[0], 200)
+        self.assertEqual(self.ask("GET", "/api/list?path=/", admin)[0], 403)
+        listed = {a["id"]: a for a in self.get("/api/accounts", self.owner)[1]["accounts"]}
+        self.assertEqual(list(listed), [st["account"]])
+        self.assertEqual((listed[st["account"]]["admin"], listed[st["account"]]["e2e"], listed[st["account"]]["note"]), (True, True, "old"))
+        self.assertIsNotNone(self.sign_in_key(new))
+        # the old words, and the ticket, are used up
+        status, page, again = self.old_sign_in(key)
+        self.assertEqual((status, again), (401, None))
+        self.assertEqual(self.req("POST", "/login/admin", urllib.parse.urlencode({"ticket": ticket, "auth": vault.auth_key(os.urandom(32)).hex()}))[0], 400)
+        # one that is switched off gets no new words
+        aid2, key2 = self.old_admin()
+        self.assertEqual(self.post("/api/accounts/disable", {"id": aid2, "off": True}, self.owner)[0], 200)
+        self.assertEqual(self.old_sign_in(key2)[::2], (401, None))
 
     # ------------------------------------------------------------ no account this computer can read is made
     def test_the_owner_makes_accounts(self):

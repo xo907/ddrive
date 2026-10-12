@@ -165,7 +165,7 @@ def _print_list(d):
     print(f"Sign-up: {d.get('mode', 'closed')}")
     print(f"\nAdmin accounts ({len(admins)}):")
     for a in admins:
-        print(f"  {a['id']}  {'OFF ' if a['disabled'] else ''}{'' if a.get('e2e') else 'CAN NO LONGER SIGN IN (made before 2.18.0)  '}made {_ago(a['created'])}, last signed in {_ago(a['seen'])}"
+        print(f"  {a['id']}  {'OFF ' if a['disabled'] else ''}{'' if a.get('e2e') else 'NEEDS NEW WORDS (sign in with its words in a browser)  '}made {_ago(a['created'])}, last signed in {_ago(a['seen'])}"
               + (f"  ({a['note']})" if a.get("note") else ""))
     print(f"\nAccounts ({len(others)}):")
     from .config import format_size

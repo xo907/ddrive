@@ -42,7 +42,8 @@ computer's drive: its settings, its accounts and other admins, its health and it
 ADMIN_GET and ADMIN_POST). It has storage of its own like any account, which this computer can't
 read, and it doesn't open the owner's files. Switching it off or deleting it ends its sessions at
 once: that is what makes it better than handing out the recovery phrase. Admin accounts from before
-they were end-to-end encrypted (2.16.0 to 2.17.2: "admin" without "e2e") can't sign in any more.
+they were end-to-end encrypted (2.16.0 to 2.17.2: "admin" without "e2e") can't sign in any more:
+their words get them new ones, made in the browser (upgrade_admin).
 """
 
 import gzip
@@ -587,6 +588,24 @@ class Accounts:
                 rec["admin"] = True
                 log.info("Account %s is an admin account.", rec["id"])
             self._save()
+        return rec
+
+    def upgrade_admin(self, aid, auth: bytes):
+        """An admin account from before admins were end-to-end encrypted becomes an end-to-end encrypted
+        one: `auth` is the sign-in key of the 24 new words its browser made. Its old record goes, and
+        with it the words this computer made. Returns the new record."""
+        with self._lock:
+            old = self._recs.get(str(aid or ""))
+            if old is None or not old.get("admin") or old.get("e2e") or old.get("disabled"):
+                raise AccountError("That admin account isn't there any more, or has new words already.")
+            note = old.get("note") or ""
+        rec = self.create_for(auth, note, admin=True)
+        with self._lock:
+            self._recs.pop(old["id"], None)
+            self._secrets.pop(old["id"], None)
+            self._backup_wanted = self._backup_soon = True
+            self._save()
+        log.info("Admin account %s has new words and is end-to-end encrypted now: %s.", old["id"], rec["id"])
         return rec
 
     def admin_ok(self, aid):
