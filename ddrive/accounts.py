@@ -573,6 +573,28 @@ class Accounts:
         log.info("Admin account %s was created.", aid)
         return words.key_to_phrase(key), rec
 
+    def create_for(self, auth: bytes = None, note=""):
+        """The owner (or an admin) makes an account for somebody from the dashboard, whatever sign-up
+        allows. With `auth` it is end-to-end encrypted: the owner's browser made the 24 words and kept
+        them, and this is the sign-in key it made from them. Without, it is an account of the earlier kind
+        and its words are made here. Returns (its words or "", its record)."""
+        phrase = ""
+        if auth is None:
+            key = secrets.token_bytes(32)
+            phrase = words.key_to_phrase(key)
+            rec = self._make(key, "", None, owner=True)
+        else:
+            if len(auth) != 32:
+                raise AccountError("That isn't a sign-in key.")
+            if self._recs.get(account_id(auth)) is not None:
+                raise AccountError("There is an account with those words already.")
+            rec = self._make(auth, "", None, e2e=True, owner=True)
+        with self._lock:
+            rec["note"] = str(note or "")[:80]
+            rec["by_owner"] = True
+            self._save()
+        return phrase, rec
+
     def admin_ok(self, aid):
         """True while `aid` is an admin account that may sign in."""
         with self._lock:

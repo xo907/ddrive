@@ -659,6 +659,12 @@ Settings) decides who may make one:
 - **Limits**: *Storage per account* (`account_quota_bytes`, 5 GB unless you change it; earlier
   versions and deleted files count until they are gone) and *Most accounts* (`accounts_max`, 100).
   At most three accounts an hour are made from one address.
+- **Making one yourself**: Settings → Accounts → **Make an account…** makes an account for somebody,
+  whatever sign-up is set to (also when it is closed), with a note only you see. Your browser makes
+  its 24 words and shows them; once you tick that they are written down, it sends only the sign-in key
+  made from them, so the account is end-to-end encrypted like one made at `/signup`. Pass the words
+  on: nobody, you included, can open or reset the account without them. (On a plain `http` address a
+  browser can't encrypt, so there it makes an account of the earlier kind, whose words the server makes.)
 - **Managing them**: the list under Settings → Accounts shows each account's id, how much it stores
   and when it last signed in. **Switch off** signs it out and stops its share links without deleting
   anything; **Delete** removes it from this computer and from Discord. An account can delete itself

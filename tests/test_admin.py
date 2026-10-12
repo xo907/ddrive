@@ -97,6 +97,32 @@ class AdminTest(helpers.DriveTest):
         self.assertIsNotNone(self.sign_in(phrase))
         self.assertTrue(self.acc.admin_ok(aid))
 
+    def test_the_owner_makes_accounts(self):
+        from ddrive import lite, vault
+        self.assertEqual(self.acc.mode(), "closed")              # whoever sign-up is open to
+        # end-to-end encrypted: only the sign-in key comes here
+        key = os.urandom(32)
+        status, r = self.post("/api/accounts/create", {"auth": vault.auth_key(key).hex(), "note": "Kim"}, self.owner)
+        self.assertEqual((status, r["e2e"]), (200, True), r)
+        self.assertNotIn("phrase", r)
+        v = vault.Vault(lite.HostClient(f"http://127.0.0.1:{self.web.port}", auth=vault.auth_key(key).hex()), key).sync()
+        v.put("/hello.txt", b"hi")
+        self.assertEqual(v.read("/hello.txt"), b"hi")
+        listed = {a["id"]: a for a in self.get("/api/accounts", self.owner)[1]["accounts"]}
+        self.assertEqual((listed[r["id"]]["note"], listed[r["id"]]["e2e"]), ("Kim", True))
+        # the same words twice: refused
+        self.assertEqual(self.post("/api/accounts/create", {"auth": vault.auth_key(key).hex()}, self.owner)[0], 409)
+        self.assertEqual(self.post("/api/accounts/create", {"auth": "abcd"}, self.owner)[0], 400)
+        # the earlier kind: the words are made here and given back once
+        status, r = self.post("/api/accounts/create", {"kind": "phrase"}, self.owner)
+        self.assertEqual((status, r["e2e"]), (200, False))
+        cookie = self.sign_in(r["phrase"])
+        self.assertEqual(self.get("/api/account", cookie)[1]["id"], r["id"])
+        # an admin can too; an account can't
+        _, phrase = self.make_admin()
+        self.assertEqual(self.post("/api/accounts/create", {"kind": "phrase"}, self.sign_in(phrase))[0], 200)
+        self.assertEqual(self.post("/api/accounts/create", {"kind": "phrase"}, cookie)[0], 403)
+
     def test_the_command(self):
         cfg = self.d.cfg
         cfg.web_enabled = True

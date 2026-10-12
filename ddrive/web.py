@@ -1171,6 +1171,29 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         log.warning("Web dashboard: the list of %d account(s) was brought back from Discord.", count)
         self._json({"ok": True, "count": count})
 
+    def _post_api_accounts_create(self):
+        """Make an account for somebody (accounts.create_for). End-to-end encrypted: the page made the
+        24 words and sends only the sign-in key made from them ("auth"). {"kind": "phrase"}: an account
+        of the earlier kind, whose words are made here and are in this answer only."""
+        body = self._body_json()
+        auth = None
+        if body.get("kind") != "phrase":
+            try:
+                auth = bytes.fromhex(str(body.get("auth") or ""))
+            except ValueError:
+                auth = b""
+        try:
+            phrase, rec = self.app.accounts.create_for(auth, str(body.get("note") or ""))
+        except AccountError as e:
+            raise ApiError(409 if "already" in str(e) else 400 if "sign-in key" in str(e) else 503, str(e)) from None
+        by = self.app.session_admin(self._cookie())
+        log.info("Web dashboard: account %s was made by %s%s.", rec["id"], f"admin account {by}" if by else "the owner",
+                 " (end-to-end encrypted)" if rec.get("e2e") else "")
+        out = {"ok": True, "id": rec["id"], "e2e": bool(rec.get("e2e"))}
+        if phrase:
+            out["phrase"] = phrase
+        self._json(out)
+
     def _post_api_accounts_admin(self):
         """Make an admin account: a co-owner with 24 words of its own (accounts.create_admin). The words
         are in this answer only."""

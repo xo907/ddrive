@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.16.1 (2026-10-12)
+
+- **Make accounts from the dashboard.** Settings → Accounts → "Make an account…" makes an account for
+  somebody, whatever sign-up is set to (also while it is closed), with a note of who it is for. It is
+  end-to-end encrypted: the 24 words are made in your browser and shown before anything is sent, and
+  the server only gets the sign-in key made from them. On a plain http address, where a browser can't
+  encrypt, it makes one of the earlier kind instead (its words made by the server). Admins can do it
+  too.
+
 ## 2.16.0 (2026-10-12)
 
 - **Admin accounts.** A co-owner with 24 words of its own: it signs in to the owner's dashboard and

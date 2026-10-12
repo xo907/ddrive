@@ -3119,6 +3119,58 @@ function inviteDialog(redraw) {
     field("Good for", uses), field("Works for", days), field("Note", note), result, h("div", { class: "modal-actions" }, go_));
 }
 
+/** Make an account for somebody. End-to-end encrypted when this browser can encrypt: the 24 words are
+ * made here and shown before anything is sent; the server only gets the sign-in key made from them. */
+function newAccountDialog(redraw) {
+  const e2e = !!(window.DDV && DDV.usable);
+  const note = h("input", { placeholder: "Who it is for (only you see this)", maxlength: "80", spellcheck: "false" });
+  const area = h("div");
+  const p = (text, cls = "muted") => h("p", { class: cls, style: "margin:0 0 14px" }, text);
+  const wordsBox = (phrase) => [h("ol", { class: "phrase" }, phrase.split(" ").map((w) => h("li", {}, w))),
+    h("div", { class: "modal-actions", style: "justify-content:flex-start" }, h("button", { class: "btn ghost small", type: "button", onclick: async () => {
+      try { await navigator.clipboard.writeText(phrase); toast("Copied. Clear your clipboard once it is passed on."); } catch { toast("Could not copy"); }
+    } }, "Copy the words"))];
+  const done = (id, phrase) => {
+    note.disabled = true;
+    area.replaceChildren(p(h("b", {}, `Account ${id} was made.`), ""),
+      p("These 24 words sign it in. They are shown only now: give them to that person, and to nobody else. Nobody can reset them."), ...wordsBox(phrase),
+      h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: () => m.close() }, "Done")));
+    redraw();
+  };
+  async function startE2E() {
+    area.replaceChildren(p("Making the words…"));
+    let key, phrase, d;
+    try {
+      key = DDV.newKey(); phrase = await DDV.keyToPhrase(key); d = await DDV.derive(key);
+      if (String(await DDV.phraseToKey(phrase)) !== String(key)) throw new Error("the words could not be checked");
+    } catch (e) { area.replaceChildren(p(`The words could not be made: ${e.message}`, "err")); return; }
+    const saved = h("input", { type: "checkbox", style: "width:auto;height:auto;margin:0;flex:none" });
+    const make = h("button", { class: "btn", type: "button", disabled: true, onclick: async () => {
+      make.disabled = true;
+      const r = await attempt(() => api("/api/accounts/create", { auth: d.auth, note: note.value.trim() }));
+      if (!r) { make.disabled = false; return; }
+      key.fill(0);
+      done(r.id, phrase);
+    } }, "Make the account");
+    saved.addEventListener("change", () => { make.disabled = !saved.checked; });
+    area.replaceChildren(
+      p("These are the new account's 24 words. They were made in this browser and are not sent anywhere: the server only gets a sign-in key made from them, so neither it nor you can open the account later without them. Write them down or copy them for that person now."),
+      ...wordsBox(phrase),
+      h("label", { class: "check", style: "display:flex;gap:8px;align-items:center;margin:4px 0 0" }, saved, "The words are written down or passed on"),
+      h("div", { class: "modal-actions" }, make));
+  }
+  async function startPhrase() {
+    if (!await ask({ title: "Make an account of the earlier kind?", ok: "Make it", text: "Its words are made by the server, which keeps its key: its files are encrypted, but not end-to-end. On an https address (or on this computer) you can make an end-to-end encrypted one instead." })) return;
+    const r = await attempt(() => api("/api/accounts/create", { kind: "phrase", note: note.value.trim() }));
+    if (r) done(r.id, r.phrase);
+  }
+  const m = modal("Make an account",
+    p(e2e ? "An account with storage of its own, made for somebody, whoever sign-up is open to. It is end-to-end encrypted: its 24 words are made here, in your browser, and the server never gets them."
+          : "This address isn't https, so the browser can't encrypt here: an end-to-end encrypted account can only be made on an https address or on the computer that runs the drive (http://localhost). Here you can make one of the earlier kind, whose key the server keeps."),
+    field("Note", note), area,
+    h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: (e) => { e.target.parentNode.remove(); (e2e ? startE2E : startPhrase)(); } }, "Next")));
+}
+
 /** Make an admin account: a co-owner with 24 words of its own, shown once, here. */
 function adminDialog(redraw) {
   const note = h("input", { placeholder: "Who it is for (only admins see this)", maxlength: "80", spellcheck: "false" });
@@ -3158,6 +3210,8 @@ async function accountsSection(into) {
       row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
           + "copied and sealed in this browser, so the server never gets the key. Nothing here is changed.",
           h("button", { class: "btn small", onclick: () => window.moveToAccount() }, "Move everything…")),
+      row("Make an account", "For somebody, with storage of its own: end-to-end encrypted, its 24 words made in this browser. Works whoever sign-up is open to.",
+          h("button", { class: "btn small", onclick: () => newAccountDialog(redraw) }, "Make an account…")),
       row("Admin accounts", "Co-owners with 24 words of their own: they can do everything you can, except change how you sign in. Switching one off signs it out at once.",
           h("button", { class: "btn small", onclick: () => adminDialog(redraw) }, "Make an admin…")),
       row("Who can make an account", mode[2],
