@@ -353,7 +353,7 @@ class SealedDevices:
             d = self._dev(who, device)
             if req in d["asked"]:
                 d["asked"].discard(req)
-                d["answers"][req] = self._sealed(result)
+                d["answers"][req] = self._sealed(result, 12 * 1024 * 1024)       # (an answer may carry a page's pictures)
                 self._cv.notify_all()
 
     def bye(self, who, device):
@@ -389,8 +389,9 @@ class SealedDevices:
             self._cv.notify_all()
 
     def ask(self, who, device, sealed, wait=ANSWER_WAIT):
-        """Pass a sealed question on to a device and wait for its sealed answer (the folders in a folder of it)."""
-        end = time.monotonic() + wait
+        """Pass a sealed question on to a device and wait for its sealed answer (the folders in a folder of
+        it, what a web page says about itself)."""
+        end = time.monotonic() + max(1.0, min(float(wait or ANSWER_WAIT), 60.0))
         with self._cv:
             d = self._dev(who, device)
             if not self._online(d):

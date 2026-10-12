@@ -162,6 +162,8 @@
         const info = await DDV.openMessage(v.meta, d.info) || {}, jobs = await DDV.openMessage(v.meta, d.jobs) || [], st = await DDV.openMessage(v.meta, d.status) || {};
         out.push({ id: d.id, rev: d.rev, name: info.name || "A device", windows: info.platform === "win32", home: info.home || "", version: "",
                    online: d.online, seen: d.seen, running: d.online ? st.running || null : null, raw: Array.isArray(jobs) ? jobs : [],
+                   fetches: d.online ? (st.fetches || []).map((f) => ({ id: f.id, name: f.name, url: f.url, state: f.state, bytes: f.bytes, total: f.total,
+                                                                         folder: f.folder, error: f.error })) : [],
                    jobs: (Array.isArray(jobs) ? jobs : []).map((j) => {
                      const s = { state: "idle", ...((st.jobs || {})[j.id] || {}) };
                      if (!d.online) { delete s.progress; s.next = null; if (s.state === "running") s.state = "idle"; }
@@ -204,6 +206,8 @@
       s.stats = { ...s.stats, ...stats() };
       s.uploads = (s.uploads || []).map((u) => ({ ...u, path: "/" + (names.get(String(u.path || "").split("/").pop()) || "a sealed file") }));
       s.e2e = true;
+      s.fetches = E.fetches || [];
+      devices().then((ds) => { E.fetches = ds.flatMap((d) => d.fetches); }, () => null);
       return json(s);
     },
     async home() {
@@ -436,6 +440,238 @@
       return realFetch("/api/logout", { method: "POST", ...cred, headers: { "X-DD": "1", "Content-Type": "application/json" }, body: "{}" });
     },
   };
+  // ------------------------------------------------------------ a small file kept in the account (the address book, the bookmarks)
+  async function readText(path) {
+    index();
+    const n = byPath.get(path);
+    return n && !n.dir ? dec.decode(await readRange(n, 0, n.size - 1)) : "";
+  }
+  async function ensureFolder(path) {
+    index();
+    let made = "";
+    for (const part of path.split("/").filter(Boolean)) {
+      const up = made || "/";
+      made += "/" + part;
+      if (!byPath.has(made)) { await POST.mkdir({ path: made }); index(); }
+      else if (!byPath.get(made).dir) throw new Fail(400, `${made} is a file`);
+      void up;
+    }
+  }
+  async function writeText(path, text) {
+    await ensureFolder(path.slice(0, path.lastIndexOf("/")));
+    await putFile(path, new Blob([text]));
+  }
+  async function removePath(path) { index(); const n = byPath.get(path); if (n) await v._send({ op: "set", id: n.id, fields: { trash: { at: now(), path } } }); }
+
+  // ------------------------------------------------------------ something one of the account's own devices has to do
+  // Reading a web page for a bookmark, saving a file from a web address: the server does that for other
+  // accounts, and may not for this one (it would see what is fetched). A device of the account that is
+  // on does it instead, asked through the server in a sealed message.
+  async function helper() {
+    const d = (await devices()).find((x) => x.online);
+    if (!d) throw new Fail(409, "That needs one of your own devices to be on (a computer with DDrive Lite, or the phone app, with folder syncing turned on): " +
+                                "the server isn't allowed to see what is fetched.");
+    return d;
+  }
+  async function askDevice(message, wait) {
+    const d = await helper();
+    const r = await DDV.call("/api/vault/sync/ask", { method: "POST", json: { device: d.id, wait, sealed: await DDV.sealMessage(v.meta, message) } });
+    return DDV.openMessage(v.meta, r.sealed);
+  }
+
+  // ------------------------------------------------------------ contacts: one vCard file, /Contacts/Contacts.vcf (as contacts.py)
+  const BOOK = "/Contacts/Contacts.vcf";
+  const newContact = () => ({ uid: DDV.newId().slice(0, 16), name: "", first: "", last: "", org: "", title: "", bday: "", note: "", phones: [], emails: [], addresses: [], urls: [], photo: "", extra: [] });
+  const vUn = (s) => s.replace(/\\n/gi, "\n").replace(/\\([,;\\])/g, "$1");
+  const vEsc = (s) => String(s || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/([,;])/g, "\\$1");
+  const vSplit = (s, sep) => { const out = []; let cur = ""; for (let i = 0; i < s.length; i++) { if (s[i] === "\\" && i + 1 < s.length) { cur += s[i] + s[++i]; } else if (s[i] === sep) { out.push(cur); cur = ""; } else cur += s[i]; } out.push(cur); return out; };
+  const LABELS = { cell: "mobile", mobile: "mobile", home: "home", work: "work", fax: "fax", main: "main", pager: "pager", other: "other" };
+  const TYPES_V = { mobile: "CELL", home: "HOME", work: "WORK", fax: "FAX", main: "MAIN", pager: "PAGER", other: "OTHER" };
+  function vLabel(params) {
+    for (const p of params) for (const t of p.replace(/^type=/i, "").split(",")) if (LABELS[t.toLowerCase()]) return LABELS[t.toLowerCase()];
+    return "";
+  }
+  function parseVcards(text) {
+    const lines = [];
+    for (const raw of text.replace(/\r\n?/g, "\n").split("\n")) { if (/^[ \t]/.test(raw) && lines.length) lines[lines.length - 1] += raw.slice(1); else if (raw) lines.push(raw); }
+    const out = [];
+    let cur = null;
+    for (const line of lines) {
+      const colon = line.indexOf(":");
+      if (colon < 0) continue;
+      const head = line.slice(0, colon).split(";"), value = line.slice(colon + 1), params = head.slice(1);
+      const name = head[0].split(".").pop().toUpperCase();
+      if (name === "BEGIN" && value.toUpperCase() === "VCARD") { cur = newContact(); cur.uid = ""; continue; }
+      if (!cur) continue;
+      if (name === "END") {
+        if (!cur.uid) cur.uid = DDV.newId().slice(0, 16);
+        if (!cur.name) cur.name = [cur.first, cur.last].filter(Boolean).join(" ") || cur.org || (cur.emails[0] || cur.phones[0] || {}).value || "";
+        if (cur.name || cur.phones.length || cur.emails.length) out.push(cur);
+        cur = null;
+      } else if (name === "FN") cur.name = vUn(value).trim();
+      else if (name === "N") { const f = vSplit(value, ";").map(vUn).concat(["", "", "", "", ""]); cur.last = f[0].trim(); cur.first = [f[1], f[2]].filter(Boolean).join(" ").trim(); }
+      else if (name === "TEL") { const t = value.replace(/^tel:/i, ""); if (t.trim()) cur.phones.push({ label: vLabel(params), value: vUn(t).trim() }); }
+      else if (name === "EMAIL") { if (value.trim()) cur.emails.push({ label: vLabel(params), value: vUn(value).trim() }); }
+      else if (name === "ADR") { const f = vSplit(value, ";").map((x) => vUn(x).trim()).concat(["", "", "", "", "", "", ""]);
+        cur.addresses.push({ label: vLabel(params), street: [f[2], f[1], f[0]].filter(Boolean).join(", "), city: f[3], region: f[4], postcode: f[5], country: f[6] }); }
+      else if (name === "ORG") cur.org = vSplit(value, ";").map((x) => vUn(x).trim()).filter(Boolean).join(" ");
+      else if (name === "TITLE") cur.title = vUn(value).trim();
+      else if (name === "BDAY") { const m = /(\d{4})-?(\d{2})-?(\d{2})/.exec(value); cur.bday = m ? `${m[1]}-${m[2]}-${m[3]}` : ""; }
+      else if (name === "NOTE") cur.note = vUn(value);
+      else if (name === "URL") cur.urls.push(vUn(value).trim());
+      else if (name === "UID") cur.uid = value.replace(/[^\w.-]/g, "").slice(0, 64);
+      else if (name === "PHOTO") {
+        const type = (params.map((p) => /^type=(\w+)/i.exec(p)).find(Boolean) || [])[1];
+        if (/^data:image\//i.test(value)) cur.photo = value;
+        else if (params.some((p) => /^encoding=b|^base64$/i.test(p)) && value.length < 400000) cur.photo = `data:image/${(type || "jpeg").toLowerCase()};base64,${value.replace(/\s+/g, "")}`;
+      } else if (!["VERSION", "PRODID", "REV"].includes(name)) cur.extra.push(line);
+    }
+    return out;
+  }
+  function toVcard(c) {
+    const lines = ["BEGIN:VCARD", "VERSION:3.0", "PRODID:-//DDrive//Contacts//EN", `UID:${c.uid || DDV.newId().slice(0, 16)}`];
+    lines.push(`FN:${vEsc(c.name || [c.first, c.last].filter(Boolean).join(" ") || c.org || "No name")}`, `N:${vEsc(c.last)};${vEsc(c.first)};;;`);
+    if (c.org) lines.push(`ORG:${vEsc(c.org)}`);
+    if (c.title) lines.push(`TITLE:${vEsc(c.title)}`);
+    const type = (label) => TYPES_V[String(label || "").toLowerCase()];
+    for (const p of c.phones || []) if (p.value) lines.push(`TEL${type(p.label) ? ";TYPE=" + type(p.label) : ""}:${vEsc(p.value)}`);
+    for (const e of c.emails || []) if (e.value) lines.push(`EMAIL;TYPE=INTERNET${type(e.label) ? "," + type(e.label) : ""}:${vEsc(e.value)}`);
+    for (const a of c.addresses || []) if (["street", "city", "region", "postcode", "country"].some((k) => a[k]))
+      lines.push(`ADR${type(a.label) ? ";TYPE=" + type(a.label) : ""}:;;${vEsc(a.street)};${vEsc(a.city)};${vEsc(a.region)};${vEsc(a.postcode)};${vEsc(a.country)}`);
+    for (const u of c.urls || []) if (u) lines.push(`URL:${u}`);
+    if (c.bday) lines.push(`BDAY:${c.bday}`);
+    if (c.note) lines.push(`NOTE:${vEsc(c.note)}`);
+    const m = /^data:image\/(\w+);base64,(.+)$/s.exec(c.photo || "");
+    if (m) lines.push(`PHOTO;ENCODING=b;TYPE=${m[1].toUpperCase()}:${m[2].trim()}`);
+    lines.push(...(c.extra || []).filter(Boolean), "END:VCARD");
+    return lines.map((l) => { let out = l.slice(0, 75); for (let i = 75; i < l.length; i += 74) out += "\r\n " + l.slice(i, i + 74); return out; }).join("\r\n") + "\r\n";
+  }
+  const readBook = async () => parseVcards(await readText(BOOK)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const writeBook = (items) => writeText(BOOK, items.map(toVcard).join(""));
+  const digits = (c) => new Set([...(c.phones || []).map((p) => p.value.replace(/\D/g, "").slice(-9)), ...(c.emails || []).map((e) => e.value.toLowerCase())]);
+  const samePerson = (a, b) => { if ((a.name || "").trim().toLowerCase() !== (b.name || "").trim().toLowerCase()) return false; const x = digits(a), y = digits(b); return (!x.size && !y.size) || [...x].some((k) => y.has(k)); };
+
+  GET.contacts = async () => ({ items: (await readBook()).map(({ extra, ...c }) => c), file: BOOK });
+  POST["contacts/save"] = async (b) => {
+    const c = b.contact || {};
+    if (![c.name, c.first, c.last, c.org].some(Boolean) && !(c.phones || []).length && !(c.emails || []).length) throw new Fail(400, "Give the contact a name, a phone number or an email");
+    const items = await readBook(), old = items.find((x) => x.uid === c.uid);
+    const { extra, ...given } = c;
+    const merged = { ...newContact(), ...(old || {}), ...given };
+    if (!merged.name) merged.name = [merged.first, merged.last].filter(Boolean).join(" ") || merged.org || "";
+    await writeBook([...items.filter((x) => x.uid !== merged.uid), merged]);
+    const { extra: gone, ...shown } = merged;
+    return { ok: true, contact: shown };
+  };
+  POST["contacts/delete"] = async (b) => {
+    const uids = new Set((b.uids || []).map(String)), items = await readBook(), keep = items.filter((x) => !uids.has(x.uid));
+    if (keep.length !== items.length) await writeBook(keep);
+    return { ok: true, removed: items.length - keep.length };
+  };
+  POST["contacts/import"] = async (b, q, init) => {
+    const text = await (init.body instanceof Blob ? init.body : new Blob([init.body || ""])).text();
+    const found = parseVcards(text);
+    if (!found.length) throw new Fail(400, /BEGIN:VCARD/i.test(text) ? "No contacts found in that file." : "For an end-to-end encrypted account, import a vCard (.vcf) file. Google and Outlook can export one.");
+    const items = await readBook(), uids = new Set(items.map((x) => x.uid));
+    let added = 0, skipped = 0;
+    for (const c of found) {
+      if (items.some((x) => samePerson(c, x))) { skipped++; continue; }
+      if (uids.has(c.uid)) c.uid = DDV.newId().slice(0, 16);
+      uids.add(c.uid); items.push(c); added++;
+    }
+    if (added) await writeBook(items);
+    return { ok: true, added, skipped };
+  };
+
+  // ------------------------------------------------------------ bookmarks: /Bookmarks/Bookmarks.json and the pictures next to it (as bookmarks.py)
+  const MARKS = "/Bookmarks/Bookmarks.json", IMAGES = "/Bookmarks/images";
+  function normalizeUrl(text) {
+    let url = String(text || "").trim();
+    if (!url || /[\s<>"]/.test(url) || url.length > 2000) throw new Fail(400, "That doesn't look like a web address");
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) url = "https://" + url;
+    let u;
+    try { u = new URL(url); } catch (e) { throw new Fail(400, "That doesn't look like a web address"); }
+    if (!["http:", "https:"].includes(u.protocol) || (!u.hostname.includes(".") && u.hostname !== "localhost")) throw new Fail(400, "That doesn't look like a web address");
+    u.hash = "";
+    return u.href;
+  }
+  const pageKey = (url) => { const u = new URL(url); return [u.hostname.replace(/^www\./, "").toLowerCase(), u.pathname.replace(/\/+$/, ""), u.search].join("|"); };
+  const readMarks = async () => { try { return (JSON.parse(await readText(MARKS) || "{}").items || []).filter((m) => m && m.id && m.url); } catch (e) { return []; } };
+  const writeMarks = (items) => writeText(MARKS, JSON.stringify({ v: 1, items }, null, 1));
+  /** Put a preview's pictures into the account and its words into the bookmark. */
+  async function storePreview(mark, p) {
+    for (const key of ["title", "description", "site", "color"]) if (p[key] && (key !== "title" || !mark.edited)) mark[key] = p[key];
+    for (const [key, suffix] of [["image", ""], ["icon", "-icon"]]) {
+      if (!p[key] || !p[key].data) continue;
+      const old = mark[key], path = `${IMAGES}/${mark.id}${suffix}.${p[key].ext}`;
+      await ensureFolder(IMAGES);
+      await putFile(path, new Blob([DDV.unb64(p[key].data)]));
+      mark[key] = path;
+      if (old && old !== path) await removePath(old);
+    }
+  }
+  const noPreview = "saved without a picture: turn on one of your devices (a computer with DDrive Lite, or the phone app) and press “Read the preview again”";
+  GET.bookmarks = async () => ({ items: await readMarks(), folder: "/Bookmarks" });
+  POST["bookmarks/add"] = async (b) => {
+    const url = normalizeUrl(b.url), items = await readMarks(), old = items.find((m) => pageKey(m.url) === pageKey(url));
+    if (old) return { ok: true, bookmark: old, existed: true };
+    const host = new URL(url).hostname;
+    const mark = { id: DDV.newId().slice(0, 12), url, title: "", description: "", site: host.replace(/^www\./, ""), color: "", image: "", icon: "",
+                   tags: (b.tags || []).map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, 12), note: "", added: now() };
+    const p = await askDevice({ do: "preview", url }, 45).catch(() => null);
+    if (p && !p.error) await storePreview(mark, p);
+    if (!mark.title) mark.title = host;
+    const again = await readMarks();
+    if (!again.some((m) => pageKey(m.url) === pageKey(url))) { again.unshift(mark); await writeMarks(again); }
+    return { ok: true, bookmark: mark, preview: !!(p && (p.title || p.image)), note: p && !p.error ? "" : noPreview };
+  };
+  POST["bookmarks/save"] = async (b) => {
+    const items = await readMarks(), mark = items.find((m) => m.id === b.id);
+    if (!mark) throw new Fail(404, "That bookmark is gone");
+    const tidy = (text, n) => String(text || "").split(/\s+/).join(" ").trim().slice(0, n);
+    if ("title" in b) { const t = tidy(b.title, 300); if (t && t !== mark.title) { mark.title = t; mark.edited = true; } }
+    if ("description" in b) mark.description = tidy(b.description, 600);
+    if ("pinned" in b) { if (b.pinned) mark.pinned = now(); else delete mark.pinned; }
+    if ("note" in b) mark.note = String(b.note || "").slice(0, 4000);
+    if ("tags" in b) {
+      const seen = new Set(), tags = [];
+      for (let t of Array.isArray(b.tags) ? b.tags : String(b.tags).split(",")) { t = String(t).trim().replace(/^#+/, "").slice(0, 40); if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); tags.push(t); } }
+      mark.tags = tags.slice(0, 12);
+    }
+    await writeMarks(items);
+    return { ok: true, bookmark: mark };
+  };
+  POST["bookmarks/refresh"] = async (b) => {
+    const was = (await readMarks()).find((m) => m.id === b.id);
+    if (!was) throw new Fail(404, "That bookmark is gone");
+    const p = await askDevice({ do: "preview", url: was.url }, 45);
+    if (!p || p.error || !(p.title || p.image || p.icon)) throw new Fail(502, (p && p.error) || "The page could not be read right now");
+    const items = await readMarks(), mark = items.find((m) => m.id === b.id);
+    if (!mark) throw new Fail(404, "That bookmark is gone");
+    await storePreview(mark, p);
+    await writeMarks(items);
+    return { ok: true, bookmark: mark };
+  };
+  POST["bookmarks/delete"] = async (b) => {
+    const ids = new Set((b.ids || []).map(String)), items = await readMarks(), keep = items.filter((m) => !ids.has(m.id));
+    for (const m of items) if (ids.has(m.id)) for (const p of [m.image, m.icon]) if (p && p.startsWith(IMAGES + "/")) await removePath(p);
+    if (keep.length !== items.length) await writeMarks(keep);
+    return { ok: true, removed: items.length - keep.length };
+  };
+
+  // ------------------------------------------------------------ saving a file from a web address (a device of the account fetches it)
+  let fetchId = Date.now() % 1000000;
+  POST.fetch = async (b) => {
+    const url = String(b.url || "").trim();
+    if (!/^https?:\/\//i.test(url)) throw new Fail(400, "Give a web address that starts with http:// or https://");
+    const dest = clean(b.path || "/");
+    at(dest, "dir");
+    const d = await helper(), id = ++fetchId;
+    await tell(d, { do: "fetch", id, url, dest });
+    return { ok: true, id, name: decodeURIComponent(new URL(url).pathname.split("/").pop() || "download") };
+  };
+  POST["fetch/cancel"] = async (b) => { for (const d of (await devices()).filter((x) => x.online)) await tell(d, { do: "fetch-cancel", id: b.id }).catch(() => null); return { ok: true }; };
+
   const PASS = /^(account|account\/delete|changelog|vault(\/.*)?)$/;        // about the account itself: the server's to answer
 
   async function answer(url, init) {
@@ -470,6 +706,17 @@
   E.download = function (address, name) {
     const url = new URL(address, location.href);
     if (url.pathname === "/api/zip") { E.say("Downloading a folder as a ZIP isn't there for end-to-end encrypted accounts yet. Download its files one by one."); return true; }
+    if (url.pathname === "/api/contacts/export") {
+      const want = new Set((url.searchParams.get("uids") || "").split(",").filter(Boolean));
+      readBook().then((items) => {
+        const blob = URL.createObjectURL(new Blob(items.filter((c) => !want.size || want.has(c.uid)).map(toVcard), { type: "text/vcard" }));
+        const a = document.createElement("a");
+        a.href = blob; a.download = name || "contacts.vcf";
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(blob), 60000);
+      }, (e) => E.say(e.message));
+      return true;
+    }
     if (url.pathname !== "/api/file") return false;
     (async () => {
       const n = at(url.searchParams.get("path"), "file"), C = DDV.CHUNK * 8;

@@ -3,14 +3,12 @@ activity list, storage insights, downloading a selection as one ZIP, saving a fi
 file requests (links other people upload through), and WebDAV for other apps."""
 
 import errno
-import ipaddress
 import json
 import logging
 import mimetypes
 import os
 import posixpath
 import re
-import socket
 import threading
 import time
 import urllib.parse
@@ -20,6 +18,7 @@ from email.utils import formatdate
 from xml.sax.saxutils import escape as _x
 
 from .logbuf import tname
+from .pagepreview import public_address
 from . import __version__
 from .crypto import check_password
 from .index import ROOT_ID
@@ -43,19 +42,6 @@ def clean_name(name, fallback="file"):
     name = urllib.parse.unquote(str(name or "")).replace("\\", "/").rsplit("/", 1)[-1]
     name = re.sub(r'[\x00-\x1f<>:"|?*]', "_", name).strip().strip(".")
     return name[:180] or fallback
-
-
-def public_address(host):
-    """True when `host` is somewhere on the internet (not this computer or the home network)."""
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-            return False
-    return bool(infos)
 
 
 class _Body:

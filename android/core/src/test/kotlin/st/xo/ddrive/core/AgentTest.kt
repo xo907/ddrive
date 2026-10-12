@@ -468,6 +468,88 @@ class AgentTest {
     }
 
     @Test
+    fun thePhoneFetchesWhatTheHostMayNotSee() {
+        // a bookmark's preview and a file saved from a web address: the phone reads the site, the host passes sealed messages on
+        val png = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 13, 10, 26, 10) + ByteArray(300) { 5 }
+        val html = """<!doctype html><html><head><meta charset="utf-8"><title>Plain title</title>
+            <meta property="og:title" content="How to bake bread &amp; more"><meta content="Bread Weekly" property="og:site_name">
+            <meta property="og:description" content="A   long guide
+            to baking."><meta name="theme-color" content="#aa5500">
+            <meta property="og:image" content="/img/banner.png"><link rel="icon" href="icon.png" sizes="32x32">
+            </head><body><meta property="og:title" content="ignored, not in the head"></body></html>""".toByteArray()
+        val big = ByteArray(700_000) { (it % 251).toByte() }
+        val site = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        site.createContext("/") { x ->
+            val path = x.requestURI.path
+            val (body, type) = when {
+                path.endsWith(".png") -> png to "image/png"
+                path.startsWith("/files/") -> big to "application/octet-stream"
+                path.startsWith("/moved") -> ByteArray(0) to ""
+                else -> html to "text/html; charset=utf-8"
+            }
+            if (path.startsWith("/moved")) {
+                x.responseHeaders.add("Location", "/recipes/bread")
+                x.sendResponseHeaders(302, -1)
+            } else {
+                x.responseHeaders.add("Content-Type", type)
+                x.sendResponseHeaders(200, body.size.toLong())
+                x.responseBody.use { it.write(body) }
+            }
+            x.close()
+        }
+        site.start()
+        try {
+            val base = "http://127.0.0.1:${site.address.port}"
+            val meta = WebFetch.parseMeta(String(html), "$base/recipes/bread")
+            assertEquals("How to bake bread & more", meta.getString("title"))
+            assertEquals("A long guide to baking.", meta.getString("description"))
+            assertEquals("$base/recipes/icon.png", meta.getString("icon"))
+            assertEquals("#aa5500", meta.getString("color"))
+            assertEquals("https://example.com/x?y=1", WebFetch.normalize(" example.com/x?y=1#part "))
+            assertEquals("", WebFetch.preview("$base/recipes/bread").getString("title"))       // the phone's own network is left alone
+
+            val (key, client) = newAccount()
+            val page = Vault(HostClient(address, "", auth = hex(Seal.authKey(key))), key)      // the account's page in a browser
+            val a = Agent(client, device, "my phone", File(tmp, "state"), File(tmp, "Removed by sync"), home = tmp.path,
+                          livePoll = 3600.0, liveFull = 3600.0, keepFree = 0, vault = Vault(client, key), fetchPrivate = true)
+            agent = a
+            a.start()
+            fun shown(): JSONObject? = page.client.getJson("/api/vault/sync").getJSONArray("devices").optJSONObject(0)
+            until("connecting") { if (a.online) shown()?.takeIf { it.getBoolean("online") } else null }
+            fun ask(message: JSONObject) = JSONObject(page.openMessage(page.client.postJson("/api/vault/sync/ask", JSONObject().put("device", device)
+                .put("wait", 30).put("sealed", page.sealMessage(message.toString()))).getString("sealed")))
+            val p = ask(JSONObject().put("do", "preview").put("url", "$base/moved/secret-bread"))
+            assertEquals("How to bake bread & more", p.getString("title"))
+            assertEquals("Bread Weekly", p.getString("site"))
+            assertEquals("png", p.getJSONObject("image").getString("ext"))
+            assertTrue(java.util.Base64.getDecoder().decode(p.getJSONObject("image").getString("data")).contentEquals(png))
+            assertEquals("png", p.getJSONObject("icon").getString("ext"))
+            assertTrue(ask(JSONObject().put("do", "preview").put("url", "not a link")).has("error"))
+
+            for (n in 2..3) {                                                   // the same address twice: the second gets a name of its own
+                page.client.postJson("/api/vault/sync/tell", JSONObject().put("device", device).put("sealed", page.sealMessage(
+                    JSONObject().put("do", "fetch").put("id", n).put("url", "$base/files/secret%20report.bin").put("dest", "/Saved/From the web").toString())))
+                val done = until("the download") {
+                    val st = shown()!!.optString("status")
+                    if (st.isEmpty()) null else JSONObject(page.openMessage(st)).optJSONArray("fetches")?.let { list ->
+                        (0 until list.length()).map { list.getJSONObject(it) }.firstOrNull { it.optInt("id") == n && it.getString("state") != "running" }
+                    }
+                }
+                assertEquals("", done.getString("error"))
+                assertEquals("done", done.getString("state"))
+                assertEquals(big.size.toLong(), done.getLong("bytes"))
+            }
+            val sha = hex(java.security.MessageDigest.getInstance("SHA-256").digest(big))
+            assertEquals(sha, python("sha ${hex(key)} /Saved/From%20the%20web/secret%20report.bin"))
+            assertEquals(sha, python("sha ${hex(key)} /Saved/From%20the%20web/secret%20report%20(2).bin"))
+            assertFalse(shown().toString().contains("secret"))                 // the host only has it sealed
+            assertEquals(0, File(tmp, "state").listFiles { f -> f.name.endsWith(".part") }!!.size)
+        } finally {
+            site.stop(0)
+        }
+    }
+
+    @Test
     fun whatIsLeftOut() {
         val ex = Excluder(listOf("*.iso", "Temp/", "Raw/2020"))
         for (p in listOf("movie.mp4.crdownload", "a/b/~\$report.docx", "Thumbs.db", "x/big.ISO", "Temp", "Raw/2020/a.dng",

@@ -565,8 +565,109 @@ class VaultAgent(Agent):
 
     def __init__(self, client, key, device, name, data_dir=None, mount_point=""):
         self.vault = vault.Vault(client, key)
+        self.fetches = []                    # files being saved from web addresses, for the dashboard to show
+        self.fetch_private = False           # only addresses on the internet are fetched (as the host does it)
+        self._fetch_lock = threading.Lock()
         data_dir = data_dir or os.path.join(default_data_dir(), "lite")
         super().__init__(client, device, name, data_dir, mount_point, drive=VaultDrive(self.vault, data_dir))
+
+    # What the host does for other accounts and may not do for this one, because it would see what is
+    # fetched: reading a web page for a bookmark's preview, and saving a file from a web address. One of
+    # the account's own devices does it instead, when the dashboard asks.
+    def _do(self, c):
+        what = c.get("do")
+        if what == "preview":                # (on a thread of its own: a slow site must not hold up the rest)
+            threading.Thread(target=lambda: self._reply(c.get("req"), self._preview(str(c.get("url") or ""))),
+                             name="Preview", daemon=True).start()
+        elif what == "fetch":
+            threading.Thread(target=self._fetch, args=(c,), name="Fetch", daemon=True).start()
+        elif what == "fetch-cancel":
+            with self._fetch_lock:
+                for f in self.fetches:
+                    if f["id"] == c.get("id"):
+                        f["cancel"] = True
+        else:
+            super()._do(c)
+
+    def _preview(self, url):
+        """What the page at a web address says about itself, with its pictures."""
+        try:
+            from .pagepreview import fetch_preview, normalize
+            p = fetch_preview(normalize(url), self.fetch_private)
+        except Exception as e:
+            return {"error": f"The page could not be read: {e}"}
+        for key in ("image", "icon"):
+            if p.get(key):
+                data, ext = p[key]
+                p[key] = {"data": base64.b64encode(data).decode("ascii"), "ext": ext} if len(data) <= 4 * 1024 * 1024 else None
+        return p
+
+    def _fetch(self, c):
+        """Save the file at a web address into the account: downloaded here, sealed, sent."""
+        import re
+        import tempfile
+        import urllib.parse
+        import urllib.request
+        from .pagepreview import _opener, public_address
+        url, folder = str(c.get("url") or "").strip(), "/" + str(c.get("dest") or "").strip("/")
+        item = {"id": c.get("id"), "url": url, "name": urllib.parse.unquote(posixpath.basename(urllib.parse.urlsplit(url).path)) or "download",
+                "folder": folder, "state": "running", "bytes": 0, "total": 0, "error": "", "at": time.time()}
+        with self._fetch_lock:
+            self.fetches.append(item)
+        self._report.set()
+        tmp = None
+        try:
+            u = urllib.parse.urlsplit(url)
+            if u.scheme not in ("http", "https") or not u.hostname:
+                raise ValueError("Give a web address that starts with http:// or https://")
+            if not self.fetch_private and not public_address(u.hostname):
+                raise ValueError("That address is on this computer or the home network (or can't be found); "
+                                 "only addresses on the internet are fetched")
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (DDrive)"})
+            with _opener(self.fetch_private).open(req, timeout=30) as r, \
+                    tempfile.NamedTemporaryFile(prefix="dd-fetch-", delete=False) as out:
+                tmp = out.name
+                m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", r.headers.get("Content-Disposition") or "", re.I)
+                if m:
+                    item["name"] = urllib.parse.unquote(posixpath.basename(m.group(1).strip())) or item["name"]
+                item["total"] = int(r.headers.get("Content-Length") or 0)
+                last = 0.0
+                while True:
+                    if item.get("cancel") or self._stop.is_set():
+                        raise InterruptedError("stopped")
+                    data = r.read(256 * 1024)
+                    if not data:
+                        break
+                    out.write(data)
+                    item["bytes"] += len(data)
+                    if time.time() - last > 1:
+                        last = time.time()
+                        self._report.set()
+            v = self.vault
+            v.sync()
+            if v.resolve(folder) is None:
+                self.d.makedirs(folder)
+            name, n = item["name"], 1
+            stem, ext = os.path.splitext(name)
+            while v.resolve(posixpath.join(folder, name)) is not None:
+                n += 1
+                name = f"{stem} ({n}){ext}"
+            item["name"] = name
+            with open(tmp, "rb") as f:
+                v.put(posixpath.join(folder, name), read=f.read, size=os.path.getsize(tmp), stop=lambda: bool(item.get("cancel")))
+            item["state"] = "done"
+        except InterruptedError:
+            item.update(state="error", error="Cancelled")
+        except Exception as e:
+            item.update(state="error", error=str(e) or "It could not be fetched")
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        item["at"] = time.time()
+        self._report.set()
 
     def _seal(self, obj):
         data = json.dumps(obj, separators=(",", ":")).encode("utf-8")
@@ -608,8 +709,11 @@ class VaultAgent(Agent):
         return {"rev": got["rev"], "jobs": self._jobs(got["jobs"]), "commands": commands}
 
     def _tell_status(self, status, running):
+        with self._fetch_lock:                   # finished ones stay a minute, so the dashboard gets to say so
+            self.fetches = [f for f in self.fetches if f["state"] == "running" or time.time() - f["at"] < 60]
+            fetches = [{k: v for k, v in f.items() if k != "cancel"} for f in self.fetches]
         self.client._json("/api/vault/sync/report", {"device": self.device,
-                                                     "status": self._seal({"jobs": status, "running": running})})
+                                                     "status": self._seal({"jobs": status, "running": running, "fetches": fetches})})
 
     def _reply(self, req, result):
         self.client._json("/api/vault/sync/answer", {"device": self.device, "req": req, "sealed": self._seal(result)})

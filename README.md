@@ -622,7 +622,10 @@ Settings) decides who may make one:
   one that leaks the words. Every service that encrypts in a web page has this limit.
 - **What an account has**: the same dashboard as you. Home, Files (upload, also by dropping; preview;
   rename, move, copy, delete; stars; search; earlier versions), the Gallery with thumbnails, Notes,
-  Sync, Deleted (kept 30 days) and Storage. A layer in the browser (`e2e-api.js`) answers the
+  Bookmarks, Contacts, Sync, Deleted (kept 30 days) and Storage. What needs the web (a bookmark's
+  preview, saving a file from a link) is done by one of the person's own devices, a computer with
+  DDrive Lite or the phone app, asked through your computer in a sealed message, so your computer
+  doesn't learn which pages or files those are. A layer in the browser (`e2e-api.js`) answers the
   dashboard's questions from the list of files as the browser opened it, where your computer would
   otherwise answer them from files it can read; pictures and videos are opened as they are shown, so a
   video plays and seeks without being downloaded first. Files of any size go up in parts, sealed piece
@@ -636,9 +639,8 @@ Settings) decides who may make one:
   drive letter doesn't yet. The [phone app](#ddrive-lite-for-android) does the same: connected with
   the account's words it backs up the phone's folders sealed.
 - **What it doesn't have yet**, because each of these needs work done on the person's own device that
-  your computer used to do with the files in the clear: bookmarks, messages, contacts, share links,
-  snapshots, the activity list, saving from a web link, a folder as one ZIP, and a drive letter
-  through DDrive Lite. Their pages aren't shown for these accounts. And never: Settings, Log, Health
+  your computer used to do with the files in the clear: messages, share links, snapshots, the
+  activity list, a folder as one ZIP, and a drive letter through DDrive Lite. Their pages aren't shown for these accounts. And never: Settings, Log, Health
   and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
   computer, which keeps their keys, so they trust you with them; they open the full dashboard). The

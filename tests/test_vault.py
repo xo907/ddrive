@@ -387,6 +387,68 @@ class VaultSyncTest(VaultTest):
         self.assertFalse(os.path.exists(os.path.join(self.here, "film.mp4")))
         self.assertEqual(len(self.new_device().read("/Films/film.mp4")), 200_000)
 
+    def test_a_device_fetches_what_the_host_may_not_see(self):
+        """A bookmark's preview and a file saved from a web address: the account's own device reads the
+        site, the host only passes sealed messages on."""
+        import http.server
+        import threading
+        png = b"\x89PNG\r\n\x1a\n" + b"pixels" * 50
+        page = b"""<!doctype html><html><head><meta charset="utf-8"><title>Plain title</title>
+            <meta property="og:title" content="How to bake bread &amp; more"><meta property="og:site_name" content="Bread Weekly">
+            <meta property="og:image" content="/img/banner.png"><link rel="icon" href="icon.png" sizes="32x32"></head><body></body></html>"""
+
+        class Site(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body, ctype = (png, "image/png") if self.path.endswith(".png") else \
+                    (MARK * 3000, "application/octet-stream") if self.path.startswith("/files/") else (page, "text/html; charset=utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        site = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
+        threading.Thread(target=site.serve_forever, daemon=True).start()
+        self.addCleanup(site.shutdown)
+        base = f"http://127.0.0.1:{site.server_address[1]}"
+
+        def ask(message):
+            got = self.page._json("/api/vault/sync/ask", {"device": DEVICE, "wait": 30, "sealed": self.seal(message)})
+            return self.open(got["sealed"])
+
+        def fetched(fid):
+            st = self.open(self.shown()["status"]) or {}
+            return next((f for f in st.get("fetches") or [] if f["id"] == fid and f["state"] != "running"), None)
+        # an address on the device's own network is left alone, as the host leaves its own alone
+        self.assertEqual(ask({"do": "preview", "url": base + "/recipes/secret-bread"})["title"], "")
+        self.page._json("/api/vault/sync/tell", {"device": DEVICE, "sealed": self.seal({"do": "fetch", "id": 1, "url": base + "/files/a.bin", "dest": "/"})})
+        self.assertIn("home network", self.until(lambda: fetched(1), "the refusal")["error"])
+        self.agent.fetch_private = True
+        p = ask({"do": "preview", "url": base + "/recipes/secret-bread"})
+        self.assertEqual((p["title"], p["site"]), ("How to bake bread & more", "Bread Weekly"))
+        self.assertEqual((base64.b64decode(p["image"]["data"]), p["image"]["ext"], p["icon"]["ext"]), (png, "png", "png"))
+        self.assertIn("error", ask({"do": "preview", "url": "not a link"}))
+        for n in (2, 3):                                                    # the same address twice: the second gets a name of its own
+            self.page._json("/api/vault/sync/tell", {"device": DEVICE, "sealed": self.seal(
+                {"do": "fetch", "id": n, "url": base + "/files/secret%20report.bin", "dest": "/Saved/From the web"})})
+            done = self.until(lambda: fetched(n), "the download")
+            self.assertEqual((done["state"], done["error"], done["bytes"]), ("done", "", len(MARK) * 3000))
+        v = self.new_device()
+        self.assertEqual(v.read("/Saved/From the web/secret report.bin"), MARK * 3000)
+        self.assertEqual(v.read("/Saved/From the web/secret report (2).bin"), MARK * 3000)
+        held = json.dumps(self.web.sealed._devs[(next(iter(self.web.accounts._recs)), DEVICE)], default=str)
+        for needle in ("secret", "bread", "Saved", "127.0.0.1"):
+            self.assertNotIn(needle, held)
+        for folder, _, files in os.walk(os.path.join(self.tmp, "aaaa")):
+            for f in files:
+                with open(os.path.join(folder, f), "rb") as fh:
+                    data = fh.read()
+                for needle in (MARK, b"secret report", b"From the web"):
+                    self.assertNotIn(needle, data, os.path.join(folder, f))
+
     def test_the_commands(self):
         os.environ["DDRIVE_LITE_CONFIG"] = os.path.join(self.tmp, "lite.json")
         self.addCleanup(os.environ.pop, "DDRIVE_LITE_CONFIG")

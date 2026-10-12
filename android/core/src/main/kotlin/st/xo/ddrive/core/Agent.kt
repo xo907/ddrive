@@ -51,6 +51,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
             private val livePoll: Double = 60.0, private val liveFull: Double = 900.0, private val keepFree: Long = 1L shl 30,
             private val partSize: Int = HostClient.PART,
             private val vault: Vault? = null,       // the account is end-to-end encrypted: files and what is said about them are sealed here
+            private val fetchPrivate: Boolean = false,   // web addresses on this device or its network are fetched too (tests)
             private val browse: (String) -> JSONObject = { JSONObject().put("error", "Folders can't be listed here") },
             private val mayRun: () -> String? = { null },
             private val refuse: (Job) -> String? = { null },
@@ -77,6 +78,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
     @Volatile private var cancel: String? = null
     private val wake = Signal()
     private val report = Signal()
+    private val fetches = ArrayList<JSONObject>()    // files being saved from web addresses, for the dashboard to show
     private val linkPause = Signal()
     private val threads = ArrayList<Thread>()
     private var lastSave = 0L
@@ -232,7 +234,72 @@ class Agent(private val client: HostClient, val device: String, val name: String
                     .put("sealed", vault.sealMessage(result.toString())))
                 else client.syncCall("answer", JSONObject().put("device", device).put("req", c.optString("req")).put("result", result))
             }
+            // What the host does for other accounts and may not do for an end-to-end encrypted one, because it
+            // would see what is fetched. This device does it instead, when the account's page asks.
+            "preview" -> if (vault != null) thread(name = "Preview", isDaemon = true) {
+                val result = try {
+                    WebFetch.preview(c.optString("url"), fetchPrivate)
+                } catch (e: Exception) {
+                    JSONObject().put("error", "The page could not be read: ${e.message}")
+                }
+                try {
+                    client.postJson("/api/vault/sync/answer", JSONObject().put("device", device).put("req", c.optString("req"))
+                        .put("sealed", vault.sealMessage(result.toString())))
+                } catch (e: Exception) {
+                    log("Folder syncing: a page's preview could not be sent: ${e.message}")
+                }
+            }
+            "fetch" -> if (vault != null) thread(name = "Fetch", isDaemon = true) { fetch(c) }
+            "fetch-cancel" -> synchronized(fetches) { fetches.filter { it.opt("id") == c.opt("id") }.forEach { it.put("cancel", true) } }
         }
+    }
+
+    /** Save the file at a web address into the account: downloaded here, sealed, sent. */
+    private fun fetch(c: JSONObject) {
+        val url = c.optString("url").trim()
+        val folder = "/" + c.optString("dest").trim('/')
+        val item = JSONObject().put("id", c.opt("id")).put("url", url).put("name", "download").put("folder", folder).put("state", "running")
+            .put("bytes", 0L).put("total", 0L).put("error", "").put("at", System.currentTimeMillis() / 1000.0)
+        synchronized(fetches) { fetches.add(item) }
+        report.set()
+        dir.mkdirs()
+        val tmp = File(dir, "fetch-${Seal.newId().take(8)}.part")
+        val stop = { stopping || synchronized(fetches) { item.optBoolean("cancel") } }
+        try {
+            var last = 0L
+            var name = WebFetch.download(url, tmp, fetchPrivate, stop) { n, bytes, total ->
+                synchronized(fetches) { item.put("name", n).put("bytes", bytes).put("total", total) }
+                if (System.currentTimeMillis() - last > 1000) {
+                    last = System.currentTimeMillis()
+                    report.set()
+                }
+            }
+            val v = vault!!
+            v.sync()
+            if (v.resolve(folder) == null) v.mkdirs(folder)
+            val stem = name.substringBeforeLast('.', name)
+            val ext = if ('.' in name.drop(1)) "." + name.substringAfterLast('.') else ""
+            var n = 1
+            while (v.resolve("$folder/$name".replace("//", "/")) != null) name = "${if (ext.isEmpty()) name.removeSuffix(" ($n)") else stem} (${++n})$ext"
+            synchronized(fetches) { item.put("name", name) }
+            v.put("$folder/$name".replace("//", "/"), tmp, tmp.length(), System.currentTimeMillis() / 1000.0, stop)
+            synchronized(fetches) { item.put("state", "done") }
+        } catch (e: Stopped) {
+            synchronized(fetches) { item.put("state", "error").put("error", "Cancelled") }
+        } catch (e: Exception) {
+            synchronized(fetches) { item.put("state", "error").put("error", e.message ?: "It could not be fetched") }
+        } finally {
+            tmp.delete()
+        }
+        synchronized(fetches) { item.put("at", System.currentTimeMillis() / 1000.0) }
+        report.set()
+    }
+
+    /** The downloads from web addresses to tell the page about (finished ones stay a minute, so it gets to say so). */
+    private fun fetchList(): JSONArray = synchronized(fetches) {
+        val now = System.currentTimeMillis() / 1000.0
+        fetches.removeAll { it.optString("state") != "running" && now - it.optDouble("at") > 60 }
+        JSONArray().also { out -> fetches.forEach { f -> out.put(JSONObject(f.toString()).apply { remove("cancel") }) } }
     }
 
     /** Wait at the host for word: changed pairs, a pair to start or stop, a folder to list. */
@@ -293,7 +360,8 @@ class Agent(private val client: HostClient, val device: String, val name: String
             if (!online || stopping) continue
             try {
                 if (vault != null) client.postJson("/api/vault/sync/report", JSONObject().put("device", device)
-                    .put("status", vault.sealMessage(JSONObject().put("jobs", snapshot()).put("running", running ?: JSONObject.NULL).toString())))
+                    .put("status", vault.sealMessage(JSONObject().put("jobs", snapshot()).put("running", running ?: JSONObject.NULL)
+                        .put("fetches", fetchList()).toString())))
                 else client.syncCall("report", JSONObject().put("device", device).put("running", running ?: JSONObject.NULL)
                     .put("status", snapshot()))
             } catch (e: HostError) {

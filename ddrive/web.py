@@ -1589,7 +1589,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _post_api_vault_sync_ask(self):
         body = self._body_json()
-        self._json({"ok": True, "sealed": self._sealed(self.server.app.sealed.ask, body.get("device"), body.get("sealed"))})
+        try:
+            wait = float(body.get("wait") or 0)
+        except (TypeError, ValueError):
+            wait = 0.0
+        self._json({"ok": True, "sealed": self._sealed(self.server.app.sealed.ask, body.get("device"), body.get("sealed"), wait)})
 
     def _post_api_vault_sync_forget(self):
         self._sealed(self.server.app.sealed.bye, self._body_json().get("device"))
@@ -1614,7 +1618,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"ok": True})
 
     def _post_api_vault_sync_answer(self):
-        body = self._body_json()
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 16 * 1024 * 1024:
+            raise ApiError(413, "request too large")
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            raise ApiError(400, "invalid JSON") from None
         self._sealed(self.server.app.sealed.answer, body.get("device"), body.get("req"), body.get("sealed"))
         self._json({"ok": True})
 

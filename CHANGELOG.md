@@ -3,6 +3,26 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.9.0 (2026-10-11)
+
+- **End-to-end encrypted accounts get Contacts, Bookmarks and "Save from a link".** The same pages as
+  for everybody, with the work moved to where the key is.
+- **Contacts** are one vCard file in the account (`/Contacts/Contacts.vcf`, as for other accounts), read
+  and written in the browser: add, edit, delete, import a `.vcf`, export. What a contact holds that
+  DDrive doesn't show (custom fields from another address book) is kept.
+- **Bookmarks**: the list and the pictures are sealed files in the account. Reading a page for its
+  title, description and picture is something the server did, and for these accounts it may not: it
+  would learn which pages you save. **One of your own devices does it instead**: the dashboard asks a
+  computer with DDrive Lite or the phone app (with folder syncing on) through the server, in a sealed
+  message, and gets the sealed answer back. With no device on, the bookmark is saved without a
+  picture, and "Read the preview again" fetches it later.
+- **Save from a link** works the same way: the device downloads the file, seals it and sends it, and
+  the dashboard shows how far it is. With no device on, the dashboard says so.
+- This is in all three: DDrive on a computer, DDrive Lite, and the phone app (2.9.0). As on the
+  server, a device only fetches addresses on the internet, not ones on its own network.
+- The page reader is a module of its own now (`pagepreview.py`), which DDrive Lite carries.
+- Still to come for these accounts: Messages, Shared, Snapshots, Activity, and a folder as one ZIP.
+
 ## 2.8.0 (2026-10-11)
 
 - **End-to-end encrypted accounts get the whole dashboard.** The plain files page of 2.5.0 is gone. An
