@@ -76,6 +76,11 @@
   function go(id) { location.hash = hashOf(vault.pathOf(id)); }
 
   function draw() {
+    const onSync = location.hash.startsWith("#sync");
+    $("#v-nav-files").classList.toggle("on", !onSync);
+    $("#v-nav-sync").classList.toggle("on", onSync);
+    if (onSync) return drawSync();
+    clearTimeout(syncTimer);
     const parts = names();
     const id = vault.folderAt(parts);
     if (id == null) { location.hash = "#/"; return; }
@@ -116,7 +121,7 @@
   async function refresh() {
     if (!vault) return;
     const before = vault.seq;
-    if (await attempt(() => vault.sync()) && vault.seq !== before && !document.querySelector("dialog[open]")) draw();
+    if (await attempt(() => vault.sync()) && vault.seq !== before && !document.querySelector("dialog[open]") && !location.hash.startsWith("#sync")) draw();
   }
 
   // ------------------------------------------------------------ doing things
@@ -198,13 +203,13 @@
         say(sent);
       }, stopper.signal, job.name));
       if (ok) done++; else failed++;
-      if (job.parent === here && !document.querySelector("dialog[open]")) draw();
+      if (job.parent === here && !document.querySelector("dialog[open]") && !location.hash.startsWith("#sync")) draw();
     }
     working = false;
     stopper = null;
     if (card) { card.el.remove(); card = null; }
     if (done || failed) toast(failed ? `${done} uploaded, ${failed} not` : done === 1 ? "Uploaded" : `${done} files uploaded`);
-    draw();
+    if (!location.hash.startsWith("#sync")) draw();
   }
   $("#v-pick").addEventListener("change", (e) => { addUploads([...e.target.files], here); e.target.value = ""; });
   // dropping files, and whole folders, onto the page
@@ -296,6 +301,209 @@
     } finally {
       el.remove();
     }
+  }
+
+  // ------------------------------------------------------------ folder syncing on this account's devices
+  // A computer running DDrive Lite (and soon the phone app) that is signed in to this account and has
+  // folder syncing turned on waits at the server for word. This page gives it that word: which folder
+  // goes where and how, start, stop. Everything said either way is sealed with the account's key, so
+  // the server passes it on without learning a device's name, a folder or a file name.
+  const MODES = [
+    ["backup", "Back up", "→", "Copies new and changed files to your account. Files you delete on the device stay here."],
+    ["mirror", "Mirror", "→", "The folder here becomes an exact copy of the device's: deleting there deletes here too."],
+    ["two-way", "Two-way sync", "⇄", "Changes and deletions on either side are copied to the other. A file changed on both sides is kept twice."],
+    ["move", "Move here", "→", "Copies files to your account, then deletes them on the device once they are safely stored. Frees space there."],
+    ["download", "Download backup", "←", "Copies new and changed files from your account to the device. Nothing is deleted there."],
+    ["download-mirror", "Download mirror", "←", "The device's folder becomes an exact copy of the one here. What is removed there is kept 30 days."],
+  ];
+  const modeOf = (id) => MODES.find((m) => m[0] === id) || MODES[0];
+  const WHEN = { live: "live", manual: "manual" };
+  const whenText = (j) => j.trigger === "interval" ? (j.every >= 60 && j.every % 60 === 0 ? `every ${j.every / 60} h` : `every ${j.every} min`)
+    : j.trigger === "daily" ? `daily at ${j.at}` : WHEN[j.trigger] || j.trigger;
+  let devices = [], syncTimer = null;
+
+  async function loadDevices() {
+    const got = await DDV.call("/api/vault/sync");
+    const out = [];
+    for (const d of got.devices) {
+      try {
+        const info = await DDV.openMessage(vault.meta, d.info) || {};
+        const jobs = await DDV.openMessage(vault.meta, d.jobs) || [];
+        const status = await DDV.openMessage(vault.meta, d.status) || {};
+        out.push({ id: d.id, online: d.online, seen: d.seen, rev: d.rev, name: info.name || "A device", windows: info.platform === "win32",
+                   home: info.home || "", jobs: Array.isArray(jobs) ? jobs : [], status: status.jobs || {}, running: status.running || null });
+      } catch (e) { /* sealed with another key: not this account's */ }
+    }
+    devices = out;
+  }
+  const say = async (dev, message) => DDV.call("/api/vault/sync/tell", { method: "POST", json: { device: dev.id, sealed: await DDV.sealMessage(vault.meta, message) } });
+  async function saveJobs(dev, jobs) {
+    await DDV.call("/api/vault/sync/jobs", { method: "POST", json: { device: dev.id, rev: dev.rev, jobs: await DDV.sealMessage(vault.meta, jobs) } });
+  }
+  function summary(r) {
+    const parts = [[r.up, "copied to your account"], [r.down, "copied to the device"], [r.deleted_remote, "deleted here"], [r.deleted_local, "removed on the device"],
+                   [r.moved, "moved off the device"], [r.conflicts, "kept twice (conflict)"]].filter(([n]) => n).map(([n, t]) => `${Number(n).toLocaleString()} ${t}`);
+    if (r.errors) parts.push(r.errors === 1 ? "1 problem" : `${r.errors} problems`);
+    return parts.length ? parts.join(", ") : `Everything was already in step (${Number(r.files || 0).toLocaleString()} files)`;
+  }
+  function ago(t) {
+    const s = Math.max(0, Date.now() / 1000 - t);
+    return s < 90 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
+  }
+
+  function jobCard(dev, j) {
+    const s = dev.status[j.id] || {}, p = s.progress, last = s.last || {}, mode = modeOf(j.mode);
+    const running = dev.online && s.state === "running";
+    const state = !j.enabled ? ["Paused", ""] : !dev.online ? ["Not connected", ""] : running ? ["Syncing", "busy"]
+      : s.state === "error" ? ["Problem", "warn"] : s.last_run ? ["Up to date", "ok"] : ["Waiting", ""];
+    const act = (fn, done) => async () => { if (await attempt(fn, done)) setTimeout(drawSync, 500); };
+    let line;
+    if (running && p) {
+      const pct = p.total_bytes ? Math.min(100, (p.bytes / p.total_bytes) * 100) : p.total ? (p.done / p.total) * 100 : 0;
+      line = [h("div", { class: "sync-line" }, p.total ? `${Number(p.done).toLocaleString()} of ${Number(p.total).toLocaleString()} files` : "Comparing folders…",
+                p.total_bytes ? ` · ${size(p.bytes)} of ${size(p.total_bytes)}` : "", p.file ? h("span", { class: "sync-file" }, ` · ${p.action === "down" ? "←" : "→"} ${p.file}`) : ""),
+              h("div", { class: "meter" }, h("i", { style: `width:${pct.toFixed(1)}%` })),
+              p.note && h("div", { class: "sync-line warn sync-note" }, p.note)];
+    } else if (s.error) line = h("div", { class: "sync-line warn" }, s.error);
+    else if (s.last_run) line = h("div", { class: "sync-line" }, `${ago(s.last_run)}: ${summary(last)}`,
+      last.waiting ? ` · ${last.waiting} still being stored` : "", last.busy ? ` · ${last.busy} in use, next pass` : "");
+    else line = h("div", { class: "sync-line" }, "Not run yet");
+    const others = dev.jobs.filter((x) => x.id !== j.id);
+    return h("div", { class: "sync-card" + (j.enabled ? "" : " off") },
+      h("div", { class: "sync-head" },
+        h("span", { class: "sync-dir", title: mode[1] }, mode[2]),
+        h("div", { class: "sync-title" },
+          h("div", { class: "t" }, h("span", { class: "label" }, j.name), h("span", { class: "tag" }, mode[1]), h("span", { class: "tag" }, whenText(j))),
+          h("div", { class: "sync-paths" }, h("code", { title: j.local }, j.local), h("span", { class: "a" }, mode[2]), h("code", {}, j.remote))),
+        h("span", { class: "sync-state" }, h("span", { class: "dot " + state[1] }), state[0]),
+        running ? h("button", { class: "btn ghost small", type: "button", onclick: act(() => say(dev, { do: "stop", id: j.id }), "Stopping") }, "Stop")
+                : h("button", { class: "btn ghost small", type: "button", disabled: !dev.online, onclick: act(() => say(dev, { do: "run", id: j.id }), "Syncing") }, "Sync now")),
+      line,
+      (s.problems || []).length ? h("details", { class: "sync-problems", "data-keep": `${dev.id}-${j.id}` },
+        h("summary", {}, s.problems.length === 1 ? "1 note" : `${s.problems.length} notes`), h("ul", {}, s.problems.map((t) => h("li", {}, t)))) : null,
+      h("div", { class: "v-job-acts" },
+        h("button", { type: "button", onclick: act(async () => {
+          if (j.enabled && dev.online) await say(dev, { do: "stop", id: j.id }).catch(() => null);
+          await saveJobs(dev, dev.jobs.map((x) => x.id === j.id ? { ...x, enabled: !j.enabled } : x));
+        }, j.enabled ? "Paused" : "Resumed") }, j.enabled ? "Pause" : "Resume"),
+        h("button", { type: "button", onclick: () => jobForm(dev, j) }, "Change"),
+        j.mode === "backup" && h("button", { type: "button", disabled: !dev.online, onclick: act(() => say(dev, { do: "run", id: j.id, again: true }), "Copying everything again") }, "Copy everything again"),
+        h("button", { type: "button", class: "danger", onclick: async () => {
+          if (await ask({ title: `Stop syncing “${j.name}”?`, ok: "Stop syncing", danger: true, text: `Nothing is deleted: the files stay on ${dev.name} and in your account.` })
+              && await attempt(() => saveJobs(dev, others), "No longer synced")) drawSync();
+        } }, "Stop syncing this folder")));
+  }
+
+  async function drawSync(quiet) {
+    clearTimeout(syncTimer);
+    if (!location.hash.startsWith("#sync")) return;
+    const open = new Set([...main.querySelectorAll("details[open]")].map((d) => d.dataset.keep));
+    if (quiet && (document.querySelector("dialog[open]") || !(window.getSelection() || {}).isCollapsed)) { syncTimer = setTimeout(() => drawSync(true), 3000); return; }
+    if (!await attempt(loadDevices) && !quiet) return;
+    main.replaceChildren(...[
+      h("div", { class: "v-bar" }, h("nav", { class: "crumbs" }, h("span", {}, "Sync"))),
+      h("p", { class: "muted", style: "max-width:640px;margin:0 0 8px" }, "Folders on your devices kept in step with folders in your account. ",
+        "The device does the copying and seals every file before it goes. What is said between this page and the device, down to its name and its folders, is sealed too."),
+      devices.flatMap((dev) => [
+        h("div", { class: "v-dev" },
+          h("h2", {}, dev.name, h("span", { class: "sync-state" }, h("span", { class: "dot " + (dev.online ? "ok" : "") }),
+            dev.online ? "Connected" : `Not connected · last heard from ${ago(dev.seen)}`)),
+          h("button", { class: "btn ghost", type: "button", onclick: () => jobForm(dev, null) }, "Add a folder")),
+        dev.jobs.length ? h("div", { class: "sync-list" }, dev.jobs.map((j) => jobCard(dev, j)))
+          : h("div", { class: "v-empty", style: "padding:28px 0" }, h("b", {}, `No folders of ${dev.name} synced yet`), "Add one, e.g. its Documents folder."),
+      ]),
+      !devices.length && h("div", { class: "v-empty" }, h("b", {}, "No device syncs folders with this account yet"),
+        "On a computer, connect DDrive Lite to this site with your 24 words (", h("code", {}, "lite connect"), ") and turn folder syncing on (",
+        h("code", {}, "lite sync on"), "). It then shows up here.")].flat().filter(Boolean));
+    for (const d of main.querySelectorAll("details")) if (open.has(d.dataset.keep)) d.open = true;
+    syncTimer = setTimeout(() => drawSync(true), devices.some((d) => d.running) ? 1500 : 5000);
+  }
+
+  /** Pick a folder of a device: it lists its own folders, sealed, through the server. */
+  function pickDeviceFolder(dev, start) {
+    return new Promise((resolve) => {
+      let cur = start || "", chosen = null;
+      const list = h("div", { class: "v-folders" }), where = h("input", { spellcheck: "false", placeholder: "Type a path, or pick below" });
+      const use = h("button", { class: "btn", type: "button", onclick: () => { chosen = cur; dlg.close(); } }, "Use this folder");
+      const dlg = h("dialog", { class: "v-form" }, h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); load(where.value.trim()); } },
+        h("h3", {}, `Folder on ${dev.name}`), where, h("div", { style: "height:10px" }), list,
+        h("div", { class: "modal-actions-v" }, h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Cancel"), use)));
+      dlg.addEventListener("close", () => { dlg.remove(); resolve(chosen); });
+      async function load(path) {
+        const got = await attempt(async () => {
+          const r = await DDV.call("/api/vault/sync/ask", { method: "POST", json: { device: dev.id, sealed: await DDV.sealMessage(vault.meta, { do: "browse", path }) } });
+          const data = await DDV.openMessage(vault.meta, r.sealed);
+          if (data.error) throw new Error(data.error);
+          return data;
+        });
+        if (!got) return;
+        cur = got.path; where.value = got.path; use.disabled = !got.path;
+        const rows = [];
+        if (got.parent != null) rows.push(h("button", { type: "button", onclick: () => load(got.parent) }, "← Up one level"));
+        for (const d of got.dirs || []) rows.push(h("button", { type: "button", onclick: () => load(d.path) }, svg(ICON_DIR, "dir"), d.name));
+        if (!(got.dirs || []).length) rows.push(h("button", { type: "button", disabled: true }, "No folders in here"));
+        list.replaceChildren(...rows);
+      }
+      document.body.append(dlg);
+      dlg.showModal();
+      load(cur);
+    });
+  }
+
+  function jobForm(dev, j) {
+    const v = j ? { ...j } : { name: "", local: "", remote: "", mode: "backup", trigger: "live", every: 60, at: "03:00", exclude: [], enabled: true };
+    const field = (label, control, hint) => [h("label", {}, label, control), hint && h("div", { class: "v-hint" }, hint)];
+    const local = h("input", { value: v.local, spellcheck: "false", placeholder: dev.windows ? "C:\\Users\\you\\Documents" : (dev.home || "/home/you") + "/Documents" });
+    const remote = h("input", { value: v.remote, spellcheck: "false", placeholder: "/Documents" });
+    const folders = [];
+    const walk = (id, path) => { for (const c of vault.children(id)) if (c.dir) { folders.push(path + "/" + c.name); walk(c.id, path + "/" + c.name); } };
+    walk("", "");
+    const known = h("datalist", { id: "v-known" }, folders.map((f) => h("option", { value: f })));
+    remote.setAttribute("list", "v-known");
+    const mode = h("select", {}, MODES.map((m) => h("option", { value: m[0], selected: m[0] === v.mode }, `${m[1]}  ${m[2]}`)));
+    const about = h("div", { class: "v-hint" }, modeOf(v.mode)[3]);
+    mode.addEventListener("change", () => { about.textContent = modeOf(mode.value)[3]; });
+    const trigger = h("select", {}, [["live", "As soon as something changes"], ["interval", "Every few minutes or hours"], ["daily", "Once a day"], ["manual", "Only when I start it"]]
+      .map(([id, label]) => h("option", { value: id, selected: id === v.trigger }, label)));
+    const every = h("input", { type: "number", min: "1", value: String(v.every) }), at = h("input", { type: "time", value: v.at });
+    const everyRow = h("label", {}, "Every (minutes)", every), atRow = h("label", {}, "At", at);
+    const show = () => { everyRow.hidden = trigger.value !== "interval"; atRow.hidden = trigger.value !== "daily"; };
+    trigger.addEventListener("change", show);
+    show();
+    const skip = h("input", { value: (v.exclude || []).join(", "), spellcheck: "false", placeholder: "e.g. *.iso, Temp/" });
+    const name = h("input", { value: v.name, placeholder: "Optional, e.g. Documents" });
+    const err = h("p", { class: "err", role: "alert", hidden: true });
+    const dlg = h("dialog", { class: "v-form" }, h("form", { method: "dialog", onsubmit: async (e) => {
+      e.preventDefault();
+      const job = { id: v.id || DDV.newId().slice(0, 6), enabled: v.enabled !== false, mode: mode.value, trigger: trigger.value,
+                    local: local.value.trim().replace(/^"|"$/g, ""), remote: "/" + remote.value.trim().replace(/\\/g, "/").split("/").filter((x) => x && x !== ".").join("/"),
+                    every: Math.max(1, Math.round(Number(every.value) || 60)), at: at.value || "03:00",
+                    exclude: skip.value.split(/[,\n]/).map((x) => x.trim()).filter(Boolean), name: name.value.trim().slice(0, 80) };
+      job.name = job.name || job.local.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || job.local;
+      const problem = !job.local ? `Choose a folder on ${dev.name}.`
+        : job.remote === "/" && ["mirror", "two-way"].includes(job.mode) ? "Choose a folder in your account (not all of it) for mirror and two-way sync."
+        : /^([A-Za-z]:[\\/]*|[\\/]+)$/.test(job.local) && ["download-mirror", "two-way", "move"].includes(job.mode) ? "Choose a folder, not a whole disk, for this mode."
+        : dev.jobs.some((x) => x.id !== job.id && x.local === job.local && x.remote === job.remote) ? "Those two folders are already paired." : "";
+      if (problem) { err.textContent = problem; err.hidden = false; return; }
+      const jobs = j ? dev.jobs.map((x) => x.id === j.id ? job : x) : [...dev.jobs, job];
+      if (!await attempt(() => saveJobs(dev, jobs))) return;
+      if (!j && job.trigger !== "manual" && dev.online) setTimeout(() => say(dev, { do: "run", id: job.id }).catch(() => null), 1500);
+      dlg.close();
+      toast(j ? "Saved" : dev.online ? "Added. The first sync starts now." : `Added. It starts when ${dev.name} is connected.`);
+      drawSync();
+    } }, h("h3", {}, j ? `Change “${j.name}”` : "Sync a folder"), err,
+      h("label", {}, `Folder on ${dev.name}`, h("div", { class: "v-pick" }, local,
+        h("button", { class: "btn ghost", type: "button", disabled: !dev.online, onclick: async () => { const p = await pickDeviceFolder(dev, local.value.trim() || dev.home); if (p) local.value = p; } }, "Browse…"))),
+      field("Folder in your account", remote, "It is created if it isn't there yet."), known,
+      field("What to do", mode), about,
+      field("When", trigger), everyRow, atRow,
+      field("Skip these", skip, "Names or paths inside the folder, separated by commas. Unfinished downloads and temporary files are always skipped."),
+      field("Name", name),
+      h("div", { class: "modal-actions-v" }, h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Cancel"),
+        h("button", { class: "btn", type: "submit" }, j ? "Save" : "Add and sync"))));
+    dlg.addEventListener("close", () => dlg.remove());
+    document.body.append(dlg);
+    dlg.showModal();
   }
 
   // ------------------------------------------------------------ starting

@@ -5,6 +5,27 @@ body.vault { display: flex; flex-direction: column; min-height: 100%; }
 .v-lock { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px;
           font-size: 12px; color: var(--ok); cursor: help; }
 .v-lock::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.v-nav { display: flex; gap: 2px; margin-left: 6px; }
+.v-nav a { padding: 5px 10px; border-radius: 6px; color: var(--muted); font-weight: 500; }
+.v-nav a:hover { background: var(--hover); color: var(--ink); }
+.v-nav a.on { color: var(--ink); background: var(--hover); }
+.v-dev { display: flex; align-items: center; gap: 12px; margin: 34px 0 12px; }
+.v-dev h2 { flex: 1; margin: 0; font-size: 15px; display: flex; align-items: center; gap: 12px; }
+.v-dev h2 .sync-state { font-weight: 400; }
+.v-job-acts { display: flex; flex-wrap: wrap; gap: 2px; margin: 8px 0 0 46px; }
+.v-job-acts button { height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 12.5px; }
+.v-job-acts button:hover { background: var(--press); color: var(--ink); }
+.v-job-acts button.danger:hover { color: var(--accent); }
+dialog.v-form { width: min(560px, calc(100% - 32px)); }
+dialog.v-form label { display: block; margin: 0 0 14px; font-size: 12.5px; color: var(--muted); }
+dialog.v-form label > input, dialog.v-form label > select { margin: 5px 0 0; }
+dialog.v-form .v-pick { display: flex; gap: 8px; margin-top: 5px; }
+dialog.v-form .v-pick input { flex: 1; }
+dialog.v-form .v-hint { margin: -8px 0 14px; font-size: 12px; color: var(--faint); }
+.v-folders { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 14px; }
+.v-folders button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line);
+                    background: none; text-align: left; }
+.v-folders button:hover { background: var(--hover); }
 .v-used { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .v-main { flex: 1; width: 100%; max-width: 980px; margin: 0 auto; padding: 28px 20px 120px; }
 .v-bar { display: flex; align-items: center; gap: 10px; min-height: 36px; margin-bottom: 16px; }
@@ -48,5 +69,6 @@ dialog select { width: 100%; height: 36px; padding: 0 8px; border: 1px solid var
   .v-row .v-size, .v-row .v-date { display: none; }
   .v-acts { opacity: 1; }
   .v-used { display: none; }
-  .v-lock { margin-left: auto; }
+  .v-lock { display: none; }
+  .v-job-acts { margin-left: 0; }
 }

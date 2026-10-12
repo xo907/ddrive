@@ -7,7 +7,7 @@
 (function () {
   const enc = new TextEncoder(), dec = new TextDecoder();
   const INFO_AUTH = enc.encode("ddrive vault v1 auth"), INFO_META = enc.encode("ddrive vault v1 meta");
-  const AAD_OP = enc.encode("ddv1 op"), AAD_CHUNK = enc.encode("ddv1 chunk");
+  const AAD_OP = enc.encode("ddv1 op"), AAD_CHUNK = enc.encode("ddv1 chunk"), AAD_SYNC = enc.encode("ddv1 sync");
   const MAGIC = enc.encode("DDV1"), CHUNK_LOG = 20, CHUNK = 1 << CHUNK_LOG, OVERHEAD = 28, HEAD = 5;
   const PART_CHUNKS = 8;                 // sealed pieces go to the server this many at a time
   const SNAPSHOT_EVERY = 400;
@@ -96,6 +96,9 @@
     l[l.length - 1] = last ? 1 : 0;
     return l;
   }
+  /** What is said between this page and a device that syncs folders, sealed (the server passes it on unread). */
+  const sealMessage = async (meta, obj) => b64(await seal(meta, enc.encode(JSON.stringify(obj)), AAD_SYNC));
+  const openMessage = async (meta, text) => text ? JSON.parse(dec.decode(await unseal(meta, unb64(text), AAD_SYNC))) : null;
   const chunksOf = (size) => Math.max(1, Math.ceil(size / CHUNK));
   const sealedSize = (size) => HEAD + size + OVERHEAD * chunksOf(size);
 
@@ -337,5 +340,5 @@
     }
   }
 
-  window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK };
+  window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, sealMessage, openMessage, newId };
 })();

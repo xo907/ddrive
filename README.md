@@ -625,11 +625,17 @@ Settings) decides who may make one:
   Files of any size go up in parts and are encrypted piece by piece; in Chrome and Edge a download is
   written straight to disk. It needs an `https` address (or the computer itself): a browser doesn't
   encrypt on plain `http`.
+- **Folder syncing from a computer.** [DDrive Lite](#ddrive-lite) connected with the account's words
+  (`lite connect`, then `lite sync on`) shows up under **Sync** on the account's page, where its
+  folders are added and run as on the owner's Sync page. The computer seals the files itself, and
+  everything said between it and the page (its name, its folders, how a pair is doing) is sealed
+  too: your computer passes those messages on unread. `lite ls`, `get` and `put` work as well; a
+  drive letter doesn't yet.
 - **What it doesn't have yet**, because each of these needs the file or its name in the clear on your
-  computer and has to be rebuilt to work in the browser: the gallery and thumbnails, playing a big
+  computer and has to be rebuilt to work on the device: the gallery and thumbnails, playing a big
   video without downloading it, share links, notes, bookmarks, contacts, messages, earlier versions
-  and snapshots, DDrive Lite and the phone app. And never: Settings, Sync, Log, Health and anything
-  else that manages the drive or the computer.
+  and snapshots, a drive letter through DDrive Lite, and the phone app. And never: Settings, Log,
+  Health and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
   computer, which keeps their keys, so they trust you with them; they open the full dashboard). The
   sign-in page tries a typed phrase as an end-to-end account first, without sending it, and only sends

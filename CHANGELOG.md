@@ -3,6 +3,28 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.6.0 (2026-10-11)
+
+- **A computer can sync its folders into an end-to-end encrypted account.** `lite connect` with the
+  account's 24 words now recognises such an account (it tries that first and sends no words: only the
+  sign-in key made from them), and `lite sync on` makes the computer show up on the account's page,
+  under the new **Sync** tab. There you add its folders, with a folder browser that looks at that
+  computer, and choose the mode and when it runs, start, stop, pause, change and remove them, and
+  see how they are doing. All six modes work.
+- The computer seals every file before it goes and opens what comes back, with the account's keys,
+  which it has because the words were typed on it. The computer that runs the drive stores sealed
+  files, as for the browser.
+- **What is said about the syncing is sealed too**: the computer's name, its folders, which folder goes
+  where, how a pair is doing, the folder lists the browser is shown. The computer running the drive
+  passes these messages between the device and the account's page and can read none of them; it only
+  knows that a device is there and whether it is connected. Nothing of it is written to its disk.
+- "Move here" deletes a file from the device only after the computer running the drive has stored its
+  sealed copy on Discord, as with ordinary accounts.
+- With such an account `lite ls`, `lite get` and `lite put` list, download and upload (sealed on the
+  way). A drive letter (`lite mount`) is not there for these accounts yet and says so.
+- The phone app does not do this yet: it still needs an account of the earlier kind, or the owner's
+  words. It is next.
+
 ## 2.5.0 (2026-10-11)
 
 - **Accounts are end-to-end encrypted.** An account's 24 words are now made in the browser and never
