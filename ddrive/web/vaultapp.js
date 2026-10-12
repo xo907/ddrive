@@ -414,7 +414,7 @@
       ]),
       !devices.length && h("div", { class: "v-empty" }, h("b", {}, "No device syncs folders with this account yet"),
         "On a computer, connect DDrive Lite to this site with your 24 words (", h("code", {}, "lite connect"), ") and turn folder syncing on (",
-        h("code", {}, "lite sync on"), "). It then shows up here.")].flat().filter(Boolean));
+        h("code", {}, "lite sync on"), "). On a phone, connect the DDrive Lite app with your words and turn Folder syncing on. It then shows up here.")].flat().filter(Boolean));
     for (const d of main.querySelectorAll("details")) if (open.has(d.dataset.keep)) d.open = true;
     syncTimer = setTimeout(() => drawSync(true), devices.some((d) => d.running) ? 1500 : 5000);
   }

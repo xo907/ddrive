@@ -50,6 +50,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
             private val trashRoot: File, private val home: String, private val platform: String = "android",
             private val livePoll: Double = 60.0, private val liveFull: Double = 900.0, private val keepFree: Long = 1L shl 30,
             private val partSize: Int = HostClient.PART,
+            private val vault: Vault? = null,       // the account is end-to-end encrypted: files and what is said about them are sealed here
             private val browse: (String) -> JSONObject = { JSONObject().put("error", "Folders can't be listed here") },
             private val mayRun: () -> String? = { null },
             private val refuse: (Job) -> String? = { null },
@@ -148,15 +149,23 @@ class Agent(private val client: HostClient, val device: String, val name: String
     // ------------------------------------------------------------ talking to the host
     /** Say to the host that this device is there. Throws HostError with a message for people. */
     fun hello(): JSONObject {
-        val body = lock.withLock {
-            JSONObject().put("device", device).put("name", name).put("platform", platform).put("home", home)
-                .put("rev", rev).put("jobs", JSONArray(raw.toString()))
-        }
         val got = try {
-            client.syncCall("hello", body)
+            if (vault != null) {
+                // sealed: the host passes on who this is and which folders it syncs without being able to read it
+                val jobs = lock.withLock { raw.toString() }
+                val info = JSONObject().put("name", name).put("platform", platform).put("home", home).toString()
+                val answer = client.postJson("/api/vault/sync/hello", JSONObject().put("device", device).put("rev", rev)
+                    .put("info", vault.sealMessage(info)).put("jobs", vault.sealMessage(jobs)))
+                JSONObject().put("rev", answer.optLong("rev")).put("version", answer.optString("version")).put("jobs", openJobs(answer.optString("jobs")))
+            } else {
+                client.syncCall("hello", lock.withLock {
+                    JSONObject().put("device", device).put("name", name).put("platform", platform).put("home", home)
+                        .put("rev", rev).put("jobs", JSONArray(raw.toString()))
+                })
+            }
         } catch (e: HostError) {
-            if (e.status == 404) throw HostError(404, "The host at ${client.address} runs a DDrive from before folder syncing for " +
-                                                      "lite devices (2.2.0). Update it there first.")
+            if (e.status == 404) throw HostError(404, "The host at ${client.address} runs a DDrive from before this kind of folder " +
+                                                      "syncing (${if (vault != null) "2.6.0" else "2.2.0"}). Update it there first.")
             throw e
         }
         greeted = true
@@ -166,10 +175,35 @@ class Agent(private val client: HostClient, val device: String, val name: String
         return got
     }
 
+    /** The pairs as the account's page sealed them (what can't be opened isn't ours: what we have stays). */
+    private fun openJobs(sealed: String): JSONArray = try {
+        if (sealed.isEmpty()) JSONArray() else JSONArray(vault!!.openMessage(sealed))
+    } catch (e: Exception) {
+        lock.withLock { JSONArray(raw.toString()) }
+    }
+
+    /** Ask the host whether there is word for us (held open up to `wait` seconds): {rev, jobs, commands}. */
+    private fun ask(wait: Double): JSONObject {
+        if (vault == null) return client.syncCall("poll", JSONObject().put("device", device).put("rev", rev).put("wait", wait))
+        val got = client.postJson("/api/vault/sync/poll", JSONObject().put("device", device).put("rev", rev).put("wait", wait))
+        val commands = JSONArray()
+        val sealed = got.optJSONArray("commands") ?: JSONArray()
+        for (i in 0 until sealed.length()) {
+            val c = sealed.getJSONObject(i)
+            try {
+                commands.put(JSONObject(vault.openMessage(c.optString("sealed"))).put("req", c.optString("req")))
+            } catch (e: Exception) {
+                // not sealed with this account's key: not for us
+            }
+        }
+        return JSONObject().put("rev", got.optLong("rev")).put("jobs", openJobs(got.optString("jobs"))).put("commands", commands)
+    }
+
     /** Take this device off the host's Sync page (folder syncing was turned off here). */
     fun bye() {
         try {
-            client.syncCall("bye", JSONObject().put("device", device))
+            if (vault != null) client.postJson("/api/vault/sync/bye", JSONObject().put("device", device))
+            else client.syncCall("bye", JSONObject().put("device", device))
         } catch (e: HostError) {
             // an unreachable host forgets by itself
         }
@@ -194,7 +228,9 @@ class Agent(private val client: HostClient, val device: String, val name: String
                 } catch (e: Exception) {
                     JSONObject().put("error", e.message ?: "That folder can't be opened")
                 }
-                client.syncCall("answer", JSONObject().put("device", device).put("req", c.optString("req")).put("result", result))
+                if (vault != null) client.postJson("/api/vault/sync/answer", JSONObject().put("device", device).put("req", c.optString("req"))
+                    .put("sealed", vault.sealMessage(result.toString())))
+                else client.syncCall("answer", JSONObject().put("device", device).put("req", c.optString("req")).put("result", result))
             }
         }
     }
@@ -215,7 +251,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
                     wake.set()
                     onChange()
                 }
-                val got = client.syncCall("poll", JSONObject().put("device", device).put("rev", rev).put("wait", POLL_WAIT))
+                val got = ask(POLL_WAIT)
                 if (stopping) break
                 take(got)
                 val commands = got.optJSONArray("commands") ?: JSONArray()
@@ -256,7 +292,9 @@ class Agent(private val client: HostClient, val device: String, val name: String
             report.await(REPORT_EVERY)
             if (!online || stopping) continue
             try {
-                client.syncCall("report", JSONObject().put("device", device).put("running", running ?: JSONObject.NULL)
+                if (vault != null) client.postJson("/api/vault/sync/report", JSONObject().put("device", device)
+                    .put("status", vault.sealMessage(JSONObject().put("jobs", snapshot()).put("running", running ?: JSONObject.NULL).toString())))
+                else client.syncCall("report", JSONObject().put("device", device).put("running", running ?: JSONObject.NULL)
                     .put("status", snapshot()))
             } catch (e: HostError) {
                 // the other thread notices and connects again
@@ -388,7 +426,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
             }
         }
         val run = SyncRun(client, job, dir, trashRoot, name, settle, keepFree, { cancel == id || stopping }, progress, touched,
-                          if (hostTakesParts) partSize else 0)
+                          if (hostTakesParts) partSize else 0, vault)
         var error = ""
         try {
             refuse(job)?.let { throw SyncError(it) }
@@ -522,7 +560,7 @@ class Agent(private val client: HostClient, val device: String, val name: String
         val wasOnline = online
         threads.add(thread(name = "SyncStop", isDaemon = true) {
             if (wasOnline) try {             // let go of the question we have open at the host
-                client.syncCall("poll", JSONObject().put("device", device).put("rev", rev).put("wait", 0))
+                ask(0.0)
             } catch (e: Exception) {
                 // gone anyway
             }

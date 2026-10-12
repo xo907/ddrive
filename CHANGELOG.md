@@ -3,6 +3,21 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.7.0 (2026-10-11)
+
+- **The phone app works with end-to-end encrypted accounts.** Connect it with such an account's 24
+  words (it tries that first and sends no words, only the sign-in key made from them) and turn on
+  folder syncing: the phone shows up under **Sync** on the account's page, where its folders are
+  added and run. The phone seals every photo and file before it goes, opens what comes back, and
+  seals what is said about the syncing (its name, its folders, how a pair is doing), exactly as a
+  computer with DDrive Lite does since 2.6.0. All six modes work, including "Move here", which frees
+  the phone only once the sealed copy is stored on Discord.
+- The words are still kept on the phone encrypted with a key in Android's keystore; for an end-to-end
+  account they are now used on the phone only.
+- The phone's sealing is tested against DDrive's own client for these accounts: what one seals the
+  other opens, both ways, and the keys they make from the same words are the same.
+- The account's Sync page says how to connect a phone.
+
 ## 2.6.0 (2026-10-11)
 
 - **A computer can sync its folders into an end-to-end encrypted account.** `lite connect` with the

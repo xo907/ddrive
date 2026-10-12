@@ -5,6 +5,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import st.xo.ddrive.core.HostClient
+import st.xo.ddrive.core.Seal
+import st.xo.ddrive.core.Words
 import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -23,6 +25,9 @@ class Store(context: Context) {
     val user: String get() = prefs.getString("user", "") ?: ""
     val connected get() = host.isNotEmpty() && prefs.contains("phrase")
 
+    /** The account is end-to-end encrypted: the words stay on this phone, the host gets sealed things only. */
+    val e2e: Boolean get() = prefs.getBoolean("e2e", false)
+
     var sync: Boolean
         get() = prefs.getBoolean("sync", false)
         set(v) = prefs.edit().putBoolean("sync", v).apply()
@@ -37,12 +42,12 @@ class Store(context: Context) {
         get() = prefs.getString("device", null) ?: ByteArray(8).also { SecureRandom().nextBytes(it) }
             .joinToString("") { "%02x".format(it) }.also { prefs.edit().putString("device", it).apply() }
 
-    fun connect(host: String, user: String, phrase: String) {
-        prefs.edit().putString("host", host).putString("user", user).putString("phrase", seal(phrase)).apply()
+    fun connect(host: String, user: String, phrase: String, e2e: Boolean) {
+        prefs.edit().putString("host", host).putString("user", user).putString("phrase", seal(phrase)).putBoolean("e2e", e2e).apply()
     }
 
     fun forget() {
-        prefs.edit().remove("host").remove("user").remove("phrase").putBoolean("sync", false).apply()
+        prefs.edit().remove("host").remove("user").remove("phrase").remove("e2e").putBoolean("sync", false).apply()
     }
 
     /** A sign-in to the host, or null when this phone isn't connected (or its saved words can't be read any more). */
@@ -53,7 +58,15 @@ class Store(context: Context) {
         } catch (e: Exception) {
             return null
         }
-        return HostClient(host, phrase)
+        if (!e2e) return HostClient(host, phrase)
+        return HostClient(host, "", auth = Seal.authKey(Words.phraseToKey(phrase)).joinToString("") { "%02x".format(it) })
+    }
+
+    /** The key the words stand for (an end-to-end account's files and file list are sealed with keys made from it). */
+    fun accountKey(): ByteArray? = try {
+        Words.phraseToKey(open(prefs.getString("phrase", "") ?: ""))
+    } catch (e: Exception) {
+        null
     }
 
     // ------------------------------------------------------------ the keystore

@@ -24,6 +24,8 @@ import android.widget.Switch
 import android.widget.TextView
 import st.xo.ddrive.core.HostClient
 import st.xo.ddrive.core.HostError
+import st.xo.ddrive.core.Seal
+import st.xo.ddrive.core.Words
 import kotlin.concurrent.thread
 
 /**
@@ -160,11 +162,25 @@ class MainActivity : Activity() {
             go.text = "Connecting…"
             thread {
                 val result = try {
-                    val client = HostClient(host, phrase)
-                    client.login()
+                    val key = try {
+                        Words.phraseToKey(phrase)
+                    } catch (e: IllegalArgumentException) {
+                        throw HostError(0, "That phrase isn't right: ${e.message}.")
+                    }
+                    // First as an end-to-end encrypted account, which sends no words: only a sign-in key made from them.
+                    var e2e = true
+                    var client = HostClient(host, "", auth = Seal.authKey(key).joinToString("") { "%02x".format(it) })
+                    try {
+                        client.login()
+                    } catch (e: HostError) {
+                        if (e.status != 401) throw e
+                        e2e = false                          // the owner, or an account from before 2.5.0: the words are sent
+                        client = HostClient(host, phrase)
+                        client.login()
+                    }
                     val st = client.status()
                     val user = if (st.optString("role", "owner") == "owner") "the owner" else "account ${st.optString("account")}"
-                    store.connect(client.address, user, phrase)
+                    store.connect(client.address, user, phrase, e2e)
                     null
                 } catch (e: HostError) {
                     e.message
@@ -187,13 +203,18 @@ class MainActivity : Activity() {
 
     private fun drawConnected() {
         root.addView(text("${store.host}\nSigned in as ${store.user}", 14f, MUTED, top = 6))
+        if (store.e2e) root.addView(text("End-to-end encrypted: files are sealed on this phone before they are sent, and your words never leave it.", 13f, OK, top = 4))
 
-        root.addView(toggle("Folder syncing", "This phone shows up on the host's Sync page. Its folders are chosen there.", store.sync, top = 30) { on ->
+        root.addView(toggle("Folder syncing", if (store.e2e) "This phone shows up under Sync on your account's page. Its folders are chosen there."
+                                              else "This phone shows up on the host's Sync page. Its folders are chosen there.", store.sync, top = 30) { on ->
             if (on == store.sync) return@toggle
             if (on) {
                 AlertDialog.Builder(this).setTitle("Turn folder syncing on?")
-                    .setMessage("Whoever is signed in to the host's dashboard with these 24 words can then choose any folder of this phone " +
-                                "to copy to the drive, or to copy drive folders into. You add the folders there, on the Sync page.")
+                    .setMessage(if (store.e2e) "Whoever signs in to your account's page with these 24 words can then choose any folder of this phone " +
+                                    "to copy into the account, or to copy its folders into. You add the folders there, under Sync. The files, " +
+                                    "this phone's name and its folders are sealed before they leave it."
+                                else "Whoever is signed in to the host's dashboard with these 24 words can then choose any folder of this phone " +
+                                    "to copy to the drive, or to copy drive folders into. You add the folders there, on the Sync page.")
                     .setPositiveButton("Turn on") { _, _ ->
                         store.sync = true
                         startSync()
@@ -210,7 +231,7 @@ class MainActivity : Activity() {
 
         if (store.sync) {
             root.addView(button("Open the Sync page", top = 16) {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(store.host + "/#/sync")))
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(store.host + if (store.e2e) "/#sync" else "/#/sync")))
             })
             root.addView(text("What the phone has to allow", 13f, FAINT, top = 30))
             permission("All files access", "So that any folder you choose on the Sync page can be read, and written for the modes that copy to the phone.",

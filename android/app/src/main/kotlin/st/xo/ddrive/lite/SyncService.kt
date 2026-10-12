@@ -17,6 +17,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import st.xo.ddrive.core.Agent
+import st.xo.ddrive.core.Vault
 import java.io.File
 import kotlin.concurrent.thread
 
@@ -68,8 +69,10 @@ class SyncService : Service() {
                 return START_NOT_STICKY
             }
             val app = applicationContext
+            // An end-to-end encrypted account: files are sealed on this phone before they go, and so is what is said about them.
+            val vault = if (store.e2e) Vault(client, store.accountKey() ?: return START_NOT_STICKY.also { stopSelf() }) else null
             agent = Agent(client, store.device, Phone.name(app), File(filesDir, "sync"), Phone.trash,
-                          home = Phone.storage.absolutePath,
+                          home = Phone.storage.absolutePath, vault = vault,
                           browse = { path -> Phone.browse(app, path) },
                           mayRun = { Phone.held(app, store) },
                           refuse = { job ->

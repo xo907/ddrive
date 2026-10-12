@@ -630,11 +630,12 @@ Settings) decides who may make one:
   folders are added and run as on the owner's Sync page. The computer seals the files itself, and
   everything said between it and the page (its name, its folders, how a pair is doing) is sealed
   too: your computer passes those messages on unread. `lite ls`, `get` and `put` work as well; a
-  drive letter doesn't yet.
+  drive letter doesn't yet. The [phone app](#ddrive-lite-for-android) does the same: connected with
+  the account's words it backs up the phone's folders sealed.
 - **What it doesn't have yet**, because each of these needs the file or its name in the clear on your
   computer and has to be rebuilt to work on the device: the gallery and thumbnails, playing a big
   video without downloading it, share links, notes, bookmarks, contacts, messages, earlier versions
-  and snapshots, a drive letter through DDrive Lite, and the phone app. And never: Settings, Log,
+  and snapshots, and a drive letter through DDrive Lite. And never: Settings, Log,
   Health and anything else that manages the drive or the computer.
 - **Accounts made before 2.5.0** keep working the earlier way (their files are encrypted on your
   computer, which keeps their keys, so they trust you with them; they open the full dashboard). The

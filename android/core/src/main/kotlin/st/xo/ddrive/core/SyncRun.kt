@@ -30,7 +30,8 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
               private val device: String, private val settle: Double = SETTLE, private val keepFree: Long = 0,
               private val stop: () -> Boolean = { false }, private val progress: Progress = object : Progress {},
               private val touched: (File) -> Unit = {},         // a file of this device appeared, changed or went (a phone's gallery wants to know)
-              private val parts: Int = 0) {                     // > 0: the host takes files in parts (2.4.0 on), of this size
+              private val parts: Int = 0,                       // > 0: the host takes files in parts (2.4.0 on), of this size
+              private val vault: Vault? = null) {               // the drive is an end-to-end encrypted account: files are sealed here
     val r = linkedMapOf("up" to 0L, "down" to 0L, "deleted_remote" to 0L, "deleted_local" to 0L, "moved" to 0L, "conflicts" to 0L,
                         "bytes" to 0L, "busy" to 0L, "waiting" to 0L, "errors" to 0L, "skipped_deletes" to 0L, "kept_away" to 0L,
                         "files" to 0L, "remote_files" to 0L)
@@ -79,7 +80,39 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
     /** What the host refuses about one file is that file's problem; a host that is gone ends the pass. */
     private fun oneFile(e: HostError) = e.status in setOf(400, 403, 404, 409, 413, 507)
 
+    // The drive, reached the plain way or as an end-to-end encrypted account (where it is this device
+    // that knows the list of files, and files go and come sealed).
+    private var waiting: Set<String> = emptySet()      // (vault) objects the host has but hasn't stored on Discord yet
+
+    private fun rScan(): RemoteScan {
+        val v = vault ?: return scanRemote(client, remote, excluded)
+        v.sync()
+        waiting = v.pending()
+        val files = HashMap<String, RemoteFile>()
+        val dirs = HashSet<String>()
+        val root = v.resolve(remote) ?: return RemoteScan(false, false, files, dirs)
+        if (!root.optBoolean("dir")) return RemoteScan(true, false, files, dirs)
+        val todo = ArrayDeque(listOf(root.getString("id") to ""))
+        while (todo.isNotEmpty()) {
+            val (id, relDir) = todo.removeLast()
+            for (n in v.children(id)) {
+                val rel = if (relDir.isEmpty()) n.getString("name") else relDir + "/" + n.getString("name")
+                if (excluded(rel)) continue
+                if (n.optBoolean("dir")) {
+                    dirs.add(rel)
+                    todo.add(n.getString("id") to rel)
+                } else {
+                    files[rel] = RemoteFile(Stamp(n.optLong("size"), n.optDouble("mtime")), if (n.optString("obj") in waiting) "pending" else "synced")
+                }
+            }
+        }
+        return RemoteScan(true, true, files, dirs)
+    }
+
+    private fun rDelete(path: String) = if (vault != null) vault.delete(path) else client.delete(path)
+
     private fun mkdirRemote(path: String) {
+        if (vault != null) return vault.mkdirs(path)
         try {
             client.mkdir(path)
         } catch (e: HostError) {
@@ -112,6 +145,11 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
     }
 
     private fun remoteStamp(rel: String): Stamp? {
+        if (vault != null) {
+            vault.sync()
+            val n = vault.resolve(rp(rel)) ?: return null
+            return if (n.optBoolean("dir")) null else Stamp(n.optLong("size"), n.optDouble("mtime"))
+        }
         val items = try {
             client.list(rp(rel.substringBeforeLast('/', "")))
         } catch (e: HostError) {
@@ -127,7 +165,10 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
     }
 
     private fun remoteDirEmpty(rel: String) = try {
-        client.list(rp(rel)).length() == 0
+        if (vault != null) {
+            vault.sync()
+            vault.resolve(rp(rel))?.let { vault.children(it.getString("id")).isEmpty() } ?: false
+        } else client.list(rp(rel)).length() == 0
     } catch (e: HostError) {
         if (!oneFile(e)) throw e
         false
@@ -143,7 +184,8 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
             ensureRemoteDir(rel.substringBeforeLast('/', ""))
             if (rel in knownDirs) throw IOException("the drive has a folder with that name")
             size = src.length()
-            if (parts > 0) client.uploadParts(rp(rel), src, size, src.lastModified() / 1000.0, stop, parts, { progress.part(it) }, { progress.note(it) })
+            if (vault != null) vault.put(rp(rel), src, size, src.lastModified() / 1000.0, stop, { progress.part(it) }, { progress.note(it) })
+            else if (parts > 0) client.uploadParts(rp(rel), src, size, src.lastModified() / 1000.0, stop, parts, { progress.part(it) }, { progress.note(it) })
             else client.upload(rp(rel), size, src.lastModified() / 1000.0, stop) { FileInputStream(src) }
         } catch (e: HostError) {
             if (!oneFile(e)) throw e
@@ -174,7 +216,10 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
                 throw IOException("not enough free space here (%.1f GiB free, keeping %.1f GiB free)".format(free / 1073741824.0, keepFree / 1073741824.0))
             parent.mkdirs()
             if (dst.isDirectory) throw IOException("this device has a folder with that name")
-            val got = FileOutputStream(tmp).use { client.download(rp(rel), it, stop) }
+            val got = FileOutputStream(tmp).use { out ->
+                if (vault != null) vault.read(vault.resolve(rp(rel)) ?: throw IOException("it is gone from your account"), out, stop)
+                else client.download(rp(rel), out, stop)
+            }
             if (got != rf.size || remoteStamp(rel) != rf)
                 throw IOException("it changed while it was being copied; trying again next time")
             tmp.setLastModified(Math.round(rf.mtime * 1000))
@@ -211,7 +256,7 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
 
     private fun deleteRemote(rel: String): Boolean {
         try {
-            client.delete(rp(rel))
+            rDelete(rp(rel))
         } catch (e: HostError) {
             if (e.status == 404) return true
             if (!oneFile(e)) throw e
@@ -304,7 +349,7 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
         if (direction != "down" && !localRoot.isDirectory)
             throw SyncError("The folder ${job.local} isn't there (storage that isn't connected?). Nothing was changed.")
         if (direction == "down") localRoot.mkdirs()
-        val remoteScan = scanRemote(client, remote, excluded)
+        val remoteScan = rScan()
         if (remoteScan.exists && !remoteScan.isDir) throw SyncError("$remote on the drive is a file, not a folder.")
         rootThere = remoteScan.exists
         if (!remoteScan.exists) {
@@ -333,7 +378,7 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
             saveAliases()
         }
         if (direction != "down") {               // how many files are still on their way to Discord
-            val after = lastScan ?: scanRemote(client, remote, excluded)
+            val after = lastScan ?: rScan()
             r["waiting"] = after.files.values.count { it.state != "synced" }.toLong()
         }
         return r
@@ -392,7 +437,7 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
         for (rel in goneDirs.sortedByDescending { p -> p.count { it == '/' } }) {
             if (remoteDirEmpty(rel)) {
                 try {
-                    client.delete(rp(rel))
+                    rDelete(rp(rel))
                 } catch (e: HostError) {
                     if (!oneFile(e)) throw e
                     if (e.status != 404) problem(rel, e.message)
@@ -418,7 +463,7 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
     private fun move(L: Map<String, Stamp>, Ldirs: Set<String>, R: Map<String, Stamp>, Rdirs: Set<String>) {
         up(L, Ldirs, R, Rdirs, exact = false, known = null)
         // Delete what is safely in Discord (uploaded, same size and time) and hasn't changed since.
-        val after = scanRemote(client, remote, excluded).also { lastScan = it }
+        val after = rScan().also { lastScan = it }
         val emptied = HashSet<String>()
         for (rel in L.keys.sorted()) {
             check()
@@ -538,14 +583,14 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
                     l(rel).delete()              // only when empty
                 } else if (remoteDirEmpty(rel)) {
                     try {
-                        client.delete(rp(rel))
+                        rDelete(rp(rel))
                     } catch (e: HostError) {
                         if (!oneFile(e)) throw e
                     }
                 }
             }
             val here = scanLocal(localRoot, excluded, ArrayList(), skip = trashRoot)
-            val there = scanRemote(client, remote, excluded).also { lastScan = it }
+            val there = rScan().also { lastScan = it }
             dirsNow = here.dirs.intersect(there.dirs)
             newB.keys.retainAll(here.files.keys)
         } finally {
@@ -559,7 +604,7 @@ class SyncRun(private val client: HostClient, private val job: Job, private val 
         val copy = conflictCopyName(rel, device)
         try {
             if (l.mtime >= rf.mtime) {
-                client.move(rp(rel), rp(copy))
+                if (vault != null) vault.move(rp(rel), rp(copy)) else client.move(rp(rel), rp(copy))
                 if (upload(rel, l)) newB[rel] = l
                 if (download(copy, rf)) newB[copy] = rf
             } else {

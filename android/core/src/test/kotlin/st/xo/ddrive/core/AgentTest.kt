@@ -22,6 +22,7 @@ import kotlin.test.fail
  */
 class AgentTest {
     private lateinit var host: Process
+    private lateinit var hostOut: java.io.BufferedReader
     private lateinit var address: String
     private lateinit var phrase: String
     private lateinit var page: HostClient
@@ -36,7 +37,8 @@ class AgentTest {
         val python = System.getenv("DDRIVE_PYTHON") ?: if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3"
         host = ProcessBuilder(python, File("src/test/python/host.py").absolutePath, repo)
             .redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val line = host.inputStream.bufferedReader().readLine() ?: fail("the test host did not start")
+        hostOut = host.inputStream.bufferedReader()
+        val line = hostOut.readLine() ?: fail("the test host did not start")
         val info = JSONObject(line)
         address = "http://127.0.0.1:${info.getInt("port")}"
         phrase = info.getString("phrase")
@@ -317,6 +319,145 @@ class AgentTest {
         again.join()
         again.bye()
         assertNull(shown())
+    }
+
+    // ------------------------------------------------------------ end-to-end encrypted accounts
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+
+    /** Ask DDrive's own client for end-to-end accounts something (see host.py). */
+    private fun python(line: String): String {
+        host.outputStream.write((line + "\n").toByteArray())
+        host.outputStream.flush()
+        return hostOut.readLine() ?: fail("the test host went away")
+    }
+
+    private fun newAccount(): Pair<ByteArray, HostClient> {
+        val key = Seal.randomBytes(32)               // stands for 24 words that stay on the phone
+        val auth = hex(Seal.authKey(key))
+        val conn = java.net.URL("$address/signup").openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.instanceFollowRedirects = false
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        conn.outputStream.use { it.write("step=e2e&auth=$auth".toByteArray()) }
+        assertEquals(303, conn.responseCode)
+        return key to HostClient(address, "", auth = auth)
+    }
+
+    @Test
+    fun theWordsAndTheKeysAreTheOnesTheOthersMake() {
+        val key = ByteArray(32) { it.toByte() }
+        // the same fixed values as in tests/test_vault.py: all devices of an account must agree on these
+        assertEquals("9e77be91e22334a7c62fc9af11fe1557deb0979fd3e1fa65b111d9b0677f0370", hex(Seal.authKey(key)))
+        assertEquals("2e5f3da69a3530aec13f2344ba1fc6f8d5a96d6c63242920fe76955a07ef3794", hex(Seal.metaKey(key)))
+        assertEquals("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+                     "abandon abandon abandon abandon abandon abandon abandon art", Words.keyToPhrase(ByteArray(32)))
+        val random = Seal.randomBytes(32)
+        assertTrue(random.contentEquals(Words.phraseToKey("  " + Words.keyToPhrase(random).uppercase().replace(" ", ",\n "))))
+        assertTrue(runCatching { Words.phraseToKey("abandon abilty " + "abandon ".repeat(22)) }.exceptionOrNull()!!.message!!.contains("did you mean 'ability'"))
+        assertTrue(runCatching { Words.phraseToKey("abandon ability able") }.exceptionOrNull()!!.message!!.contains("24 words"))
+        // sealed things open again, and only as what they were sealed as
+        val blob = Seal.seal(key, "hello".toByteArray(), Seal.AAD_OP)
+        assertEquals("hello", String(Seal.unseal(key, blob, Seal.AAD_OP)))
+        assertTrue(runCatching { Seal.unseal(key, blob, Seal.AAD_SYNC) }.exceptionOrNull() is VaultError)
+        blob[blob.size - 1] = (blob[blob.size - 1].toInt() xor 1).toByte()
+        assertTrue(runCatching { Seal.unseal(key, blob, Seal.AAD_OP) }.exceptionOrNull() is VaultError)
+    }
+
+    @Test
+    fun anEndToEndAccountFromThePhone() {
+        val (key, client) = newAccount()
+        val v = Vault(client, key)
+        v.sync()
+        // what the phone seals, DDrive's own client opens...
+        val data = ByteArray(2_500_000) { (it * 17 + 3).toByte() }           // several pieces
+        val f = put("holiday.mp4", data)
+        v.mkdirs("/Camera roll/2026")
+        var heard = 0L
+        v.put("/Camera roll/2026/holiday.mp4", f, f.length(), 1_700_000_000.5, onPart = { heard += it })
+        assertEquals(data.size.toLong(), heard)
+        val sha = hex(java.security.MessageDigest.getInstance("SHA-256").digest(data))
+        assertEquals(sha, python("sha ${hex(key)} /Camera%20roll/2026/holiday.mp4"))
+        v.put("/empty.txt", put("empty.txt", ByteArray(0)), 0, 1_700_000_000.0)
+        assertEquals(hex(java.security.MessageDigest.getInstance("SHA-256").digest(ByteArray(0))), python("sha ${hex(key)} /empty.txt"))
+        // ...and the other way round, on another "phone" of the same account
+        assertEquals("ok", python("put ${hex(key)} /from%20the%20laptop.txt written elsewhere"))
+        val other = Vault(HostClient(address, "", auth = hex(Seal.authKey(key))), key)
+        other.sync()
+        val out = ByteArrayOutputStream()
+        assertEquals(17, other.read(other.resolve("/from the laptop.txt")!!, out))
+        assertEquals("written elsewhere", out.toString("UTF-8"))
+        val big = ByteArrayOutputStream()
+        other.read(other.resolve("/Camera roll/2026/holiday.mp4")!!, big)
+        assertTrue(data.contentEquals(big.toByteArray()))
+        assertEquals(1_700_000_000.5, other.resolve("/Camera roll/2026/holiday.mp4")!!.getDouble("mtime"), 0.001)
+        other.move("/empty.txt", "/Camera roll/renamed.txt")
+        other.delete("/Camera roll/2026")
+        v.sync()
+        assertEquals(listOf("renamed.txt"), v.children(v.resolve("/Camera roll")!!.getString("id")).map { it.getString("name") })
+        assertEquals(2, v.fileCount)
+        // the wrong words open nothing: there isn't even such an account; and the plain way in is shut
+        assertEquals(401, runCatching { Vault(HostClient(address, "", auth = hex(Seal.authKey(Seal.randomBytes(32)))), key).sync() }
+            .exceptionOrNull().let { (it as HostError).status })
+        assertEquals(403, runCatching { client.list("/") }.exceptionOrNull().let { (it as HostError).status })
+    }
+
+    @Test
+    fun thePhoneSyncsIntoAnEndToEndAccountSealed() {
+        val (key, client) = newAccount()
+        val vault = Vault(client, key)
+        val page = Vault(HostClient(address, "", auth = hex(Seal.authKey(key))), key)      // the account's page in a browser
+        val a = Agent(client, device, "my phone", File(tmp, "state"), File(tmp, "Removed by sync"), home = tmp.path,
+                      livePoll = 3600.0, liveFull = 3600.0, keepFree = 0, vault = vault)
+        agent = a
+        a.start()
+        fun shown(): JSONObject? = page.client.getJson("/api/vault/sync").getJSONArray("devices").optJSONObject(0)
+        until("connecting") { if (a.online) shown()?.takeIf { it.getBoolean("online") } else null }
+        assertEquals("my phone", JSONObject(page.openMessage(shown()!!.getString("info"))).getString("name"))
+        assertFalse(shown().toString().contains("my phone"))                   // the host only has it sealed
+        put("IMG_1.jpg", "a photo".toByteArray())
+        put("Trip/IMG_2.jpg", ByteArray(1_200_000) { 7 })
+        val job = JSONObject().put("id", "ab12cd").put("name", "Camera").put("local", here.path).put("remote", "/Phone").put("mode", "move")
+            .put("trigger", "manual").put("every", 60).put("at", "03:00").put("exclude", JSONArray()).put("enabled", true)
+        page.client.postJson("/api/vault/sync/jobs", JSONObject().put("device", device).put("rev", shown()!!.getLong("rev"))
+            .put("jobs", page.sealMessage(JSONArray().put(job).toString())))
+        until("the pair reaching the phone") { a.job("ab12cd") }
+        fun run(): JSONObject {
+            val before = a.snapshot().optJSONObject("ab12cd")?.optJSONArray("history")?.optJSONObject(0)?.optDouble("at")
+            page.client.postJson("/api/vault/sync/tell", JSONObject().put("device", device)
+                .put("sealed", page.sealMessage(JSONObject().put("do", "run").put("id", "ab12cd").toString())))
+            return until("the pair running") {
+                a.snapshot().optJSONObject("ab12cd")?.optJSONArray("history")?.optJSONObject(0)?.takeIf { it.optDouble("at") != before && a.running == null }
+            }
+        }
+        var res = run()
+        assertEquals("", res.getString("error"))
+        assertEquals(2, res.getInt("up"))
+        assertEquals(hex(java.security.MessageDigest.getInstance("SHA-256").digest("a photo".toByteArray())), python("sha ${hex(key)} /Phone/IMG_1.jpg"))
+        // "move" frees the phone only once the host has stored the sealed copies on "Discord"
+        assertEquals("ok", python("upload"))
+        until("the files leaving the phone", 40) {
+            if (File(here, "IMG_1.jpg").exists() || File(here, "Trip/IMG_2.jpg").exists()) {
+                res = run()
+                null
+            } else true
+        }
+        assertEquals("", res.getString("error"))
+        // how it went reaches the page sealed, and the page can ask the phone for its folders
+        until("the report") {
+            val st = shown()!!.optString("status")
+            if (st.isEmpty()) null else JSONObject(page.openMessage(st)).getJSONObject("jobs").optJSONObject("ab12cd")?.takeIf { it.optJSONArray("history") != null }
+        }
+        assertFalse(shown().toString().contains("Phone"))
+        // something from another device comes down, opened here
+        assertEquals("ok", python("put ${hex(key)} /Phone/note.txt from%20elsewhere"))
+        page.client.postJson("/api/vault/sync/jobs", JSONObject().put("device", device).put("rev", shown()!!.getLong("rev"))
+            .put("jobs", page.sealMessage(JSONArray().put(job.put("mode", "download")).toString())))
+        until("the change") { a.job("ab12cd")?.mode == "download" }
+        res = run()
+        assertEquals(3, res.getInt("down"))
+        assertEquals("from%20elsewhere", File(here, "note.txt").readText())
+        assertEquals(1_700_000_000_000, File(here, "note.txt").lastModified())
     }
 
     @Test

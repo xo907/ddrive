@@ -23,7 +23,8 @@ class LocalError(cause: IOException) : Exception(cause.message ?: cause.toString
  * The host's dashboard, as a program sees it: the same requests DDrive Lite makes on a computer
  * (lite.py), signed in with 24 words. Signs in again by itself when the session has run out.
  */
-class HostClient(address: String, private val phrase: String, @Volatile var cookie: String = "", private val timeoutMs: Int = 60_000) {
+class HostClient(address: String, private val phrase: String, @Volatile var cookie: String = "", private val timeoutMs: Int = 60_000,
+                 private val auth: String = "") {      // auth: what an end-to-end encrypted account signs in with (Vault.kt); its words stay here
     val address: String
     private val loginLock = Any()
 
@@ -89,7 +90,7 @@ class HostClient(address: String, private val phrase: String, @Volatile var cook
                     conn.outputStream.use(send)
                 }
                 val code = conn.responseCode
-                if (code == 401 && attempt == 0 && phrase.isNotEmpty()) {
+                if (code == 401 && attempt == 0 && (phrase.isNotEmpty() || auth.isNotEmpty())) {
                     conn.errorStream?.close()
                     login(stale = session)
                     continue
@@ -113,7 +114,7 @@ class HostClient(address: String, private val phrase: String, @Volatile var cook
     fun login(stale: String? = null) {
         synchronized(loginLock) {
             if (stale != null && stale != cookie) return       // another thread signed in meanwhile
-            val form = ("phrase=" + URLEncoder.encode(phrase, "UTF-8")).toByteArray()
+            val form = (if (auth.isNotEmpty()) "auth=$auth" else "phrase=" + URLEncoder.encode(phrase, "UTF-8")).toByteArray()
             val conn = try {
                 open("POST", "/login", mapOf("Content-Type" to "application/x-www-form-urlencoded"))
             } catch (e: IOException) {
@@ -163,6 +164,16 @@ class HostClient(address: String, private val phrase: String, @Volatile var cook
             JSONObject(body(it).toString(Charsets.UTF_8).ifEmpty { "{}" })
         }
     }
+
+    /** Send bytes as they are (sealed things). */
+    fun postBytes(path: String, bytes: ByteArray): JSONObject =
+        exchange("POST", path, mapOf("Content-Type" to "application/octet-stream"), bytes.size.toLong(), { it.write(bytes) }) {
+            JSONObject(body(it).toString(Charsets.UTF_8).ifEmpty { "{}" })
+        }
+
+    /** `length` bytes of what is at `path`, from `start`. */
+    fun getRange(path: String, start: Long, length: Long): ByteArray =
+        exchange("GET", path, mapOf("Range" to "bytes=$start-${start + length - 1}")) { body(it) }
 
     private fun q(vararg params: Pair<String, String>) =
         "?" + params.joinToString("&") { (k, v) -> k + "=" + URLEncoder.encode(v, "UTF-8") }
