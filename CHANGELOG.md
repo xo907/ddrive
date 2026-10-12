@@ -3,6 +3,26 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.17.0 (2026-10-12)
+
+- **A shorter menu.** The left (on a phone: bottom) menu has six pages now: Home, Files, Gallery,
+  Starred, Shared, Deleted. Notes, Bookmarks, Messages, Contacts and Folder sync are under a new tools
+  button (the squares, top right); Activity, Snapshots, Storage, Health, Log and Resources are in the
+  account button's menu, with Settings, Find anything, What's new and Sign out. The button that holds
+  the page you are on is highlighted.
+- **A much faster dashboard**, measured on a phone-like connection and processor (80 ms away, a quarter
+  of a laptop's speed):
+  - A folder of 1,500 files shows in about 0.1 s instead of 2 s: the first screenful is drawn at once
+    and the rest right after, only rows on screen are laid out, and icons are made once and copied.
+  - Big lists (folders, search, the gallery, activity, storage) come compressed: 200 KB → 16 KB.
+  - The page's own files are kept by the browser until they change (their addresses carry their
+    version), so loading the dashboard again asks the server for none of them: 0.5 s → 0.3 s.
+  - The dashboard no longer asks for its status twice when it opens, doesn't redraw anything when
+    the status hasn't changed, and asks nothing at all while its tab is in the background.
+- Unchanged: what is cached is only the program's own files (never a file's content or a list of
+  yours), compression is only for browsers and never for answers that carry a secret, and the
+  session cookie stays SameSite=Strict, so another site can't trigger these requests.
+
 ## 2.16.1 (2026-10-12)
 
 - **Make accounts from the dashboard.** Settings → Accounts → "Make an account…" makes an account for

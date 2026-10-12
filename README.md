@@ -510,6 +510,13 @@ upload by drag and drop, new folder, rename, delete, earlier versions, "availabl
 recently deleted files, snapshots, and a health page (protection, checks, repairs, uploads,
 devices).
 
+- **Where things are.** The menu on the left (along the bottom on a phone) has what you use most:
+  Home, Files, Gallery, Starred, Shared and Deleted. The squares button at the top right opens the
+  **tools**: Notes, Bookmarks, Messages, Contacts and Folder sync. The round account button opens
+  Settings, the **drive's pages** (Activity, Snapshots, Storage, Health, Log, Resources), Find
+  anything (Ctrl+K), What's new and Sign out. Whichever of the two holds the page you are on is
+  highlighted.
+
 - **Signing in.** With 24 words. There are no user names and no passwords.
   - **The recovery phrase**: your drive's 24 words sign you in as its owner, from the first visit on.
     `recovery-phrase` shows them on the computer that runs the drive (so does Settings → **Sign-in**,

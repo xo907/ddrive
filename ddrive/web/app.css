@@ -1258,3 +1258,21 @@ main::-webkit-scrollbar-thumb { background: var(--line); }
 .move-check { display: flex; gap: 8px; align-items: center; margin: 14px 0 0; }
 .move-check input { appearance: auto; width: 16px; height: 16px; min-width: 0; padding: 0; margin: 0; flex: none; accent-color: var(--accent); }
 .move-log { max-height: 160px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0 0 14px; }
+
+/* ------------------------------------------------------------------ the two menus at the top (tools, the avatar's) */
+.ctx-head { padding: 8px 10px 4px; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.ctx button.cur { background: var(--hover); font-weight: 500; }
+.ctx button.cur svg { color: var(--ink); }
+.menu-btn[hidden] { display: none; }
+#apps.on { background: var(--hover); color: var(--ink); }
+.avatar.on { box-shadow: 0 0 0 2px var(--ring); }
+@media (min-width: 761px) { .side a + .usage { margin-top: auto; } }
+@media (max-width: 760px) { .side { justify-content: space-around; } .side a { flex: 1 1 0; min-width: 0; } }
+
+/* ------------------------------------------------------------------ long lists: only what is on screen is laid out */
+.list > .row:not(.head) { content-visibility: auto; contain-intrinsic-size: auto 44px; }
+.list.grid > .row:not(.head) { contain-intrinsic-size: auto 180px; }
+.g-tile { content-visibility: auto; contain-intrinsic-size: auto 160px; }
+.search { min-width: 0; }
+.top .icon-btn, .top .avatar { flex: none; }
+@media (max-width: 760px) { .top { gap: 8px; } }

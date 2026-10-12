@@ -950,6 +950,32 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("GET", "/icon.png", auth=False)[0], 200)
 
 
+    def test_the_page_loads_fast_and_safely(self):
+        import gzip
+        import re
+        self.login()
+        # the page's files are named with their version, kept by the browser for good, and sent compressed
+        page = self.req("GET", "/")[2].decode()
+        app = re.search(r'src="(/app\.js\?v=[0-9a-f]+)"', page).group(1)
+        status, headers, body = self.req("GET", app, headers={"Accept-Encoding": "gzip"}, auth=False)
+        self.assertEqual((status, headers["Cache-Control"], headers["Content-Encoding"]), (200, "public, max-age=31536000, immutable", "gzip"))
+        self.assertIn(b"function render", gzip.decompress(body))
+        self.assertEqual(self.req("GET", "/app.js?v=old", auth=False)[1]["Cache-Control"], "no-cache")     # not that version: asked again
+        etag = self.req("GET", "/app.js", auth=False)[1]["ETag"]
+        self.assertEqual(self.req("GET", "/app.js", headers={"If-None-Match": etag}, auth=False)[0], 304)
+        self.assertEqual(self.req("GET", "/")[1]["Cache-Control"], "no-cache")
+        # a big list goes compressed to a browser, and never into a cache
+        self.d.index.makedirs("/big")
+        for i in range(60):
+            self.write(self.d, f"/big/a-rather-long-file-name-{i:03d}.txt", b"x")
+        browser = {"Accept-Encoding": "gzip", "Sec-Fetch-Site": "same-origin"}
+        status, headers, body = self.req("GET", "/api/list?path=/big", headers=browser)
+        self.assertEqual((status, headers.get("Content-Encoding"), headers["Cache-Control"]), (200, "gzip", "no-store"))
+        self.assertEqual(len(json.loads(gzip.decompress(body))["items"]), 60)
+        # ...but as ever to anything else (DDrive Lite, the phone app), and for POST
+        self.assertNotIn("Content-Encoding", self.req("GET", "/api/list?path=/big", headers={"Accept-Encoding": "gzip"})[1])
+        self.assertEqual(len(json.loads(self.req("GET", "/api/list?path=/big")[2])["items"]), 60)
+
     def test_bookmarks(self):
         import http.server
         import threading

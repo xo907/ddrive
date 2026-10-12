@@ -662,7 +662,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             self.wfile.write(body)
 
     def _json(self, obj, status=200):
-        self._send(status, json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+        body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+        # Big answers (a folder of thousands of files, the gallery, search) go compressed: a fifth of
+        # the size, which is most of the wait on a phone. Only answers to GET, and never one that holds
+        # a secret (BREACH: compression next to something an attacker controls can give a secret away;
+        # the session cookie is SameSite=Strict, so another site can't make these requests anyway).
+        # (Browsers only, which say so with Sec-Fetch-*: the apps and DDrive Lite get it as ever.)
+        if (len(body) > 2048 and self.command == "GET" and self.headers.get("Sec-Fetch-Site")
+                and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+                and urllib.parse.urlparse(self.path).path not in OWNER_ONLY):
+            import gzip
+            return self._send(status, gzip.compress(body, 5, mtime=0), headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+        self._send(status, body)
 
     def _error(self, status, message):
         self._json({"error": message}, status)
@@ -842,14 +853,39 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             cls._static_cache[name] = got
         return got
 
+    _VERSIONED = re.compile(r'(src|href)="/([a-z0-9-]+\.(?:js|css|svg|png))"')
+
+    @classmethod
+    def _page_file(cls, name):
+        """index.html with the address of each of its files carrying that file's version (?v=..), so
+        the browser keeps them for good and asks for a file again only when it has changed."""
+        got = cls._static_file(name)
+        if not name.endswith(".html"):
+            return got
+        mtime, size, body, _, etag, ctype = got
+
+        def versioned(m):
+            try:
+                return f'{m.group(1)}="/{m.group(2)}?v={cls._static_file(m.group(2))[4].strip(chr(34))}"'
+            except OSError:
+                return m.group(0)
+        text = cls._VERSIONED.sub(versioned, body.decode("utf-8")).encode("utf-8")
+        import gzip
+        return mtime, size, text, gzip.compress(text, 6, mtime=0), '"' + hashlib.sha256(text).hexdigest()[:20] + '"', ctype
+
     def _static(self, name):
         try:
-            _, _, body, gz, etag, ctype = self._static_file(name)
+            _, _, body, gz, etag, ctype = self._page_file(name)
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             return self._error(404, "not found")
         # Asked again on every load ("no-cache"), so an update shows at once, but answered with
         # "304 Not Modified" when the browser has it already; and sent compressed when it may be.
-        headers = dict(_PAGE_HEADERS, ETag=etag, **{"Cache-Control": "no-cache"})
+        # Asked for by its version (from index.html): that never changes, so the browser keeps it and
+        # doesn't even ask (the next version has another address).
+        cache = "no-cache"
+        if self._query().get("v") == etag.strip('"') and name != "sw.js":
+            cache = "public, max-age=31536000, immutable"
+        headers = dict(_PAGE_HEADERS, ETag=etag, **{"Cache-Control": cache})
         if gz is not None:
             headers["Vary"] = "Accept-Encoding"
         if etag in (self.headers.get("If-None-Match") or ""):

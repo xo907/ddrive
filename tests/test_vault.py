@@ -235,7 +235,7 @@ class VaultTest(helpers.DriveTest):
         self.device.client.status()
         mine = get("/", self.device.client.cookie)[1]                  # the same dashboard as everybody, with what answers it in the browser
         self.assertIn(b"e2e-api.js", mine)
-        self.assertLess(mine.index(b"e2e-api.js"), mine.index(b'"/app.js"'))
+        self.assertLess(mine.index(b"e2e-api.js"), mine.index(b'"/app.js'))       # (the address carries its version: /app.js?v=..)
 
     def test_what_a_snapshot_refers_to_is_kept(self):
         """The dashboard keeps snapshots: the list as it was, a sealed file whose entry is in no folder.

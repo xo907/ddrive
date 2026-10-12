@@ -1152,6 +1152,7 @@
     if (!window.DDV) return;
     let s;
     try { const r = await realFetch("/api/status", cred); if (!r.ok) return; s = await r.json(); } catch (e) { return; }
+    E.firstStatus = s;                         // (the dashboard starts with it instead of asking again)
     if (!s.e2e) return;
     E.status = s;
     if (!DDV.usable) { document.body.innerHTML = '<p style="padding:40px">An end-to-end encrypted account can only be opened on an https address (or on the computer itself): a browser doesn\'t encrypt on plain http.</p>'; return new Promise(() => {}); }

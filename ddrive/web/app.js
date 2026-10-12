@@ -86,9 +86,24 @@ const ICONS = {
   star: '<path d="m10 3 2.1 4.4 4.8.6-3.5 3.3.9 4.8L10 13.8 5.7 16.1l.9-4.8L3.1 8l4.8-.6z"/>',
   grid: '<rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1"/><rect x="11" y="11" width="5.5" height="5.5" rx="1"/>',
   list: '<path d="M4 5.5h12M4 10h12M4 14.5h12"/>',
+  activity: '<path d="M2.5 10h3l2-5 3.5 10 2-5h4.5"/>',
+  clock: '<circle cx="10" cy="10" r="6.5"/><path d="M10 6.5V10l2.5 1.6"/>',
+  pie: '<path d="M10 3.5a6.5 6.5 0 1 0 6.5 6.5H10z"/><path d="M12.5 3a5 5 0 0 1 4.5 4.5h-4.5z"/>',
+  shield: '<path d="M10 2.8 4 5v4.6c0 3.4 2.5 6.2 6 7.6 3.5-1.4 6-4.2 6-7.6V5z"/><path d="m7.4 10 1.8 1.8 3.6-3.6"/>',
+  logs: '<path d="M4 5h12M4 10h12M4 15h7"/><circle cx="15.5" cy="15" r="1.5"/>',
+  chip: '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/><path d="M8 2.5v3M12 2.5v3M8 14.5v3M12 14.5v3M2.5 8h3M2.5 12h3M14.5 8h3M14.5 12h3"/>',
+  sync: '<path d="M15.5 8A6 6 0 0 0 4.7 6.2M4.5 12a6 6 0 0 0 10.8 1.8"/><path d="M15.8 3.8V8h-4.2M4.2 16.2V12h4.2"/>',
   gallery: '<rect x="3" y="3.5" width="14" height="13" rx="1.5"/><circle cx="7.5" cy="8" r="1.3"/><path d="m3.5 14 4-3.5 3 2.5 2.5-2 3.5 3"/>',
 };
-const icon = (name, cls = "") => h("svg", { viewBox: "0 0 20 20", class: `ico ${cls}`, "aria-hidden": "true", html: ICONS[name] });
+// Each icon's markup is parsed once and cloned after that (a long list draws thousands of them).
+const iconCache = new Map();
+function icon(name, cls = "") {
+  let tpl = iconCache.get(name);
+  if (!tpl) { tpl = h("svg", { viewBox: "0 0 20 20", "aria-hidden": "true", html: ICONS[name] || "" }); iconCache.set(name, tpl); }
+  const el = tpl.cloneNode(true);
+  el.setAttribute("class", `ico ${cls}`);
+  return el;
+}
 
 const EXT = {
   image: "jpg jpeg png gif webp avif bmp svg heic",
@@ -98,10 +113,10 @@ const EXT = {
   archive: "zip rar 7z tar gz bz2 xz zst iso",
   pdf: "pdf",
 };
+const KIND_OF = new Map(Object.entries(EXT).flatMap(([k, list]) => list.split(" ").map((e) => [e, k])));
 function kind(name) {
-  const ext = (name.split(".").pop() || "").toLowerCase();
-  for (const [k, list] of Object.entries(EXT)) if (list.split(" ").includes(ext)) return k;
-  return "file";
+  const dot = name.lastIndexOf(".");
+  return (dot >= 0 && KIND_OF.get(name.slice(dot + 1).toLowerCase())) || "file";
 }
 
 function size(n) {
@@ -116,11 +131,18 @@ const fmtDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeri
 const fmtYear = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
 const fmtTime = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const fmtFull = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+let today = { at: 0, start: 0, end: 0, year: 0 };      // (worked out once a second, not for every date shown)
 function when(t) {
   if (!t) return "";
-  const d = new Date(t * 1000), now = new Date();
-  if (d.toDateString() === now.toDateString()) return fmtTime.format(d);
-  return d.getFullYear() === now.getFullYear() ? fmtDay.format(d) : fmtYear.format(d);
+  const ms = t * 1000;
+  if (Date.now() - today.at > 1000) {
+    const n = new Date();
+    today = { at: Date.now(), start: new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime(),
+              end: new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1).getTime(), year: n.getFullYear() };
+  }
+  const d = new Date(ms);
+  if (ms >= today.start && ms < today.end) return fmtTime.format(d);
+  return d.getFullYear() === today.year ? fmtDay.format(d) : fmtYear.format(d);
 }
 function ago(t) {
   const s = Math.max(0, Date.now() / 1000 - t);
@@ -202,7 +224,8 @@ function ask({ title, text = "", value = null, ok = "OK", danger = false }) {
 let ctxEl = null;
 let ctxFor = null;           // the row whose menu is open (highlighted meanwhile)
 let lastTouch = 0;
-const sheetMode = () => matchMedia("(hover: none), (max-width: 760px)").matches;
+const sheetQuery = matchMedia("(hover: none), (max-width: 760px)");
+const sheetMode = () => sheetQuery.matches;
 
 function closeMenu() {
   if (ctxFor) { ctxFor.classList.remove("menu-on"); ctxFor = null; }
@@ -222,7 +245,9 @@ function openMenu(items, x, y, title, sub, anchor) {
     asSheet && title ? h("div", { class: "ctx-title" }, h("div", { class: "t" }, title), sub && h("div", { class: "s" }, sub)) : null,
     list.map((it) => {
       if (it === "-") return h("div", { class: "sep", role: "separator" });
-      const b = h("button", { role: it.checked != null ? "menuitemcheckbox" : "menuitem", class: it.danger ? "danger" : "",
+      if (it.head) return h("div", { class: "ctx-head", role: "presentation" }, it.head);
+      const b = h("button", { role: it.checked != null ? "menuitemcheckbox" : "menuitem", class: (it.danger ? "danger" : "") + (it.current ? " cur" : ""),
+                              "aria-current": it.current ? "page" : null,
                               disabled: it.disabled, "aria-checked": it.checked != null ? String(!!it.checked) : null,
                               onclick: () => { closeMenu(); if (it.run) it.run(); } },
         icon(it.icon || "more"), h("span", { class: "l" }, it.label),
@@ -345,9 +370,19 @@ function download(url, name) {
 }
 
 // ------------------------------------------------------------------ status
+let statusSeen = "";                 // the last answer, as text: an unchanged one changes nothing on the page
 async function refreshStatus() {
-  try { status = await api("/api/status"); }
+  let first = null;
+  if (!statusSeen && window.E2E && E2E.ready) {          // the very first one: e2e-api.js asked already
+    await E2E.ready.catch(() => null);
+    first = E2E.active ? null : E2E.firstStatus || null;     // (an end-to-end account's is answered in the page)
+    E2E.firstStatus = null;
+  }
+  try { status = first || await api("/api/status"); }
   catch { status = null; }
+  const seen = status ? JSON.stringify(status) : "";
+  if (seen && seen === statusSeen && route.name !== "health" && route.name !== "resources") return;
+  statusSeen = seen || "-";
   // The drive was updated while this page was open: the page is still the old one until it is loaded again.
   if (status && status.version) {
     if (!pageVersion) pageVersion = status.version;
@@ -373,6 +408,7 @@ async function refreshStatus() {
   if (acct && status.user) { acct.textContent = status.user.slice(0, 1).toUpperCase(); acct.title = `Signed in as ${status.user}`; }
   else if (acct && isAccount()) { if (!acct.firstChild) acct.append(icon("user")); acct.title = `Your account (${status.account})`; }
   for (const a of document.querySelectorAll("#nav a")) a.hidden = notHere(a.dataset.nav);
+  $("#apps").hidden = !TOOL_PAGES.some(([name]) => !notHere(name));
   $("#sync").setAttribute("href", isAccount() ? "#/storage" : "#/health");
   if ((route.name === "health" || route.name === "resources") && !$("#sheet").classList.contains("open")) {
     keepScroll = true;
@@ -381,27 +417,24 @@ async function refreshStatus() {
 }
 
 // ------------------------------------------------------------------ menu
-// Its sections fold, and the whole menu shrinks to a strip of icons, to leave more room for the page.
+// The pages used most; it shrinks to a strip of icons, to leave more room for the page. The others are in
+// two menus at the top: the tools (TOOL_PAGES) and the avatar's (settings, DRIVE_PAGES, signing out).
+const TOOL_PAGES = [["notes", "Notes", "note"], ["bookmarks", "Bookmarks", "bookmark"], ["messages", "Messages", "message"],
+                    ["contacts", "Contacts", "contacts"], ["sync", "Folder sync", "sync"]];
+const DRIVE_PAGES = [["history", "Activity", "activity"], ["snapshots", "Snapshots", "clock", ["snapshot"]], ["storage", "Storage", "pie"],
+                     ["health", "Health", "shield", ["check"]], ["log", "Log", "logs"], ["resources", "Resources", "chip"]];
+const pageItems = (list) => list.filter(([name]) => !notHere(name)).map(([name, label, ic, also]) => ({
+  label, icon: ic, current: route.name === name || (also || []).includes(route.name), run: () => go("#/" + name) }));
+const inMenu = (list) => list.some(([name, , , also]) => route.name === name || (also || []).includes(route.name));
 const navState = (() => { try { return JSON.parse(localStorage.getItem("dd-nav") || "{}") || {}; } catch { return {}; } })();
 function applyNav(save) {
-  const shut = navState.shut || {};
   document.querySelector(".app").classList.toggle("rail", !!navState.rail);
   const t = $("#nav-toggle");
   t.setAttribute("aria-pressed", String(!!navState.rail));
   t.title = navState.rail ? "Show the menu" : "Shrink the menu to icons";
-  for (const head of document.querySelectorAll(".nav-head")) {
-    head.setAttribute("aria-expanded", String(!shut[head.dataset.group]));
-    head.nextElementSibling.classList.toggle("shut", !!shut[head.dataset.group]);
-  }
   if (save) { try { localStorage.setItem("dd-nav", JSON.stringify(navState)); } catch { /* private mode */ } }
 }
 $("#nav-toggle").addEventListener("click", () => { navState.rail = !navState.rail; applyNav(true); });
-for (const head of document.querySelectorAll(".nav-head")) {
-  head.addEventListener("click", () => {
-    navState.shut = { ...(navState.shut || {}), [head.dataset.group]: head.getAttribute("aria-expanded") === "true" };
-    applyNav(true);
-  });
-}
 for (const a of document.querySelectorAll("#nav a")) a.title = a.textContent.trim();
 applyNav(false);
 
@@ -416,10 +449,9 @@ function parseRoute() {
 }
 function render() {
   route = parseRoute();
-  for (const a of document.querySelectorAll("#nav a")) {
-    const n = a.dataset.nav;
-    a.classList.toggle("on", n === route.name || (n === "snapshots" && route.name === "snapshot"));
-  }
+  for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("on", a.dataset.nav === route.name);
+  $("#apps").classList.toggle("on", inMenu(TOOL_PAGES));
+  $("#account").classList.toggle("on", route.name === "settings" || inMenu(DRIVE_PAGES));
   closeSheet();
   leaveNotes();
   leaveMessages();
@@ -497,6 +529,7 @@ function crumbs(path, root, hrefFor) {
 
 // ------------------------------------------------------------------ files
 let currentDir = "/";
+let filesDrawn = 0;                  // which drawing of a folder is the current one (the rest of a big one comes in parts)
 
 function itemRow(it, opts = {}) {
   const k = it.dir ? "folder" : kind(it.name);
@@ -520,7 +553,7 @@ function itemRow(it, opts = {}) {
                 h("span", { class: "date" }, when(it.mtime)), more);
   bindMenu(row, () => itemMenu(it), it.name, sub);
   if (route.name === "files") {
-    if (gridView()) row.prepend(thumbBox(it));
+    if (opts.grid ?? gridView()) row.prepend(thumbBox(it));
     makeDraggable(row, it);
     const box = h("button", { class: "cb row-cb", role: "checkbox", "aria-checked": String(sel.has(it.path)),
                               "aria-label": `Select ${it.name}`, tabindex: "-1",
@@ -557,10 +590,23 @@ async function renderFiles() {
       h("button", { class: "btn ghost", onclick: newFolder }, "New folder"),
       h("button", { class: "btn", onclick: () => $("#pick").click() }, "Upload")));
   listed = data.items;
-  const rows = data.items.map((it) => itemRow(it));
-  const body = rows.length ? h("div", { class: "list" + (gridView() ? " grid" : "") }, listHead(), rows)
+  // A big folder is drawn in parts: what fits on the screen at once, the rest right after, so the page
+  // shows without waiting for thousands of rows.
+  const grid = gridView(), mine = ++filesDrawn, FIRST = 150, MORE = 400;
+  const rows = data.items.slice(0, FIRST).map((it) => itemRow(it, { grid }));
+  const list = h("div", { class: "list" + (grid ? " grid" : "") }, listHead(), rows);
+  const body = data.items.length ? list
     : h("div", { class: "empty" }, h("b", {}, "Nothing here yet"), "Drop files anywhere on this page, or use Upload.");
   page(bar, selBar, body, h("div", { class: "spacer" }));
+  (function more(at) {
+    if (at >= data.items.length) return;
+    requestAnimationFrame(() => setTimeout(() => {             // (after the screen was drawn)
+      if (mine !== filesDrawn || !list.isConnected) return;
+      list.append(...data.items.slice(at, at + MORE).map((it) => itemRow(it, { grid })));
+      syncSel();
+      more(at + MORE);
+    }, 0));
+  })(FIRST);
   for (const a of bar.querySelectorAll(".crumbs a")) {
     dropTarget(a, "/" + decodeURIComponent(a.getAttribute("href").replace(/^#\/files\/?/, "")).replace(/\/+$/, ""));
   }
@@ -4139,13 +4185,21 @@ async function renderMessages() {
 // ------------------------------------------------------------------ account
 $("#account").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
+  const who = isAccount() ? `Account ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in";
+  const drive = pageItems(DRIVE_PAGES);
   openMenu([
-    { label: isAccount() ? `Account ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in", icon: "user", disabled: true },
+    !sheetMode() && { label: who, icon: "user", disabled: true },          // (a phone's sheet has it as its title)
+    { label: isAccount() ? "Your account" : "Settings", icon: "settings", current: route.name === "settings", run: () => go("#/settings") },
+    ...(drive.length ? ["-", { head: isAccount() ? "History and storage" : "Drive" }, ...drive] : []),
     "-",
-    { label: isAccount() ? "Your account" : "Settings", icon: "settings", run: () => go("#/settings") },
+    { label: "Find anything", icon: "open", run: openPalette },
     { label: "What's new", icon: "info", run: whatsNew },
     { label: "Sign out", icon: "signout", run: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } },
-  ], r.right - 220, r.bottom + 6, "Account");
+  ], r.right - 240, r.bottom + 6, who);
+});
+$("#apps").addEventListener("click", (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  openMenu([{ head: "Tools" }, ...pageItems(TOOL_PAGES)], r.right - 220, r.bottom + 6, "Tools");
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
 
@@ -4153,8 +4207,14 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(
 dropTarget(document.querySelector('#nav a[data-nav="files"]'), "/");
 dropTarget(document.querySelector('#nav a[data-nav="deleted"]'), "/", "delete");
 refreshStatus().then(render);          // who is signed in decides which pages there are
+// Asked again every few seconds while the page is shown (every second while something is moving), not
+// at all while it is in the background: it is asked again the moment it is looked at.
 (function poll() {
   const busy = status && (status.uploads.length || status.downloads || status.queued || (status.fetches || []).some((f) => f.state === "running")
                           || (status.health && status.health.recheck && status.health.recheck.running));
-  setTimeout(async () => { await refreshStatus(); poll(); }, busy ? 1000 : 3000);
+  setTimeout(async () => {
+    if (document.hidden) await new Promise((r) => document.addEventListener("visibilitychange", r, { once: true }));
+    await refreshStatus();
+    poll();
+  }, busy ? 1000 : 3000);
 })();
