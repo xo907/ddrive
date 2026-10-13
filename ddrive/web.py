@@ -1724,6 +1724,19 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                     del cls._part_locks[k]
             return cls._part_locks.setdefault(part, threading.Lock())
 
+    @staticmethod
+    def _others_arriving(part, within=120.0):
+        """True when a part of another file that is being sent arrived in the last two minutes."""
+        now = time.time()
+        try:
+            for name in os.listdir(os.path.dirname(part)):
+                p = os.path.join(os.path.dirname(part), name)
+                if name.endswith(".part") and p != part and now - os.path.getmtime(p) < within:
+                    return True
+        except OSError:
+            pass
+        return False
+
     def _take_part(self, path, size, offset, mtime):
         """One part of a file that is sent in parts; answers how far it is, and "done" with the last one."""
         n = int(self.headers.get("Content-Length") or 0)
@@ -1761,6 +1774,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         full = None if why else fs.room_for(size - offset)
         if full and (fs._pending_staging_bytes() or not self.drive.uploader.is_idle()):
             why = f"its uploads have to free room first ({full})"
+        if full and self._others_arriving(part):
+            # Other files are arriving this minute and take up the room until they are on Discord:
+            # this one waits for them and keeps what it has, it isn't given up. (When none of them
+            # gets on, nothing arrives any more, and then it is said that there is no room.)
+            why = f"other uploads have to finish first ({full})"
         if why:
             skip()
             return self._json({"ok": False, "offset": min(have, offset), "wait": why})

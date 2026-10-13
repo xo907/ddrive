@@ -404,7 +404,11 @@
       // answers with how much the server has, and the loop below goes back. The file is here, so
       // nothing has to be given up for that.
       const post = async () => {
-        let body = new Blob(part), tries = 0;
+        // The part as plain bytes in this page's memory, not as a Blob: those are kept by the browser
+        // in a store of its own, which can be full (little room on this device's disk, a private
+        // window), and then every part fails with ERR_BLOB_OUT_OF_MEMORY however often it is sent.
+        let body = new Uint8Array(part.reduce((s, p) => s + p.length, 0)), tries = 0;
+        part.reduce((at, p) => (body.set(p, at), at + p.length), 0);
         part = [];
         for (;;) {
           let got;
@@ -422,15 +426,15 @@
           if (got.wait) { heard({ note: "Waiting for the server: " + got.wait }); await sleep(15000); continue; }
           if (!got.ok) {                         // the server has another amount of the file than this part starts at
             const have = Number(got.offset) || 0;
-            if (have >= offset && have <= offset + body.size) {      // some or all of this part arrived before it was cut off
-              body = body.slice(have - offset);
+            if (have >= offset && have <= offset + body.length) {      // some or all of this part arrived before it was cut off
+              body = body.subarray(have - offset);
               offset = have;
-              if (body.size) continue;
+              if (body.length) continue;
               heard({ note: "" });
               return;
             }
             // (the last part arrived whole and only the answer was lost: then the object is there)
-            if (where === "/api/vault/object" && offset + body.size === total
+            if (where === "/api/vault/object" && offset + body.length === total
                 && await call(`${where}?id=${id}`, { raw: true, headers: { Range: "bytes=0-0" } }).then(() => true, () => false)) { offset = total; heard({ note: "" }); return; }
             // (again and again without ever getting further: something is wrong that going back doesn't mend)
             if (have < offset && ++back <= 25) return have;

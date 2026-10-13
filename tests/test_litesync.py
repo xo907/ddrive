@@ -266,6 +266,27 @@ class LiteSyncTest(helpers.DriveTest):
         self.assertEqual(json.loads(self.page.request("GET", f"/api/upload/part?{q}"))["offset"], part)
         got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={part}", data[part:2 * part]))
         self.assertEqual((got["ok"], got["offset"]), (True, 2 * part))
+        # no room for the rest of it while another file is arriving too: it waits and keeps what it has;
+        # with nothing else arriving it is told that there is no room
+        folder = os.path.join(self.host.cfg.resolved_data_dir, "partials")
+        other = os.path.join(folder, "0" * 32 + ".part")
+        with open(other, "wb") as f:
+            f.write(b"x")
+        room, self.host.fs.room_for = self.host.fs.room_for, lambda n: "the disk has 1.0 GiB free"
+        try:
+            got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={2 * part}", data[2 * part:3 * part]))
+            self.assertEqual((got["ok"], got["offset"]), (False, 2 * part))
+            self.assertIn("other uploads have to finish first", got["wait"])
+            os.remove(other)
+            with self.assertRaises(lite.HostError) as e:
+                self.page.request("POST", f"/api/upload/part?{q}&offset={2 * part}", data[2 * part:3 * part])
+            self.assertEqual(e.exception.status, 507)
+        finally:
+            self.host.fs.room_for = room
+        # (what was there went with that: from the start again)
+        for off in (0, part):
+            got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={off}", data[off:off + part]))
+            self.assertEqual((got["ok"], got["offset"]), (True, off + part))
         # the sender goes on from there; meanwhile the host has to catch up once and says so
         heard, real = [], self.host.fs.holding_back
         holds = iter(["upload backlog is 2.0 GiB (limit 2.0 GiB)"])

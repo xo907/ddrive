@@ -3,6 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.31.3 (2026-10-13)
+
+- **An upload no longer stalls on the browser's store for blobs.** A part of a file was handed to
+  the browser as a Blob. Those are kept in a store of the browser's own, and when that is full
+  (little room on the device's disk, a private window, much else held in it) every part failed with
+  `ERR_BLOB_OUT_OF_MEMORY`, was sent again, and failed again: "The connection dropped. Trying
+  again…" on every file, without end, with nothing wrong with the connection. A part is now plain
+  bytes in the page's memory (8 MiB per file being sent), which that store has no say in.
+- **A big file waits for the room other uploads are using, instead of being given up.** When the
+  computer that runs the drive had no room for the rest of a file, it deleted what had arrived of it
+  and answered "no room" (507). With several files being sent at once that was often only so for
+  the moment, the others holding the room until they are on Discord. Now, while parts of other files
+  are arriving, such a file is told to wait and keeps what it has ("Waiting for the server: other
+  uploads have to finish first"). Only when nothing else is arriving and there still is no room is
+  it told that there is none.
+
 ## 2.31.2 (2026-10-13)
 
 - **Uploads from a browser no longer give their parts up over nothing.** Since 2.29.0 a part that is
