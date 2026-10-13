@@ -863,6 +863,27 @@ dialog .picker-path { margin-bottom: 10px; }
 .thumb .play { position: absolute; left: 8px; bottom: 8px; display: grid; place-items: center; width: 26px; height: 26px;
                border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; }
 .thumb .play svg { width: 13px; height: 13px; fill: currentColor; stroke: none; }
+/* A picture or video that has no thumbnail yet (app.js, thumbBox). Waiting its turn: a light passes over
+   the square and a short arc turns. Being made: the ring fills as far as it is (--p, 0 to 100). A
+   thumbnail that only has to load: the light alone. Quiet on purpose: a wall of these mustn't flicker. */
+.thumb.pending::after, .thumb.working::after, .thumb.loading::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 35%, rgba(128, 128, 128, .11) 50%, transparent 65%) 0 0 / 250% 100%;
+  animation: thumb-light 1.8s ease-in-out infinite; }
+.thumb.working::after { animation-duration: 1.2s; }
+.thumb.pending > .ico, .thumb.working > .ico { opacity: 0; }
+.thumb > svg.thumb-ring { position: absolute; width: 26px; height: 26px; max-width: 40%; max-height: 40%; fill: none; stroke-width: 2.25;
+                          transform: rotate(-90deg); animation: fade .25s ease; }
+.thumb-ring .t { stroke: currentColor; opacity: .22; }
+.thumb-ring .a { stroke: var(--ink); opacity: .7; stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: calc(100 - var(--p, 0));
+                 transition: stroke-dashoffset .28s ease; }
+.thumb.pending > svg.thumb-ring { animation: thumb-turn 1.6s linear infinite; }
+.thumb.pending .thumb-ring .a { stroke-dasharray: 16 84; stroke-dashoffset: 0; opacity: .4; transition: none; }
+@keyframes thumb-light { from { background-position: 100% 0; } to { background-position: -50% 0; } }
+@keyframes thumb-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .thumb.pending::after, .thumb.working::after, .thumb.loading::after, .thumb.pending > svg.thumb-ring { animation: none; }
+}
 .bar .actions .icon-btn { height: 32px; }
 .list.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; border-top: 0; }
 .list.grid .row.head { display: none; }

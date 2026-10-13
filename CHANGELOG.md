@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.24.0 (2026-10-13)
+
+- **A picture or video without a thumbnail shows that one is coming.** Until its thumbnail was made, a
+  tile in the gallery or the grid looked like a plain file with nothing going on. Now:
+  - **Waiting its turn** (two are made at a time): a light passes over the tile and a small arc turns.
+  - **Being made**: the arc becomes a ring that fills as far as it really is. For a picture that is
+    how much of it has arrived; for a video, the steps (finding the frame, reading it, shrinking it).
+  - **A thumbnail that is there and only has to load**: the light alone, until the picture fades in.
+- Small and grey on purpose, so that a wall of new pictures doesn't flicker; with "reduce motion" set
+  on the device nothing moves and the ring still fills.
+
 ## 2.23.2 (2026-10-13)
 
 - **Uploading from the dashboard works again.** The Upload button, "Upload a folder…", dropping

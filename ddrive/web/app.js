@@ -2620,20 +2620,45 @@ function shrink(el, w, ht) {
                                           "image/webp", 0.78));
 }
 
-async function makeThumb(url, k) {
+/** `heard(0..1)` is told how far it is, for the ring on the tile (thumbBox): a picture by how much of it
+ *  has arrived, a video by the steps (only the part with the frame is fetched, so there is no amount). */
+async function makeThumb(url, k, heard = () => {}, bytes = 0) {
   if (k === "image") {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    return shrink(img, img.naturalWidth, img.naturalHeight);
+    let src = url, mine = null;
+    if (!url.startsWith("blob:")) {
+      try {
+        const r = await fetch(url, { credentials: "same-origin" });
+        if (!r.ok || !r.body) throw new Error("not readable piece by piece");
+        const total = Number(r.headers.get("Content-Length")) || bytes;
+        const reader = r.body.getReader(), parts = [];
+        for (let got = 0; ;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          parts.push(value);
+          got += value.length;
+          if (total) heard(Math.min(0.8, got / total * 0.8));
+        }
+        src = mine = URL.createObjectURL(new Blob(parts, { type: r.headers.get("Content-Type") || "" }));
+      } catch { src = url; }                    // (then the browser fetches it itself, as before: no amount to show)
+    }
+    try {
+      const img = new Image();
+      img.src = src;
+      await img.decode();
+      heard(0.9);
+      return await shrink(img, img.naturalWidth, img.naturalHeight);
+    } finally { if (mine) URL.revokeObjectURL(mine); }
   }
   const v = document.createElement("video");
   v.muted = true; v.playsInline = true; v.preload = "metadata";
   try {
+    heard(0.15);
     v.src = url;
     await once(v, "loadedmetadata");
+    heard(0.5);
     v.currentTime = Math.min(3, (v.duration || 0) * 0.1);
     await once(v, "seeked");
+    heard(0.85);
     if (!v.videoWidth) throw new Error("no picture");
     return await shrink(v, v.videoWidth, v.videoHeight);
   } finally { v.removeAttribute("src"); v.load(); }
@@ -2644,13 +2669,15 @@ async function storeThumb(path, blob) {
                                            body: blob || new Blob([]) }).catch(() => null);
 }
 
-function wantThumb(it, cb, first, batch) {
+/** `heard(0..1)`: told how far the thumbnail is while it is being made (not while it waits its turn). */
+function wantThumb(it, cb, first, batch, heard) {
   if (thumbMade.has(it.path)) { if (cb) cb(thumbMade.get(it.path)); return; }
   let job = thumbJobs.get(it.path);
-  if (!job) { job = { it, cbs: [] }; thumbJobs.set(it.path, job); }
+  if (!job) { job = { it, cbs: [], heard: [] }; thumbJobs.set(it.path, job); }
   if (first) job.first = true;
   if (batch) job.batch = true;
   if (cb) job.cbs.push(cb);
+  if (heard) job.heard.push(heard);
   pumpThumbs();
 }
 
@@ -2663,7 +2690,10 @@ function pumpThumbs() {
     thumbActive++;
     (async () => {
       let blob = null;
-      try { blob = await makeThumb(fileUrl(job.it.path), kind(job.it.name)); } catch { blob = null; }
+      const heard = (p) => { for (const f of job.heard) f(p); };
+      heard(0.04);                             // (its turn has come)
+      try { blob = await makeThumb(fileUrl(job.it.path), kind(job.it.name), heard, job.it.size); } catch { blob = null; }
+      if (blob) heard(0.95);
       await storeThumb(job.it.path, blob);
       const url = blob ? URL.createObjectURL(blob) : null;
       thumbMade.set(job.it.path, url);
@@ -2681,21 +2711,38 @@ const thumbSeen = new IntersectionObserver((entries) => {
   for (const e of entries) if (e.isIntersecting) { thumbSeen.unobserve(e.target); e.target.loadThumb(); }
 }, { root: main, rootMargin: "400px" });
 
-/** A square showing the file's thumbnail (made on first sight), or its icon. */
+const THUMB_RING = '<circle class="t" cx="16" cy="16" r="12" pathLength="100"/><circle class="a" cx="16" cy="16" r="12" pathLength="100"/>';
+
+/** A square showing the file's thumbnail (made on first sight), or its icon. While a picture or video
+ *  has none yet, the square says so instead of looking like a plain file: a light passes over it and a
+ *  small ring turns while it waits its turn ("pending"); once it is being made the ring fills as far as
+ *  it really is ("working": how much of a picture has arrived, the steps of a video); a thumbnail that
+ *  is there and only has to load gets the light alone ("loading"). */
 function thumbBox(it) {
   const k = it.dir ? "folder" : kind(it.name);
   const box = h("span", { class: "thumb" }, icon(k === "pdf" ? "text" : k, it.dir ? "folder" : ""));
   if (!isMedia(it) || it.thumb === -1) return box;
   box.loadThumb = () => {
+    const settle = () => { box.classList.remove("pending", "working", "loading"); const ring = box.querySelector(".thumb-ring"); if (ring) ring.remove(); };
     const show = (url) => {
-      if (!url) return;
+      if (!url) return settle();               // (none can be made of it: the icon it is)
       const img = h("img", { alt: "", draggable: "false" });
-      img.onload = () => { box.replaceChildren(...[img, k === "video" && h("span", { class: "play" }, icon("play"))].filter(Boolean)); box.classList.add("has"); };
+      img.onload = () => { settle(); box.replaceChildren(...[img, k === "video" && h("span", { class: "play" }, icon("play"))].filter(Boolean)); box.classList.add("has"); };
+      img.onerror = settle;
       img.src = url;
     };
+    const progress = (p) => {
+      box.classList.remove("pending");
+      box.classList.add("working");
+      box.style.setProperty("--p", String(Math.round(Math.max(0, Math.min(1, p)) * 100)));
+    };
     if (thumbMade.get(it.path)) show(thumbMade.get(it.path));
-    else if (it.thumb === 1) show(thumbUrl(it));
-    else wantThumb(it, show, true);
+    else if (it.thumb === 1) { box.classList.add("loading"); show(thumbUrl(it)); }
+    else {
+      box.classList.add("pending");
+      box.append(h("svg", { viewBox: "0 0 32 32", class: "thumb-ring", "aria-hidden": "true", html: THUMB_RING }));
+      wantThumb(it, show, true, false, progress);
+    }
   };
   thumbSeen.observe(box);
   return box;
