@@ -2012,11 +2012,17 @@ function renderResources(quiet) {
                 ? `${plural(hs.count, "file")} that ${hs.count === 1 ? "was" : "were"} being uploaded and didn't finish ${hs.count === 1 ? "holds" : "hold"} ${size(hs.bytes)} on this disk, the accounts' included. `
                   + (hs.idle_count ? `Nothing has arrived for ${hs.idle_count === hs.count ? (hs.count === 1 ? "it" : "any of them") : plural(hs.idle_count, "of them", "of them")} in an hour (${size(hs.idle_bytes)}): those are removed. `
                                      + "An upload that is only waiting for room and is among them starts again from its beginning."
-                                   : "All of them had something arrive in the last hour, so they are still being sent and are left alone.")
-                : "No upload was left half-sent.", "Remove", { what: "partials" },
-              (x) => `${plural(x.count, "half-sent file")} removed: ${size(x.freed)} freed`, !hs.idle_count,
-              { title: `Remove ${plural(hs.idle_count || 0, "half-sent file")}?`, ok: "Remove", danger: true,
-                text: `Frees ${size(hs.idle_bytes || 0)}. They are what arrived of uploads that stopped more than an hour ago. No file that is on the drive is touched.` }),
+                                   : "All of them had something arrive in the last hour, so they may still be on their way. "
+                                     + (hs.quiet_count ? `Nothing arrived for ${hs.quiet_count === hs.count ? "them" : plural(hs.quiet_count, "of them", "of them")} in the last minute, though (${size(hs.quiet_bytes)}): `
+                                                         + "if no upload of yours is running or waiting, they are left over and can go."
+                                                       : "Something arrived for each of them in the last minute: they are being sent right now and are left alone."))
+                : "No upload was left half-sent.", hs.idle_count || !hs.quiet_count ? "Remove" : "Remove anyway", hs.idle_count ? { what: "partials" } : { what: "partials", recent: true },
+              (x) => `${plural(x.count, "half-sent file")} removed: ${size(x.freed)} freed`, !hs.idle_count && !hs.quiet_count,
+              hs.idle_count ? { title: `Remove ${plural(hs.idle_count || 0, "half-sent file")}?`, ok: "Remove", danger: true,
+                                text: `Frees ${size(hs.idle_bytes || 0)}. They are what arrived of uploads that stopped more than an hour ago. No file that is on the drive is touched.` }
+                            : { title: `Remove ${plural(hs.quiet_count || 0, "half-sent file")} from the last hour?`, ok: "Remove anyway", danger: true,
+                                text: `Frees ${size(hs.quiet_bytes || 0)}. Something arrived for them within the hour, but not in the last minute. An upload that is waiting (for room, or for its connection) and is among them `
+                                  + "starts again from its beginning; one whose page was closed or crashed can't be taken up again afterwards. No file that is on the drive is touched." }),
       tidyRow("Stop downloads from links", running ? `${plural(running, "download")} from a web address ${running === 1 ? "is" : "are"} running. What they fetched so far is removed.`
                 : "No download from a web address is running.", "Stop all", { what: "fetches" }, (x) => `${plural(x.count, "download")} stopped`, !running),
       tidyRow("Cancel waiting uploads", r.waiting ? `${plural(r.waiting, "file")} (${size(sz.staging || 0)}) ${r.waiting === 1 ? "is" : "are"} waiting to go to Discord or stuck. Uploads being sent this moment are left alone.`

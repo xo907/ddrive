@@ -1240,7 +1240,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _post_api_resources_clean(self):
         """The buttons on the Resources page."""
-        what = self._body_json().get("what")
+        body = self._body_json()
+        what = body.get("what")
         d = self.drive
         if what == "cache":
             freed = resources.clear_cache(d)
@@ -1254,7 +1255,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 self.app.fetches.cancel(i["id"])
             return self._json({"ok": True, "count": len(running)})
         if what == "partials":
-            count, freed = resources.clear_half_sent(d)
+            count, freed = resources.clear_half_sent(d, recent=bool(body.get("recent")))
             log.info("Web dashboard: %d half-sent file(s) that nobody came back for were removed (%d bytes)", count, freed)
             return self._json({"ok": True, "count": count, "freed": freed})
         if what == "uploads":

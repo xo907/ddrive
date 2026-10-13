@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.35.1 (2026-10-13)
+
+- **Half-sent files from the last hour can be removed too.** "Remove half-sent files" on the
+  Resources page left alone every file that something had arrived for within the hour, which is also
+  what an upload that failed or crashed twenty minutes ago looks like. When that is all there is, the
+  button now reads "Remove anyway" and, after asking, removes the ones nothing arrived for in the
+  last minute. Only a file a part came in for within that minute, which is being sent right now, is
+  still left alone.
+
 ## 2.35.0 (2026-10-13)
 
 - **Resources: "Remove half-sent files".** What arrived of an upload that never finished (it failed,

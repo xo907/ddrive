@@ -210,10 +210,17 @@ class WebTest(helpers.DriveTest):
                 if old:
                     os.utime(os.path.join(folder, name + ext), (long_ago, long_ago))
         hs = json.loads(self.req("GET", "/api/status?res=1")[2])["resources"]["half_sent"]
-        self.assertEqual(hs, {"count": 3, "bytes": 12900, "idle_count": 2, "idle_bytes": 12000})
+        self.assertEqual(hs, {"count": 3, "bytes": 12900, "idle_count": 2, "idle_bytes": 12000, "quiet_count": 2, "quiet_bytes": 12000})
         self.assertEqual(post("partials"), {"ok": True, "count": 2, "freed": 12000})
         self.assertEqual((sorted(os.listdir(mine)), os.listdir(theirs)), (["c" * 32 + ".json", "c" * 32 + ".part"], []))
         self.assertEqual(post("partials")["count"], 0)
+        # one that got something within the hour only goes when that is asked for, and not while it is being sent this minute
+        clean = lambda: json.loads(self.req("POST", "/api/resources/clean", {"what": "partials", "recent": True})[2])["count"]
+        self.assertEqual(clean(), 0)
+        a_while = __import__("time").time() - 600
+        for ext in (".part", ".json"):
+            os.utime(os.path.join(mine, "c" * 32 + ext), (a_while, a_while))
+        self.assertEqual((post("partials")["count"], clean(), os.listdir(mine)), (0, 1, []))
         self.assertEqual(self.req("POST", "/api/resources/clean", {"what": "everything"})[0], 400)
 
     def test_forged_or_old_sessions_fail(self):

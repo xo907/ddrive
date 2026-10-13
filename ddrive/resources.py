@@ -144,6 +144,7 @@ def clear_thumbnails(drive):
 
 
 PARTIAL_IDLE = 3600.0     # a half-sent file nothing has arrived for in this long is taken to be left behind
+PARTIAL_QUIET = 60.0      # ...and one that got something this recently is being sent this moment
 
 
 def _partials(data_dir):
@@ -171,7 +172,7 @@ def _partials(data_dir):
 
 def half_sent(data_dir):
     """What half-sent files hold on this disk: all of them, and the ones that look left behind."""
-    out = {"count": 0, "bytes": 0, "idle_count": 0, "idle_bytes": 0}
+    out = {"count": 0, "bytes": 0, "idle_count": 0, "idle_bytes": 0, "quiet_count": 0, "quiet_bytes": 0}
     for path, size, idle in _partials(data_dir):
         if not path.endswith(".part"):
             continue
@@ -180,16 +181,21 @@ def half_sent(data_dir):
         if idle > PARTIAL_IDLE:
             out["idle_count"] += 1
             out["idle_bytes"] += size
+        if idle > PARTIAL_QUIET:
+            out["quiet_count"] += 1
+            out["quiet_bytes"] += size
     return out
 
 
-def clear_half_sent(drive):
+def clear_half_sent(drive, recent=False):
     """Remove the half-sent files nothing has arrived for in an hour (an upload that was given up, or
     whose page was closed). One that is still being sent to is left alone; one that waits for room and
-    is removed here starts again from its beginning. Returns (files, bytes freed)."""
+    is removed here starts again from its beginning. With `recent`, also the ones that got something
+    within the hour, all but those a part arrived for in the last minute: whoever asks knows that
+    nothing of theirs is on its way. Returns (files, bytes freed)."""
     count = freed = 0
     for path, size, idle in _partials(drive.cfg.resolved_data_dir):
-        if idle <= PARTIAL_IDLE:
+        if idle <= (PARTIAL_QUIET if recent else PARTIAL_IDLE):
             continue
         try:
             os.remove(path)
