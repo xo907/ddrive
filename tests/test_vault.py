@@ -233,6 +233,12 @@ class VaultTest(helpers.DriveTest):
         for name in ("/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/verify.js"):
             self.assertEqual(get(name)[0], 200, name)
         self.device.client.status()
+        # its Queue page: what the host is storing on Discord for it, by the names the host has (sealed things)
+        status, text = get("/api/queue", self.device.client.cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(set(json.loads(text)) & {"uploads", "queue", "queued", "downloads", "offline"},
+                         {"uploads", "queue", "queued", "downloads", "offline"})
+        self.assertEqual(get("/api/activity", self.device.client.cookie)[0], 403)       # (what the computer itself is doing stays the owner's)
         mine = get("/", self.device.client.cookie)[1]                  # the same dashboard as everybody, with what answers it in the browser
         self.assertIn(b"e2e-api.js", mine)
         self.assertLess(mine.index(b"e2e-api.js"), mine.index(b'"/app.js'))       # (the address carries its version: /app.js?v=..)

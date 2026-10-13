@@ -448,7 +448,20 @@ function backgroundMenu() {
 }
 
 function download(url, name) {
-  if (window.E2E && E2E.active && E2E.download(url, name)) return;        // an end-to-end account: opened here, then saved
+  // What is a file or a ZIP of the drive is listed on the Queue page (not what the page made itself, like a saved log).
+  const listed = /^\/api\/(file|zip)\b/.test(url);
+  const t = listed ? track({ dir: "down", name: name || "Download", state: "going", size: 0, done: 0 }) : null;
+  const heard = (p) => {
+    if (!t) return;
+    if (p.total !== undefined) t.size = p.total;
+    if (p.bytes !== undefined) moved(t, p.bytes);
+    if (p.done) { t.state = "done"; t.done = t.size; t.ended = Date.now(); }
+    if (p.error) { t.state = "failed"; t.note = p.error; t.ended = Date.now(); }
+    queueTouched();
+  };
+  if (window.E2E && E2E.active && E2E.download(url, name, heard)) return;        // an end-to-end account: opened here, then saved
+  // The browser saves it itself from here on, and tells no page how far it is.
+  if (t) { t.state = "browser"; t.ended = Date.now(); queueTouched(); }
   const a = h("a", { href: url, download: name, style: "display:none" });
   document.body.append(a);
   a.click();
@@ -543,6 +556,8 @@ async function refreshStatus() {
   showDiscordUploads(status.uploads, status.queued);
   showFetches(status.fetches);
   showMove(status.move);
+  queueCount();
+  if (route.name === "queue" && queueDraw) queueDraw();
   if (note && route.name === "notes") noteUploadState();
   const lk = $("#locks");
   lk.hidden = !(status.locks && status.locks.count);
@@ -623,6 +638,7 @@ function render() {
   for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("on", a.dataset.nav === route.name);
   $("#apps").classList.toggle("on", inMenu(TOOL_PAGES));
   $("#account").classList.toggle("on", route.name === "settings" || inMenu(DRIVE_PAGES));
+  document.body.classList.toggle("on-queue", route.name === "queue");      // (the cards in the corner say what that page says: app.css)
   closeSheet();
   leaveNotes();
   leaveMessages();
@@ -637,6 +653,7 @@ function render() {
                   settings: isAccount() ? renderAccount : renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
                   history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources,
+                  queue: renderQueue,
                   verify: async () => { await needs("/verify.js"); if (route.name === "verify") window.renderVerify(); } };
   const loaded = () => { if (mine === nav) main.classList.remove("loading"); };
   viewNav = mine;
@@ -1320,8 +1337,13 @@ function partsXhr() {
     } };
   return x;
 }
-function uploadFile(file, dir) {
+function uploadFile(file, dir, t) {
   return new Promise((resolve) => {
+    t = t || track({ dir: "up", name: file.name, path: join(dir, file.name), size: file.size, done: 0 });
+    t.state = "going";
+    t.started = Date.now();
+    queueTouched();
+    const over = (ok, why) => { t.state = ok ? "done" : "failed"; t.note = ok ? "" : why || "Not uploaded"; t.ended = Date.now(); if (ok) t.done = t.size; queueTouched(); };
     const bar = h("i", { style: "width:0%" });
     const pct = h("span", {}, "0%");
     const sub = h("div", { class: "sub" }, "Sending to the drive…");
@@ -1334,9 +1356,12 @@ function uploadFile(file, dir) {
     const xhr = window.E2E && E2E.active ? E2E.xhr() : partsXhr();
     xhr.open("POST", "/api/upload" + q({ path: join(dir, file.name) }));
     xhr.setRequestHeader("X-DD", "1");
-    xhr.upload.onnote = (text) => { if (text) { pct.textContent = "Waiting"; sub.textContent = text; } };
+    xhr.upload.onnote = (text) => { t.note = text || ""; queueTouched(); if (text) { pct.textContent = "Waiting"; sub.textContent = text; } };
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
+      t.note = "";
+      moved(t, Math.min(t.size, e.loaded));
+      queueTouched();
       const p = Math.round((e.loaded / e.total) * 100);
       const bps = e.loaded / Math.max(0.3, (Date.now() - started) / 1000);
       bar.style.width = p + "%";
@@ -1349,7 +1374,9 @@ function uploadFile(file, dir) {
       const ok = xhr.status >= 200 && xhr.status < 300;
       pct.textContent = ok ? "Done" : "Failed";
       sub.textContent = ok ? "On the drive · uploading to Discord next" : "Not uploaded";
-      if (!ok) { try { toast(JSON.parse(xhr.responseText).error); } catch { toast("Upload failed"); } }
+      let why = "Upload failed";
+      if (!ok) { try { why = JSON.parse(xhr.responseText).error || why; } catch { /* no reason came with it */ } toast(why); }
+      over(ok, why);
       setTimeout(() => item.remove(), ok ? 1500 : 6000);
       const up = { name: file.name, path: join(dir, file.name), dir: false, size: file.size, mtime: (file.lastModified || Date.now()) / 1000 };
       if (ok && isMedia(up) && file.size < 2 ** 31) {
@@ -1358,7 +1385,7 @@ function uploadFile(file, dir) {
       }
       resolve(ok);
     };
-    xhr.onerror = () => { pct.textContent = "Failed"; sub.textContent = "Not uploaded: the drive could not be reached"; setTimeout(() => item.remove(), 6000); resolve(false); };
+    xhr.onerror = () => { over(false, "The drive could not be reached"); pct.textContent = "Failed"; sub.textContent = "Not uploaded: the drive could not be reached"; setTimeout(() => item.remove(), 6000); resolve(false); };
     xhr.send(file);
   });
 }
@@ -1379,13 +1406,15 @@ async function uploadAll(entries, dir) {
       made.add(cur);
       await api("/api/mkdir", { path: cur }).catch(() => null);   // already exists: fine
     }
-    jobs.push([file, cur]);
+    // (on the Queue page from now on: waiting for its turn, where it can still be taken out)
+    jobs.push([file, cur, track({ dir: "up", name: file.name, path: join(cur, file.name), size: file.size, done: 0, state: "waiting" })]);
   }
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(UPLOADS_AT_ONCE, jobs.length) }, async () => {
     while (next < jobs.length) {
-      const [file, into] = jobs[next++];
-      if (await uploadFile(file, into)) n++; else failed++;
+      const [file, into, t] = jobs[next++];
+      if (t.state !== "waiting") continue;       // taken out of the queue
+      if (await uploadFile(file, into, t)) n++; else failed++;
     }
   }));
   if (n) toast(`${plural(n, "file")} added.` + (status && status.e2e ? "" : ` ${n === 1 ? "It uploads" : "They upload"} to Discord in the background.`)
@@ -1503,7 +1532,7 @@ function showDiscordUploads(list, queued) {
                                 onclick: (e) => { e.stopPropagation(); setMini(true); } }, icon("minus"));
     const away = h("button", { class: "tray-x", type: "button", title: "Close until these uploads are done", "aria-label": "Close the upload progress",
                                onclick: (e) => { e.stopPropagation(); discordHidden = true; c.el.remove(); discordCard = null; } }, icon("close"));
-    const open = () => discordMini ? setMini(false) : go("#/log");
+    const open = () => discordMini ? setMini(false) : go("#/queue");
     c.el = h("div", { class: "item discord" + (discordMini ? " mini" : ""), role: "button", tabindex: "0",
                       title: discordMini ? "Show the upload progress" : "Show what is uploading",
                       onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
@@ -1525,6 +1554,228 @@ function showDiscordUploads(list, queued) {
   const more = ["To Discord", list.length > 1 && `${list.length} at once`, bps > 0 && speed(bps), queued > 0 && `${Number(queued).toLocaleString()} waiting`].filter(Boolean);
   c.sub.textContent = more.join(" · ");
   c.sub.hidden = !more.length;
+}
+
+// ------------------------------------------------------------------ queue
+// Everything that is on its way, on one page that moves as it goes: what this browser is sending and
+// saving, what is being uploaded to Discord and what waits behind it, what is being fetched back from
+// Discord, files saved from the web and an account that is being moved.
+//
+// It is put together from three places. What this browser itself sends and saves is known here, as it
+// happens (`transfers`: uploadFile and download write it down). What goes on between the drive and
+// Discord the server knows: /api/queue, asked every second while the page is open and not at all
+// otherwise. The rest is in the status, which is asked for anyway.
+// A row is made once and then only changed, so a bar moves instead of being drawn again.
+const transfers = new Map();         // id -> {dir: "up"|"down", name, path, size, done, state, note, speed, ended}
+const QUEUE_KEPT = 200, QUEUE_SHOWN = 300;
+let transferSeq = 0, queueTimer = null, queueDraw = null, queueFrame = 0, queueShow = "all";
+function track(t) {
+  t.id = ++transferSeq;
+  t.state = t.state || "going";
+  transfers.set(t.id, t);
+  let over = 0;                         // (of what is finished, the last few hundred are kept)
+  for (const x of transfers.values()) if (x.ended) over++;
+  for (const [id, x] of transfers) { if (over <= QUEUE_KEPT) break; if (x.ended) { transfers.delete(id); over--; } }
+  queueTouched();
+  return t;
+}
+/** A transfer got this far: how fast it is going is worked out over the last moments, evened out. */
+function moved(t, bytes) {
+  const now = Date.now();
+  if (t.markAt === undefined) { t.markAt = now; t.markDone = bytes; }
+  else if (now - t.markAt >= 700) {
+    const bps = Math.max(0, bytes - t.markDone) / ((now - t.markAt) / 1000);
+    t.speed = t.speed ? t.speed * 0.6 + bps * 0.4 : bps;
+    t.markAt = now;
+    t.markDone = bytes;
+  }
+  t.done = bytes;
+}
+/** Something in `transfers` changed: the number in the menu and the page, if it is open, follow (once per frame). */
+function queueTouched() {
+  if (queueFrame) return;
+  queueFrame = requestAnimationFrame(() => { queueFrame = 0; queueCount(); if (route.name === "queue" && queueDraw) queueDraw(); });
+}
+/** How much is going or waiting, next to "Queue" in the menu. */
+function queueCount() {
+  const b = $("#queue-n");
+  if (!b) return;
+  let n = 0;
+  for (const t of transfers.values()) if (t.state === "going" || t.state === "waiting") n++;
+  if (status && !SERVER) n += (status.uploads || []).length + (status.queued || 0) + (status.fetches || []).filter((f) => f.state === "running").length;
+  b.textContent = n > 999 ? "999+" : String(n);
+  b.hidden = !n;
+}
+
+/** What the page shows, from what is known now (`a`: the answer of /api/queue, or null before the first). */
+function queueRows(a) {
+  const now = [], wait = [], done = [];
+  const mine = !!(status && status.e2e);
+  for (const t of transfers.values()) {
+    const up = t.dir === "up", r = { key: "t" + t.id, dir: t.dir, name: t.path || t.name };
+    if (t.state === "waiting") {
+      wait.push({ ...r, sub: `Waiting for its turn in this browser · ${size(t.size)}`,
+                  act: ["Take out", () => { t.state = "cancelled"; t.ended = Date.now(); queueTouched(); }] });
+    } else if (t.state === "going") {
+      const pct = t.size ? Math.min(100, (t.done / t.size) * 100) : up ? 100 : null;
+      const what = !up ? (mine ? "Opening in this browser and saving" : "Saving to this device")
+        : pct >= 100 ? "Saving on the drive" : mine ? "Sealing in this browser and sending" : "Sending to the drive";
+      const going = pct != null && pct < 100;
+      now.push({ ...r, pct, busy: pct == null, held: !!t.note,
+                 sub: t.note ? `Waiting · ${t.note}`
+                   : [what, t.size ? `${size(t.done)} of ${size(t.size)}` : "", going && speed(t.speed), going && t.speed ? eta((t.size - t.done) / t.speed) : ""].filter(Boolean).join(" · ") });
+    } else {
+      done.push({ ...r, when: t.ended || 0, bad: t.state === "failed",
+                  tag: t.state === "failed" ? "Failed" : t.state === "cancelled" ? "Taken out" : t.state === "browser" ? "" : up ? "Sent" : "Saved",
+                  sub: t.state === "failed" ? t.note || (up ? "Not uploaded" : "Not downloaded")
+                    : t.state === "cancelled" ? "Taken out of the queue before it was sent"
+                    : t.state === "browser" ? "Handed to your browser, which saves it: its own list of downloads shows how far it is"
+                    : `${up ? "Sent from this browser" : "Saved to this device"} · ${size(t.size)} · ${fmtTime.format(new Date(t.ended))}` });
+    }
+  }
+  let more = 0;
+  if (a) {
+    for (const u of a.uploads) {
+      const spare = u.stage === "spare pieces";
+      now.push({ key: "u" + u.path, dir: "up", name: u.path, pct: spare ? 100 : u.pct,
+                 sub: spare ? "Adding spare pieces on Discord"
+                   : `Uploading to Discord · ${size(u.bytes)} of ${size(u.size)} · piece ${u.done} of ${u.total}${u.speed ? " · " + speed(u.speed) : ""}${u.eta ? " · " + eta(u.eta) : ""}` });
+    }
+    for (const j of a.offline) {
+      now.push({ key: "o" + j.path, dir: "down", name: j.path, pct: j.pct,
+                 sub: `Downloading from Discord to keep offline · ${size(j.bytes)} of ${size(j.total)}${j.speed ? " · " + speed(j.speed) : ""}${j.eta ? " · " + eta(j.eta) : ""}` });
+    }
+    for (const d of a.downloads) {
+      now.push({ key: "d" + d.path, dir: "down", name: d.path, pct: null, busy: true,
+                 sub: `Fetching ${plural(d.pieces, "piece")} (${size(d.bytes)}) from Discord to be read` });
+    }
+    for (const w of a.queue) {
+      wait.push({ key: "w" + w.path, dir: "up", name: w.path,
+                  sub: `Waiting to upload to Discord · ${size(w.size)}${w.due > a.time ? " · starts in " + Math.ceil(w.due - a.time) + " s" : ""}` });
+    }
+    if (a.records && a.records.count) {            // (an end-to-end account: e2e-api.js)
+      wait.push({ key: "records", dir: "up", ico: "text", name: `${plural(a.records.count, "sealed record")} of your account`,
+                  sub: `Waiting to upload to Discord · ${size(a.records.size)} · changes to your list of files and other small things, sealed like the files` });
+    }
+    more = Math.max(0, (a.queued || 0) - a.queue.length);
+  }
+  for (const f of (status && status.fetches) || []) {
+    const r = { key: "f" + f.id, dir: "down", name: f.name };
+    if (f.state === "running") {
+      now.push({ ...r, pct: f.total ? Math.min(100, (f.bytes / f.total) * 100) : null, busy: !f.total,
+                 sub: `From the web into ${f.folder || "the drive"} · ${size(f.bytes)}${f.total ? " of " + size(f.total) : ""}`,
+                 act: ["Cancel", () => api("/api/fetch/cancel", { id: f.id }).catch((e) => toast(e.message))] });
+    } else {
+      done.push({ ...r, when: 0, bad: f.state === "error", tag: f.state === "error" ? "Failed" : "Done",
+                  sub: f.state === "error" ? f.error || "Could not be fetched" : `Saved from the web in ${f.folder}` });
+    }
+  }
+  const m = status && status.move;
+  if (m && m.state !== "open") {
+    const copying = m.state === "copying";
+    now.push({ key: "move", dir: m.side === "to" ? "down" : "up", ico: "user", pct: copying ? (m.bytes ? Math.min(100, ((m.done_bytes || 0) / m.bytes) * 100) : null) : 100, busy: copying && !m.bytes,
+               name: m.side === "to" ? (m.from ? `Receiving account ${m.from}` : "Receiving another account") : `Moving into account ${m.to}`, sub: moveText(m) });
+  }
+  // (two sealed things of an end-to-end account can have the same name here: each still gets a row of its own)
+  const seen = new Map();
+  for (const r of [...now, ...wait, ...done]) { const n = seen.get(r.key) || 0; seen.set(r.key, n + 1); if (n) r.key += "#" + n; }
+  done.sort((x, y) => y.when - x.when);
+  return { now, wait, done, more };
+}
+
+function queueRow() {
+  const r = { ico: h("span", { class: "q-ico" }), name: h("span", { class: "act-name" }), pct: h("span", { class: "act-pct" }),
+              act: h("button", { class: "link q-act", type: "button" }), bar: h("i"), sub: h("div", { class: "act-sub" }), was: {} };
+  r.meter = h("div", { class: "meter" }, r.bar);
+  r.el = h("div", { class: "act-row q-row" }, h("div", { class: "act-top" }, r.ico, r.name, r.act, r.pct), r.meter, r.sub);
+  r.act.addEventListener("click", () => r.run && r.run());
+  return r;
+}
+function queueFill(r, d) {
+  const set = (k, v, put) => { if (r.was[k] !== v) { r.was[k] = v; put(v); } };
+  set("ico", d.ico || d.dir, (v) => r.ico.replaceChildren(icon(v === "up" ? "upload" : v === "down" ? "download" : v)));
+  set("name", d.name, (v) => { r.name.textContent = base(v) || v; r.name.title = v; });
+  set("sub", d.sub, (v) => { r.sub.textContent = v; });
+  set("pct", d.tag !== undefined ? d.tag : d.pct == null ? "" : Math.floor(d.pct) + "%", (v) => { r.pct.textContent = v; });
+  set("cls", "act-row q-row" + (d.bad ? " bad" : "") + (d.busy ? " busy" : "") + (d.held ? " held" : ""), (v) => { r.el.className = v; });
+  set("meter", d.pct == null && !d.busy, (v) => { r.meter.hidden = v; });
+  set("bar", d.busy ? "" : (d.pct || 0).toFixed(1) + "%", (v) => { r.bar.style.width = v; });
+  set("act", d.act ? d.act[0] : "", (v) => { r.act.textContent = v; r.act.hidden = !v; });
+  r.run = d.act ? d.act[1] : null;
+}
+
+async function renderQueue() {
+  let data = null, asking = false, unreachable = false;
+  const rows = new Map();
+  const sum = h("div", { class: "act-sum q-sum", role: "status" });
+  const chips = h("div", { class: "seg q-show", role: "radiogroup", "aria-label": "Show" }, [["all", "All"], ["up", "Uploads"], ["down", "Downloads"]]
+    .map(([k, label]) => h("button", { type: "button", role: "radio", "aria-checked": String(k === queueShow),
+                                       onclick: (e) => { queueShow = k; for (const b of chips.children) b.setAttribute("aria-checked", String(b === e.currentTarget)); draw(); } }, label)));
+  const clear = h("button", { class: "btn ghost small", type: "button", onclick: () => { for (const [id, t] of transfers) if (t.ended) transfers.delete(id); draw(); } }, "Clear finished");
+  const parts = [["now", "Going now"], ["wait", "Waiting"], ["done", "Finished"]].map(([k, label]) => {
+    const p = { k, label, head: h("h2", { class: "q-head" }), list: h("div", { class: "activity q-list" }), more: h("div", { class: "act-sub q-more" }) };
+    p.el = h("section", { class: "q-part" }, p.head, p.list, p.more);
+    return p;
+  });
+  const empty = h("div", { class: "empty" }, h("b", {}, "Nothing in the queue"), "What you upload or download shows up here while it is on its way.");
+  page(h("h1", {}, "Queue"),
+       h("p", { class: "lede" }, isAccount() && status.e2e
+         ? "Everything that is on its way, live: what this browser is sealing and sending or opening and saving, and what the server is storing on Discord for you."
+         : "Everything that is on its way, live: what this browser is sending, what is uploading to Discord and what waits behind it, and what is being fetched back."),
+       h("div", { class: "q-bar" }, chips, h("div", { class: "actions" }, clear)),
+       sum, ...parts.map((p) => p.el), empty);
+
+  function draw() {
+    const all = queueRows(data), keep = new Set();
+    const shown = (list) => (queueShow === "all" ? list : list.filter((r) => r.dir === queueShow));
+    let any = false;
+    for (const p of parts) {
+      const list = shown(all[p.k]), cut = list.slice(0, QUEUE_SHOWN);
+      const unnamed = p.k === "wait" && queueShow !== "down" ? all.more : 0;     // (wait for Discord behind the ones the server names)
+      const extra = list.length - cut.length + unnamed;
+      cut.forEach((d, i) => {
+        let r = rows.get(d.key);
+        if (!r) rows.set(d.key, r = queueRow());
+        keep.add(d.key);
+        queueFill(r, d);
+        if (p.list.children[i] !== r.el) p.list.insertBefore(r.el, p.list.children[i] || null);
+      });
+      while (p.list.children.length > cut.length) p.list.lastChild.remove();
+      p.head.textContent = `${p.label} · ${Number(list.length + unnamed).toLocaleString()}`;
+      p.more.textContent = extra ? `and ${Number(extra).toLocaleString()} more` : "";
+      p.more.hidden = !extra;
+      p.el.hidden = !list.length && !extra;
+      any = any || !p.el.hidden;
+    }
+    for (const key of [...rows.keys()]) if (!keep.has(key)) rows.delete(key);
+    empty.hidden = any;
+    clear.hidden = ![...transfers.values()].some((t) => t.ended);
+    // One line for all of it: how much, how fast, how long.
+    let up = data ? data.upload_speed || 0 : 0, down = data ? data.download_speed || 0 : 0;
+    for (const t of transfers.values()) if (t.state === "going" && !t.note && t.speed) { if (t.dir === "up") up += t.speed; else down += t.speed; }
+    const going = all.now.length, waiting = all.wait.length + all.more;
+    const said = [going && `${Number(going).toLocaleString()} going`, waiting && `${Number(waiting).toLocaleString()} waiting`,
+                  up > 0 && `↑ ${speed(up)}`, down > 0 && `↓ ${speed(down)}`,
+                  data && data.upload_eta ? `all on Discord in about ${eta(data.upload_eta).replace(" left", "")}` : ""].filter(Boolean);
+    sum.textContent = (said.length ? said.join(" · ") : "Nothing is uploading or downloading right now.")
+      + (unreachable ? " · The drive can't be reached right now: this is what was last known." : "");
+  }
+  queueDraw = draw;
+  draw();
+
+  async function tick() {
+    if (queueDraw !== draw) return;              // (a later opening of the page has its own)
+    if (route.name !== "queue") { clearInterval(queueTimer); queueTimer = null; queueDraw = null; return; }
+    if (asking || document.hidden) return;
+    asking = true;
+    try { data = await api("/api/queue"); unreachable = false; }
+    catch { unreachable = true; }
+    finally { asking = false; }
+    if (queueDraw === draw) draw();
+  }
+  clearInterval(queueTimer);
+  queueTimer = setInterval(tick, 1000);
+  setTimeout(tick, 0);                         // (not tied to the opening of the page: asked again every second anyway)
 }
 
 // ------------------------------------------------------------------ deleted

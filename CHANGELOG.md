@@ -3,6 +3,30 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.30.0 (2026-10-13)
+
+- **Queue: a page that shows everything on its way, live.** In the menu, with the number of things
+  going or waiting next to it. One list, in three parts that move as it goes:
+  - **Going now**: what this browser is sending (for an end-to-end encrypted account: sealing and
+    sending) or opening and saving, with how far, how fast and how long; what is uploading to Discord,
+    piece by piece, and its spare pieces; what is being fetched back from Discord to be read or kept
+    offline; files being saved from a link; an account that is being moved.
+  - **Waiting**: files this browser hasn't started on (each can still be taken out), and files that
+    wait to go to Discord.
+  - **Finished**: what this browser sent and saved since the page was loaded, and what failed, with
+    the reason. "Clear finished" empties it.
+  "All / Uploads / Downloads" narrows it, and a line on top says how much is going and waiting, the
+  speed up and down, and about when all of it is on Discord. A row is made once and then only changed,
+  so the bars move instead of flickering; the server is asked once a second while the page is open
+  and not at all otherwise.
+- It is there for the owner and for accounts. An end-to-end encrypted account's page asks the server
+  what it is storing for it (`/api/queue`, which names only sealed things) and puts the files' names
+  to them in the browser; the many small sealed records of an account are one line.
+- A download the browser does by itself (the owner's, from the drive) is listed as handed to the
+  browser: no page is told how far such a download is, the browser's own list shows it.
+- The card with the uploads in the corner opens the Queue (it opened the Log, which accounts don't
+  have), and stays away while the Queue is open.
+
 ## 2.29.2 (2026-10-13)
 
 - **The README says what "sealed" means next to "encrypted".** They are the same thing (AES-256-GCM)

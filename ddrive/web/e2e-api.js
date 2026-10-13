@@ -323,6 +323,24 @@
       }
       return json(s);
     },
+    /** The Queue page: what the server is storing on Discord for this account and what waits for it.
+     *  It knows those as sealed things with meaningless names; whose file each is, is known here. */
+    async queue() {
+      const r = await realFetch("/api/queue", cred);
+      if (!r.ok) return r;
+      const s = await r.json(), names = new Map();
+      for (const n of v.nodes.values()) if (n.obj) names.set(n.obj, n.name);
+      const nameOf = (u) => { const n = names.get(String(u.path || "").split("/").pop()); return n && !/^[0-9a-f]{32}$/.test(n) ? n : ""; };     // (not what the page keeps for itself under a number)
+      const named = (u) => ({ ...u, path: "/" + (nameOf(u) || "Sealed records") });
+      for (const k of ["uploads", "downloads", "offline"]) s[k] = (s[k] || []).map(named);
+      // What waits and is no file's (changes to the list of files, thumbnails, notes of the account's
+      // devices) is many small things: said as one line, not one each.
+      const waiting = s.queue || [], other = waiting.filter((u) => !nameOf(u));
+      s.queue = waiting.filter(nameOf).map(named);
+      s.queued = Math.max(0, (s.queued || 0) - other.length);
+      s.records = { count: other.length, size: other.reduce((n, u) => n + (u.size || 0), 0) };
+      return s;
+    },
     async home() {
       const ds = await devices().catch(() => []), jobs = ds.flatMap((d) => d.jobs);
       return { host: "", mount: "", version: (E.status || {}).version || "", stats: stats(), starred: starred().slice(0, 12), recent: recent(8), history: activity().slice(0, 8),
@@ -964,19 +982,22 @@
     for (const [head, nb] of central) { await put(head); await put(nb); }
     await put(le(22, [4, 0x06054b50], [2, 0], [2, 0], [2, central.length], [2, central.length], [4, offset - dirStart], [4, dirStart], [2, 0]));
   }
-  async function downloadZip(paths, name) {
+  async function downloadZip(paths, name, heard) {
     const members = zipMembers(paths), total = members.reduce((s, [, n]) => s + (n.dir ? 0 : n.size), 0);
+    let far = 0;
+    const told = heard ? (b) => heard({ bytes: Math.min(total, far += b.length) }) : () => null;
+    if (heard) heard({ total });
     if (!members.length) throw new Error("There is nothing in there to download");
     if (members.length > 65000 || total > 3900 * 1024 * 1024) throw new Error("That is too much for one ZIP (4 GB or 65,000 files at most). Download it folder by folder.");
     if (window.showSaveFilePicker && total > 64 * 1024 * 1024) {
       let handle;
       try { handle = await window.showSaveFilePicker({ suggestedName: name }); } catch (e) { return false; }
       const out = await handle.createWritable();
-      try { await zipTo(members, (b) => out.write(b)); await out.close(); } catch (e) { await out.abort().catch(() => null); throw e; }
+      try { await zipTo(members, (b) => { told(b); return out.write(b); }); await out.close(); } catch (e) { await out.abort().catch(() => null); throw e; }
     } else {
       if (total > 1500 * 1024 * 1024) throw new Error("This browser can only download a ZIP this big with Chrome or Edge, which write it straight to disk.");
       const parts = [];
-      await zipTo(members, (b) => { parts.push(b); });
+      await zipTo(members, (b) => { told(b); parts.push(b); });
       const blob = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
       const a = document.createElement("a");
       a.href = blob; a.download = name; a.style.display = "none";
@@ -1177,12 +1198,15 @@
     return x;
   };
   /** A download app.js asks for by address: opened here and saved (straight to disk where the browser can). True when it was taken on. */
-  E.download = function (address, name) {
+  E.download = function (address, name, heard) {
+    // `heard` is told how it goes, for the Queue page: {total}, {bytes}, then {done} or {error}.
+    const say = (p) => { if (heard) { try { heard(p); } catch (e) { /* the page's own business */ } } };
     const url = new URL(address, location.href);
     if (url.pathname === "/api/zip") {
       const paths = url.searchParams.get("paths") ? JSON.parse(url.searchParams.get("paths")) : [url.searchParams.get("path") || "/"];
       E.say("Putting the ZIP together…");
-      downloadZip(paths.map(clean), name || "DDrive.zip").then((ok) => { if (ok) E.say(`Downloaded ${name || "DDrive.zip"}`); }, (e) => E.say(e.message || "The download failed"));
+      downloadZip(paths.map(clean), name || "DDrive.zip", say).then((ok) => { say(ok ? { done: true } : { error: "Not saved: no place was chosen for it" }); if (ok) E.say(`Downloaded ${name || "DDrive.zip"}`); },
+                                                                    (e) => { say({ error: e.message || "The download failed" }); E.say(e.message || "The download failed"); });
       return true;
     }
     if (url.pathname === "/api/chat/export") {
@@ -1209,26 +1233,28 @@
     }
     if (url.pathname !== "/api/file") return false;
     (async () => {
-      const n = at(url.searchParams.get("path"), "file"), C = DDV.CHUNK * 8;
       try {
+        const n = at(url.searchParams.get("path"), "file"), C = DDV.CHUNK * 8;
+        say({ total: n.size });
         if (window.showSaveFilePicker && n.size > 64 * 1024 * 1024) {
           let handle;
-          try { handle = await window.showSaveFilePicker({ suggestedName: name || n.name }); } catch (e) { return; }
+          try { handle = await window.showSaveFilePicker({ suggestedName: name || n.name }); } catch (e) { return say({ error: "Not saved: no place was chosen for it" }); }
           const out = await handle.createWritable();
-          try { for (let pos = 0; pos < n.size; pos += C) await out.write(await readRange(n, pos, Math.min(n.size, pos + C) - 1)); await out.close(); }
+          try { for (let pos = 0; pos < n.size; pos += C) { await out.write(await readRange(n, pos, Math.min(n.size, pos + C) - 1)); say({ bytes: Math.min(n.size, pos + C) }); } await out.close(); }
           catch (e) { await out.abort().catch(() => null); throw e; }
         } else {
           if (n.size > 1500 * 1024 * 1024) throw new Error("This browser can only download files this big with Chrome or Edge, which write them straight to disk.");
           const parts = [];
-          for (let pos = 0; pos < n.size; pos += C) parts.push(await readRange(n, pos, Math.min(n.size, pos + C) - 1));
+          for (let pos = 0; pos < n.size; pos += C) { parts.push(await readRange(n, pos, Math.min(n.size, pos + C) - 1)); say({ bytes: Math.min(n.size, pos + C) }); }
           const blob = URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
           const a = document.createElement("a");
           a.href = blob; a.download = name || n.name; a.style.display = "none";
           document.body.append(a); a.click(); a.remove();
           setTimeout(() => URL.revokeObjectURL(blob), 60000);
         }
+        say({ done: true });
         E.say(`Downloaded ${name || n.name}`);
-      } catch (e) { E.say(e.message || "The download failed"); }
+      } catch (e) { say({ error: e.message || "The download failed" }); E.say(e.message || "The download failed"); }
     })();
     return true;
   };

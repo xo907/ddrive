@@ -457,6 +457,18 @@ class WebTest(helpers.DriveTest):
         self.assertGreater(u["speed"], 0)
         self.assertGreater(u["eta"], 0)
         self.assertEqual(json.loads(self.req("GET", "/api/status")[2])["uploads"][0]["path"], "/big.bin")
+        # the Queue page asks for the same, with what waits behind it and nothing about the computer
+        self.write(self.d, "/next.bin", os.urandom(1000))
+        qd = json.loads(self.req("GET", "/api/queue")[2])
+        self.assertEqual(qd["uploads"][0]["path"], "/big.bin")
+        self.assertIn("/next.bin", [w["path"] for w in qd["queue"]])
+        self.assertGreaterEqual(qd["queued"], len(qd["queue"]))
+        self.assertEqual((qd["downloads"], qd["offline"]), ([], []))
+        self.assertNotIn("sync", qd)
+        page = self.req("GET", "/app.js")[2].decode()
+        for needed in ("async function renderQueue(", "queue: renderQueue", "function track("):
+            self.assertIn(needed, page)
+        self.assertIn(b'data-nav="queue"', self.req("GET", "/")[2])
         log = json.loads(self.req("GET", "/api/changelog")[2])
         self.assertIn(log["version"], log["text"])
 

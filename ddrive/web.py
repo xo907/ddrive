@@ -57,7 +57,7 @@ SESSION_DAYS = 30
 MAX_FAILURES = 5          # wrong phrases (or passwords of a lock) from one address before it has to wait
 LOCKOUT = 60.0            # seconds, doubled for every further wrong one (up to an hour)
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
-_BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
+_BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/queue", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
                       "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report", "/api/upload/part",
                       "/api/vault/sync", "/api/vault/sync/poll", "/api/vault/sync/report")
 PART_MAX = 64 * 1024 * 1024   # the largest part of a file sent in parts (/api/upload/part)
@@ -69,7 +69,7 @@ NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave
 # Anything not listed here answers 403 for them, so a new route is the owner's until it is added.
 ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
     contacts contacts/export locks starred recent history home insights bookmarks changelog
-    sync sync/tree sync/browse upload/part""".split())
+    sync sync/tree sync/browse upload/part queue""".split())
 ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
@@ -80,7 +80,7 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("""status account changelog vault vault/log vault/object vault/pending vault/sync vault/shares
+E2E_GET = frozenset("""status account changelog queue vault vault/log vault/object vault/pending vault/sync vault/shares
     vault/move vault/move/peer vault/move/list""".split())
 E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
     vault/move/open vault/move/send vault/move/finish vault/move/cancel
@@ -1408,7 +1408,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                         "speed": speed, "eta": left / speed if speed > 0 else None})
         return out
 
-    def _get_api_activity(self):
+    def _transfers(self):
+        """What is on its way between this computer and Discord this moment, and what waits its turn:
+        uploads with their progress, the files queued behind them, pieces being downloaded to be read
+        and files being downloaded whole to keep offline."""
         d = self.drive
         now = time.time()
         cache = d.cache
@@ -1435,16 +1438,29 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         jobs = [j for j in jobs if not self._names_locked(json.dumps(j))]
         up_speed = sum(u["speed"] for u in uploads)
         queued_bytes = sum(q["size"] for q in queue) + sum(max(0, u["size"] - u["bytes"]) for u in uploads)
-        st = d.index.stats(max_age=2)
-        self._json({
+        return {
             "time": now,
             "uploads": uploads,
             "queue": queue,
+            "queued": len(d.uploader._pending) if d.uploader else 0,     # (all that wait: `queue` names the next 200)
             "upload_speed": up_speed,
             "upload_eta": queued_bytes / up_speed if up_speed else None,
             "downloads": list(downloads.values()),
             "download_speed": dl_speed,
             "offline": jobs,
+        }
+
+    def _get_api_queue(self):
+        """The Queue page asks this every second while it is open. An account gets its own (for an
+        end-to-end encrypted one the names are those of sealed things: its page puts the files' names
+        to them)."""
+        self._json(self._transfers())
+
+    def _get_api_activity(self):
+        d = self.drive
+        st = d.index.stats(max_age=2)
+        self._json({
+            **self._transfers(),
             "sync": {"outbox": st["outbox"], "trash": st["trash"], "unsynced": st["unsynced"],
                      "failures": getattr(d.journal, "_failures", 0),
                      "repairs": d.healer._queue.qsize() if d.healer else 0},

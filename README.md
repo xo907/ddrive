@@ -75,7 +75,7 @@ snapshots can be brought back. A background check finds problems before you do.
 | | |
 |---|---|
 | **Drive** | A drive letter or mount folder that every app can use · streaming and seeking · files on demand · offline pinning · live sync between Windows, Linux and Raspberry Pi |
-| **Dashboard** | Home overview · files with a grid view · **photo and video gallery** with thumbnails and a full-screen viewer · notes · contacts · **bookmarks with link previews** · **Discord message logger and archiver** · starred and recent · find anything with Ctrl+K · installable as an app on your phone |
+| **Dashboard** | Home overview · files with a grid view · **photo and video gallery** with thumbnails and a full-screen viewer · notes · contacts · **bookmarks with link previews** · **Discord message logger and archiver** · starred and recent · a live **queue** of every upload and download with its progress · find anything with Ctrl+K · installable as an app on your phone |
 | **Sharing** | Links with an expiry, a password and view-only mode · direct links that embed in Discord · **file requests**: let others upload into a folder they can't see |
 | **Backup and sync** | Keep folders on your computer backed up, mirrored or two-way synced, live or on a schedule · save a file straight from a web link · WebDAV for other apps |
 | **Safety net** | Self-healing with spare pieces (Reed-Solomon) · versions of every file · undelete · daily snapshots of the whole drive · an activity list of what changed, when, on which device |
@@ -685,7 +685,7 @@ Settings) decides who may make one:
   one that leaks the words. Every service that encrypts in a web page has this limit.
 - **What an account has**: the same dashboard as you. Home, Files (upload, also by dropping; preview;
   rename, move, copy, delete; stars; search; earlier versions), the Gallery with thumbnails, Notes,
-  Bookmarks, Contacts, Messages, Sync, Shared, Activity, Snapshots, Deleted (kept 30 days) and
+  Bookmarks, Contacts, Messages, Sync, Shared, Queue, Activity, Snapshots, Deleted (kept 30 days) and
   Storage, and folders as a ZIP. Messages (the Discord logger and archiver) runs on one of the
   person's own computers, which keeps the Discord token and seals what it saves. A share link carries its key after the `#`, which browsers send nowhere: your
   computer hands the visitor sealed pieces and the visitor's browser opens them. What needs the web (a bookmark's
