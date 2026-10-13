@@ -191,30 +191,48 @@
   const jobOf = (d, id) => { const j = d.raw.find((x) => x.id === id); if (!j) throw new Fail(404, "That folder is no longer synced"); return j; };
 
   // ------------------------------------------------------------ the answers
+  // (The status is asked for every few seconds: the whole list is only counted again when it changed.)
+  let counted = null, countedAt = "";
   const stats = () => {
     index();
-    const files = liveFiles();
-    let versions = 0, vbytes = 0;
+    const now_ = `${v.seq}|${v.since}`;
+    if (counted && countedAt === now_) return counted;
+    let files = 0, bytes = 0, versions = 0, vbytes = 0;
+    for (const n of byPath.values()) if (!n.dir) { files++; bytes += n.size || 0; }
     for (const n of v.nodes.values()) for (const x of n.versions || []) { versions++; vbytes += x.size || 0; }
-    return { files: files.length, dirs: byPath.size - files.length, bytes: files.reduce((s, [, n]) => s + n.size, 0), versions, version_bytes: vbytes,
-             chunks: 0, protected_chunks: 0, unsynced: 0, outbox: 0, trash: 0 };
+    countedAt = now_;
+    return (counted = { files, dirs: byPath.size - files, bytes, versions, version_bytes: vbytes,
+                        chunks: 0, protected_chunks: 0, unsynced: 0, outbox: 0, trash: 0 });
   };
   const starred = () => live().filter(([, n]) => n.star).sort((a, b) => b[1].star - a[1].star).map(([p, n]) => entry(p, n));
   const recent = (limit) => liveFiles().filter(([p]) => !p.startsWith("/Bookmarks/")).sort((a, b) => b[1].mtime - a[1].mtime).slice(0, limit).map(([p, n]) => entry(p, n));
 
+  let statusMark = "", statusText = "", devicesAsked = 0;
   const GET = {
     async status() {
-      const r = await realFetch("/api/status", cred);
-      if (!r.ok) return r;
-      const s = await r.json();
-      const names = new Map();
-      for (const n of v.nodes.values()) if (n.obj) names.set(n.obj, n.name);
+      // Asked every few seconds. The server is told which answer this page has (If-None-Match) and
+      // mostly says "the same" in a few bytes; what is added here is only worked out when it is needed.
+      const r = await realFetch("/api/status", statusMark ? { ...cred, headers: { ...(cred.headers || {}), "If-None-Match": statusMark } } : cred);
+      if (r.status !== 304) {
+        if (!r.ok) return r;
+        statusText = await r.text();
+        statusMark = r.headers.get("ETag") || "";
+      }
+      const s = JSON.parse(statusText);
       s.stats = { ...s.stats, ...stats() };
-      s.uploads = (s.uploads || []).map((u) => ({ ...u, path: "/" + (names.get(String(u.path || "").split("/").pop()) || "a sealed file") }));
+      if ((s.uploads || []).length) {
+        const names = new Map();
+        for (const n of v.nodes.values()) if (n.obj) names.set(n.obj, n.name);
+        s.uploads = s.uploads.map((u) => ({ ...u, path: "/" + (names.get(String(u.path || "").split("/").pop()) || "a sealed file") }));
+      }
       s.e2e = true;
       s.rev = v.seq;                             // (goes up with every change to the list, from any device of the account)
       s.fetches = E.fetches || [];
-      devices().then((ds) => { E.fetches = ds.flatMap((d) => d.fetches); }, () => null);
+      // (what the account's devices are fetching: asked often only while something is being fetched)
+      if (Date.now() - devicesAsked > (s.fetches.some((f) => f.state === "running") ? 2500 : 20000)) {
+        devicesAsked = Date.now();
+        devices().then((ds) => { E.fetches = ds.flatMap((d) => d.fetches); }, () => null);
+      }
       return json(s);
     },
     async home() {
@@ -1029,6 +1047,7 @@
   async function answer(url, init) {
     const name = url.pathname.slice(5).replace(/\/+$/, ""), method = (init.method || "GET").toUpperCase();
     if (PASS.test(name)) return realFetch(url, init);
+    if (method !== "GET") devicesAsked = 0;    // (something was started: what the devices are doing is asked for again at once)
     const fn = (method === "GET" ? GET : POST)[name];
     try {
       let body = {};
@@ -1200,7 +1219,10 @@
     if (!meta) return unlock("");
     const vault = new DDV.Vault(meta);
     stage("list");
-    vault.heard = (x) => stage("list", x.nodes.size ? `${x.nodes.size.toLocaleString()} files and folders so far` : "");
+    // The list as this browser last opened it, if it kept one: then only what changed since is fetched.
+    const had = await vault.restore(s.account);
+    vault.heard = (x) => stage("list", had ? "kept in this browser; getting what changed since" : x.nodes.size ? `${x.nodes.size.toLocaleString()} files and folders so far` : "");
+    if (had) vault.heard(vault);
     try { await vault.sync(); }
     catch (e) {
       if (e instanceof DDV.Gone) { location.reload(); return new Promise(() => {}); }
@@ -1225,6 +1247,13 @@
     setInterval(() => { if (!document.hidden) E.collect().catch(() => null); }, 60000);
     setInterval(() => v.sync().catch(() => null), 15000);          // what another device of this account did shows up by itself
     document.addEventListener("visibilitychange", () => { if (!document.hidden) v.sync().catch(() => null); });
+    // The opened list is kept in this browser for the next visit (vaultcore.js, keep): soon after
+    // starting, now and then while it changes, and when the page is put away.
+    const keep = () => v.keep(s.account);
+    setTimeout(keep, 2500);
+    setInterval(keep, 45000);
+    document.addEventListener("visibilitychange", () => { if (document.hidden) keep(); });
+    window.addEventListener("pagehide", keep);
   })();
 
   window.fetch = async function (input, init) {

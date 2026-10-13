@@ -8,6 +8,7 @@
   const enc = new TextEncoder(), dec = new TextDecoder();
   const INFO_AUTH = enc.encode("ddrive vault v1 auth"), INFO_META = enc.encode("ddrive vault v1 meta");
   const AAD_OP = enc.encode("ddv1 op"), AAD_CHUNK = enc.encode("ddv1 chunk"), AAD_SYNC = enc.encode("ddv1 sync");
+  const AAD_KEPT = enc.encode("ddv1 list kept in this browser");
   const MAGIC = enc.encode("DDV1"), CHUNK_LOG = 20, CHUNK = 1 << CHUNK_LOG, OVERHEAD = 28, HEAD = 5;
   const PART_CHUNKS = 8;                 // sealed pieces go to the server this many at a time
   const SNAPSHOT_EVERY = 400;
@@ -156,9 +157,23 @@
     }
 
     // ---------- the list
-    async sync() {
+    /** Bring the list up to date with the server. One at a time: two of these at once (a file uploaded
+     *  while the page looks for what other devices did) would read the same changes twice. */
+    sync() {
+      const run = () => this._sync();
+      const p = (this._syncing || Promise.resolve()).then(run, run);
+      this._syncing = p.catch(() => null);
+      return p;
+    }
+    async _sync() {
       for (;;) {
         const got = await call(`/api/vault/log?after=${this.seq}`);
+        if (this.seq > (got.seq || 0)) {               // the server has less than this list knows of (it was
+          this.nodes = new Map();                      // brought back from a copy): what was kept here is no
+          this.seq = 0; this.since = 0;                // good, and all of it is read again
+          this.kept = -1;
+          continue;
+        }
         const snap = got.snapshot;
         if (snap && snap.seq > this.seq) {             // behind the last sealed whole list: start from it
           const raw = await this._openAll(this.meta, snap.object, snap.size);
@@ -181,6 +196,40 @@
         if (!got.more) return this;
       }
     }
+    // ---------- the list, kept in this browser between visits
+    // Reading the whole list from the server and opening it takes as long as the account is big, and
+    // was done every time the page was loaded. So the list as it was last opened is kept here
+    // (IndexedDB, next to the key), sealed with the same key that seals it on the server: a key this
+    // browser can use but not read out. The next visit opens that and asks the server only for what
+    // changed since. It is this account's alone (`who`), and goes when the key goes (signing out).
+    /** Start from the list kept in this browser, if there is one that opens. True when there was. */
+    async restore(who) {
+      try {
+        const kept = await store("readonly", (s) => s.get("list:" + who));
+        if (!kept || !kept.sealed || !(kept.seq > 0)) return false;
+        const raw = await unseal(this.meta, new Uint8Array(kept.sealed), AAD_KEPT);
+        this.nodes = new Map(Object.entries(JSON.parse(dec.decode(raw)).nodes));
+        this.seq = kept.seq; this.since = kept.since || 0;
+        this.kept = kept.seq;
+        return true;
+      } catch (e) {                                    // another key, or damaged: read from the server as ever
+        this.nodes = new Map(); this.seq = 0; this.since = 0;
+        return false;
+      }
+    }
+    /** Keep the list as it is now, for the next visit (nothing to do when it is the one that is kept). */
+    async keep(who) {
+      if (this.kept === this.seq || this._keeping) return;
+      this._keeping = true;
+      try {
+        const seq = this.seq, since = this.since;
+        const sealed = await seal(this.meta, enc.encode(JSON.stringify({ nodes: Object.fromEntries(this.nodes) })), AAD_KEPT);
+        await store("readwrite", (s) => s.put({ seq, since, sealed: sealed.buffer, at: Date.now() }, "list:" + who));
+        this.kept = seq;
+      } catch (e) { /* no room, or a private window: the next visit reads it from the server */ }
+      finally { this._keeping = false; }
+    }
+
     _apply(op) {
       if (op.op === "put") {
         const n = { ...op, dir: !!op.dir, size: op.size || 0, mtime: op.mtime || 0 };      // every field, also ones not known here
@@ -246,7 +295,8 @@
       return names;
     }
     taken(parent, name, except) {
-      return [...this.nodes.values()].some((n) => n.parent === parent && n.name === name && n.id !== except && !n.trash);
+      for (const n of this.nodes.values()) if (n.parent === parent && n.name === name && n.id !== except && !n.trash) return true;
+      return false;
     }
     freeName(parent, name) {
       if (!this.taken(parent, name)) return name;

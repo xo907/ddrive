@@ -184,12 +184,73 @@ function enc(path) { return path.split("/").map(encodeURIComponent).join("/"); }
 let nav = new AbortController();
 let viewNav = null;
 const NEVER = new Promise(() => {});
+
+// A list that was shown is kept (in this page's memory only) with what the status said then: the number
+// that goes up when files change (`rev`), the counts, and which locked folders are open. Opening the same
+// folder, the gallery, Home, Starred or Recent again while the status still says the same shows it at
+// once, without asking. Anything this page changes itself throws all of it away (pageFetch), and what
+// changes elsewhere changes the status. So what is shown from here is what the server would answer.
+const PAGE_KEPT = /^\/api\/(list|media|home|starred|recent|search|deleted)(\?|$)/, PAGE_KEEP = 120;
+const pageCache = new Map();         // address -> {said, data}
+const pageSaid = () => {
+  if (!status || !status.stats) return "";
+  const st = status.stats, lk = status.locks || {};
+  return `${status.rev}|${st.files}|${st.dirs}|${st.bytes}|${st.unsynced}|${st.versions}|${st.trash}|${lk.count}|${lk.open}|${status.account || ""}`;
+};
+function pageKeep(path, said, data) {
+  if (!said || said !== pageSaid()) return;                // (it changed while this was being fetched)
+  pageCache.delete(path);
+  pageCache.set(path, { said, data });
+  if (pageCache.size > PAGE_KEEP) pageCache.delete(pageCache.keys().next().value);
+}
+const pageFetch = window.fetch;
+window.fetch = function (input, init) {
+  const method = ((init && init.method) || "GET").toUpperCase();
+  const url = typeof input === "string" ? input : input.url;
+  if (method !== "GET" && !/\/api\/(thumb|vault|chat|logout)\b/.test(url)) {
+    pageCache.clear();
+    return pageFetch(input, init).finally(() => pageCache.clear());
+  }
+  return pageFetch(input, init);
+};
+/** A part of the dashboard that few visits need (the "Don't trust, verify" page, moving the drive into
+ *  an account) is fetched when it is first asked for, not with every page load. */
+const needed = new Map();
+function needs(src) {
+  if (!needed.has(src)) {
+    needed.set(src, new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => { needed.delete(src); s.remove(); reject(new Error("That part of the page could not be loaded. Try again.")); };
+      document.head.append(s);
+    }));
+  }
+  return needed.get(src);
+}
+const moveEverything = () => needs("/moving.js").then(() => window.moveToAccount(), (e) => toast(e.message));
+
+/** Get a list ready before it is asked for (the pointer is on its link): then the click shows it at once. */
+const warming = new Set();
+function warm(path) {
+  const said = pageSaid();
+  if (!said || warming.has(path) || warming.size >= 2 || (pageCache.get(path) || {}).said === said) return;
+  warming.add(path);
+  fetch(path, { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : null)).then((data) => { if (data) pageKeep(path, said, data); }, () => null)
+    .finally(() => warming.delete(path));
+}
+
 async function api(path, body) {
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json", "X-DD": "1" }, body: JSON.stringify(body),
   };
   const mine = body === undefined ? viewNav : null;
   const dropped = () => !!mine && mine.signal.aborted;
+  const said = mine && PAGE_KEPT.test(path) ? pageSaid() : "";
+  if (said) {
+    const kept = pageCache.get(path);
+    if (kept && kept.said === said) return kept.data;
+  }
   let r;
   try { r = await fetch(path, { credentials: "same-origin", ...opts, ...(mine ? { signal: mine.signal } : {}) }); }
   catch (e) { if (dropped()) return NEVER; throw e; }
@@ -198,6 +259,7 @@ async function api(path, body) {
   const data = await r.json().catch(() => ({}));
   if (dropped()) return NEVER;
   if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+  if (said) pageKeep(path, said, data);
   return data;
 }
 const q = (params) => "?" + new URLSearchParams(params).toString();
@@ -421,12 +483,31 @@ function liveCheck() {
   const now = `${status.rev}|${st.files}|${st.dirs}|${st.bytes}|${st.unsynced}`;
   if (liveSeen !== null && now !== liveSeen) liveDue = true;
   liveSeen = now;
-  if (!liveDue || liveBusy || !liveOn() || (route.name !== "files" && route.name !== "gallery")) { if (route.name !== "files" && route.name !== "gallery") liveDue = false; return; }
+  const lists = route.name === "files" || route.name === "gallery";
+  const top = ["home", "starred", "recent"].includes(route.name);      // (drawn again whole, so only while at their top)
+  if (!liveDue || liveBusy || !liveOn() || !(lists || top)) { if (!(lists || top)) liveDue = false; return; }
   if (liveHeld() || Date.now() - liveAt < LIVE_EVERY) return;         // (still due: looked at again with the next status)
   liveDue = false;
   liveAt = Date.now();
+  if (top) { if (main.scrollTop < 40) render(); return; }
   liveBusy = true;
   (route.name === "files" ? renderFiles(true) : renderGallery(true)).catch(() => null).finally(() => { liveBusy = false; });
+}
+
+// The status is asked for every few seconds. The server is told which answer this page has already
+// (If-None-Match) and, when nothing changed, says only that: a few bytes instead of the whole status.
+// What the computer is using (the Resources page's numbers) is different every time, so it is only
+// asked for while that page is open.
+let statusMark = "", statusAsked = "";
+async function askStatus() {
+  const want = route.name === "resources" ? "/api/status?res=1" : "/api/status";
+  const r = await fetch(want, { credentials: "same-origin", headers: statusMark && statusAsked === want && status ? { "If-None-Match": statusMark } : {} });
+  if (r.status === 304 && status) return status;
+  if (r.status === 401) { location.reload(); throw new Error("Signed out"); }
+  if (!r.ok) throw new Error(`Request failed (${r.status})`);
+  statusMark = r.headers.get("ETag") || "";
+  statusAsked = want;
+  return r.json();
 }
 
 let statusSeen = "";                 // the last answer, as text: an unchanged one changes nothing on the page
@@ -437,7 +518,7 @@ async function refreshStatus() {
     first = E2E.active ? null : E2E.firstStatus || null;     // (an end-to-end account's is answered in the page)
     E2E.firstStatus = null;
   }
-  try { status = first || await api("/api/status"); }
+  try { status = first || await askStatus(); }
   catch { status = null; }
   liveCheck();
   const seen = status ? JSON.stringify(status) : "";
@@ -510,6 +591,22 @@ if (SERVER) {
 }
 for (const a of document.querySelectorAll("#nav a")) a.title = a.textContent.trim();
 applyNav(false);
+// The pointer on a page's link (a finger touching it): its list is fetched then, so the click finds it there.
+const WARM = { home: () => "/api/home", files: () => "/api/list" + q({ path: "/" }), gallery: () => "/api/media" + q({ path: "/", offset: 0, limit: 300 }),
+               starred: () => "/api/starred", deleted: () => "/api/deleted" };
+for (const type of ["pointerenter", "touchstart", "focusin"]) {
+  $("#nav").addEventListener(type, (e) => {
+    const a = e.target.closest && e.target.closest("a[data-nav]");
+    if (a && WARM[a.dataset.nav] && a.dataset.nav !== route.name && !SERVER) warm(WARM[a.dataset.nav]());
+  }, { capture: true, passive: true });
+}
+/** The same for a folder in a list: once the pointer has rested on it for a moment. */
+function warmFolder(row, path) {
+  let t = 0;
+  row.addEventListener("pointerenter", () => { t = setTimeout(() => warm("/api/list" + q({ path })), 120); });
+  row.addEventListener("pointerleave", () => clearTimeout(t));
+  row.addEventListener("touchstart", () => warm("/api/list" + q({ path })), { passive: true });
+}
 
 // ------------------------------------------------------------------ routing
 function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
@@ -539,7 +636,7 @@ function render() {
                   settings: isAccount() ? renderAccount : renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
                   history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources,
-                  verify: () => window.renderVerify() };       // (verify.js)
+                  verify: async () => { await needs("/verify.js"); if (route.name === "verify") window.renderVerify(); } };
   const loaded = () => { if (mine === nav) main.classList.remove("loading"); };
   viewNav = mine;
   try { Promise.resolve((views[route.name] || renderFiles)()).then(loaded, loaded); }
@@ -643,7 +740,7 @@ function itemRow(it, opts = {}) {
                               onclick: (e) => { e.preventDefault(); e.stopPropagation(); toggleSel(it.path); } }, icon("check"));
     row.querySelector(".name").prepend(box);
   }
-  if (it.dir) dropTarget(row, it.path);
+  if (it.dir) { dropTarget(row, it.path); warmFolder(row, it.path); }
   return row;
 }
 
@@ -1209,6 +1306,7 @@ function uploadFile(file, dir) {
                                 : "Saving on the drive…";
     };
     xhr.onload = () => {
+      pageCache.clear();                       // (the lists that were kept don't have it)
       const ok = xhr.status >= 200 && xhr.status < 300;
       pct.textContent = ok ? "Done" : "Failed";
       sub.textContent = ok ? "On the drive · uploading to Discord next" : "Not uploaded";
@@ -1228,17 +1326,29 @@ function uploadFile(file, dir) {
 
 /** Upload files into `dir`, one after the other: [{file, rel}], `rel` being the file's path below `dir`
  *  (a folder that was picked or dropped keeps its folders). */
+const UPLOADS_AT_ONCE = 3;
 async function uploadAll(entries, dir) {
   let n = 0, failed = 0;
+  // The folders first (each once, parents before what is in them), then the files, a few at a time:
+  // many small files spend most of their time waiting for the answer, not sending.
+  const made = new Set(), jobs = [];
   for (const { file, rel } of entries) {
-    const folders = rel.split("/").slice(0, -1);
     let cur = dir;
-    for (const f of folders) {
+    for (const f of rel.split("/").slice(0, -1)) {
       cur = join(cur, f);
+      if (made.has(cur)) continue;
+      made.add(cur);
       await api("/api/mkdir", { path: cur }).catch(() => null);   // already exists: fine
     }
-    if (await uploadFile(file, cur)) n++; else failed++;
+    jobs.push([file, cur]);
   }
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(UPLOADS_AT_ONCE, jobs.length) }, async () => {
+    while (next < jobs.length) {
+      const [file, into] = jobs[next++];
+      if (await uploadFile(file, into)) n++; else failed++;
+    }
+  }));
   if (n) toast(`${plural(n, "file")} added.` + (status && status.e2e ? "" : ` ${n === 1 ? "It uploads" : "They upload"} to Discord in the background.`)
                + (failed ? ` ${plural(failed, "file")} could not be uploaded.` : ""));
   if (route.name === "files") render();
@@ -1566,6 +1676,12 @@ function renderResources(quiet) {
                 h("p", { class: "lede" }, "What the drive is using on the computer it runs on. These are that computer's figures, whichever device you are looking from.")];
   if (!status) { if (!quiet) page(...head, h("p", { class: "muted" }, "Connecting to the drive…")); return; }
   const r = status.resources;
+  if (!r && statusAsked !== "/api/status?res=1") {
+    // These figures are only asked for while this page is open (askStatus): they are on their way.
+    if (!quiet) page(...head, h("p", { class: "muted" }, "Asking the drive…"));
+    refreshStatus();
+    return;
+  }
   if (!r) {
     // The page is newer than the program that answers it: the files were updated, the running drive was not restarted.
     return page(...head, h("div", { class: "empty" }, h("b", {}, "The running drive doesn't report this yet"),
@@ -3536,7 +3652,7 @@ async function accountsSection(into) {
     h("div", { class: "settings" },
       !SERVER && row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
           + "copied and sealed in this browser, so the server never gets the key. Nothing here is changed.",
-          h("button", { class: "btn small", onclick: () => window.moveToAccount() }, "Move everything…")),
+          h("button", { class: "btn small", onclick: moveEverything }, "Move everything…")),
       row("Make an account", "For somebody, with storage of its own: end-to-end encrypted, its 24 words made in this browser. Works whoever sign-up is open to.",
           h("button", { class: "btn small", onclick: () => newAccountDialog(redraw) }, "Make an account…")),
       row("Admin accounts", "End-to-end encrypted accounts that may also manage the drive: settings, accounts, other admins, health and the log. They don't open the owner's files and can't change how the owner signs in. Switching one off signs it out at once.",
@@ -3622,7 +3738,7 @@ function retiredDialog() {
       + "that is done here, in your browser, and gives you 24 new words."),
     !can && h("p", { class: "err", style: "margin:0 0 14px" }, "Moving needs an https address (or the computer itself): a browser doesn't encrypt on plain http. Open this dashboard by its https address to move."),
     h("div", { class: "modal-actions" },
-      can && h("button", { class: "btn", type: "button", onclick: () => { m.close(); window.moveToAccount(); } }, "Move everything…"),
+      can && h("button", { class: "btn", type: "button", onclick: () => { m.close(); moveEverything(); } }, "Move everything…"),
       h("button", { class: "btn ghost", type: "button", onclick: () => m.close() }, "Look at my files")));
 }
 function retiredNotice() {

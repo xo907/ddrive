@@ -669,6 +669,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None:
+            # How long this computer worked on the answer, for the browser's developer tools (Network,
+            # Timing): what of a slow page is the drive, and what is the way to it or the browser.
+            self.send_header("Server-Timing", f"drive;dur={(time.perf_counter() - t0) * 1000:.1f}")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         if self.command != "HEAD" and len(body) <= 65536:
@@ -681,8 +686,16 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _json(self, obj, status=200):
+    def _json(self, obj, status=200, fresh=False):
+        """`fresh`: an answer that is asked for over and over and mostly is the same (the status). It
+        carries a mark of what it says (ETag); asked again with that mark (If-None-Match) and still the
+        same, the answer is only "the same" (304), which is a few bytes instead of the whole of it."""
         body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+        mark = None
+        if fresh and status == 200 and self.command == "GET":
+            mark = {"ETag": '"' + hashlib.sha256(body).hexdigest()[:24] + '"'}
+            if self.headers.get("If-None-Match") == mark["ETag"]:
+                return self._send(304, b"", headers=mark)
         # Big answers (a folder of thousands of files, the gallery, search) go compressed: a fifth of
         # the size, which is most of the wait on a phone. Only answers to GET, and never one that holds
         # a secret (BREACH: compression next to something an attacker controls can give a secret away;
@@ -692,8 +705,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
                 and urllib.parse.urlparse(self.path).path not in OWNER_ONLY):
             import gzip
-            return self._send(status, gzip.compress(body, 5, mtime=0), headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
-        self._send(status, body)
+            return self._send(status, gzip.compress(body, 5, mtime=0), headers=dict(mark or {}, **{"Content-Encoding": "gzip", "Vary": "Accept-Encoding"}))
+        self._send(status, body, headers=mark)
 
     def _error(self, status, message):
         self._json({"error": message}, status)
@@ -739,6 +752,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._locks_seen = None                  # (a connection is kept for several requests)
         self._move_body = {}
         self._admin, self._e2e, self._retired = "", False, False
+        self._t0 = time.perf_counter()
         try:
             self._route(method)
         finally:
@@ -1122,15 +1136,16 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "quota": {"bytes": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]},
                 "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
                 "fetches": self._fetch_list(), "public": self.public_base(),
-            })
+            }, fresh=True)
         devices = []
         for dev, info in sorted(d.index.devices().items(), key=lambda kv: -kv[1].get("seen", 0)):
             devices.append({"id": dev, "name": info.get("name") or "", "seen": info.get("seen", 0),
                             "me": dev == d.cfg.device_id})
         if not any(x["me"] for x in devices):
-            devices.insert(0, {"id": d.cfg.device_id, "name": socket.gethostname(), "seen": time.time(), "me": True})
+            # (to the minute: the status is asked for every few seconds and should mostly be "the same")
+            devices.insert(0, {"id": d.cfg.device_id, "name": socket.gethostname(), "seen": int(time.time()) // 60 * 60, "me": True})
         scrub = d.maintenance.scrub_state() if d.maintenance else {}
-        self._json({
+        out = {
             "version": __version__,
             "role": "owner",
             "rev": 0 if self._admin else d.index.rev(),      # goes up when files change: pages that list them look again
@@ -1161,8 +1176,12 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "snapshots": {"interval": d.cfg.snapshot_interval_hours, "keep": d.cfg.snapshot_keep_days},
             "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
             "fetches": [] if self._admin else self._fetch_list(),
-            "resources": resources.snapshot(d),
-        })
+        }
+        # What the computer is using right now is different every time it is asked: it is only given to
+        # the page that shows it (?res=1), so that every other page's status can be "the same as before".
+        if self._query().get("res"):
+            out["resources"] = resources.snapshot(d)
+        self._json(out, fresh=True)
 
     def _lost(self):
         """Parts that can't be repaired; a damaged file also says whether an intact older copy exists ("fix")."""

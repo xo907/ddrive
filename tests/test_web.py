@@ -72,7 +72,19 @@ class WebTest(helpers.DriveTest):
         self.assertIn(b"app.js", body)
         status = json.loads(self.req("GET", "/api/status")[2])
         self.assertEqual((status["user"], status["role"]), ("Dennis", "owner"))
-        r = status["resources"]                                        # what the drive uses, for Health
+        # asked again with the mark it came with, and nothing changed: only "the same"
+        self.assertNotIn("resources", status)
+        st, headers, body = self.req("GET", "/api/status")
+        mark = headers["ETag"]
+        self.assertIn("drive;dur=", headers["Server-Timing"])
+        st, headers, body = self.req("GET", "/api/status", headers={"If-None-Match": mark})
+        self.assertEqual((st, body, headers["ETag"]), (304, b"", mark))
+        self.assertEqual(self.req("POST", "/api/mkdir", {"path": "/Changed"})[0], 200)
+        st, headers, body = self.req("GET", "/api/status", headers={"If-None-Match": mark})
+        self.assertEqual(st, 200)
+        self.assertNotEqual(headers["ETag"], mark)
+        self.assertGreater(json.loads(body)["rev"], status["rev"])
+        r = json.loads(self.req("GET", "/api/status?res=1")[2])["resources"]      # what the drive uses, for the page that shows it
         self.assertGreater(r["memory"]["process"], 1 << 20)
         self.assertGreater(r["memory"]["total"], r["memory"]["available"])
         self.assertGreater(r["disk"]["total"], r["disk"]["free"])
@@ -173,7 +185,7 @@ class WebTest(helpers.DriveTest):
         self.upload(self.d)
         self.write(self.d, "/kept.txt", b"a change that never made it to Discord")
         self.write(self.d, "/new.txt", b"never uploaded")
-        self.assertEqual(json.loads(self.req("GET", "/api/status")[2])["resources"]["waiting"], 2)
+        self.assertEqual(json.loads(self.req("GET", "/api/status?res=1")[2])["resources"]["waiting"], 2)
         r = post("uploads")
         self.assertEqual((r["count"], r["skipped"], r["freed"] > 0), (2, 0, True))
         self.assertIsNone(self.d.index.resolve("/new.txt"))            # never uploaded: gone

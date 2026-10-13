@@ -3,6 +3,37 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.25.0 (2026-10-13)
+
+Faster, most of all for end-to-end encrypted accounts:
+
+- **An encrypted account opens without reading its whole list again.** Every load of the page
+  fetched the account's whole list of files from the server and opened it, which took as long as the
+  account was big. The list as it was last opened is now kept in the browser, sealed with the key
+  the browser already keeps (one it can use but not read out), and the next visit asks the server
+  only for what changed since. It is the account's alone and goes when you sign out. If the server
+  has less than the browser remembers (it was brought back from a copy), all of it is read again.
+- **Pages you have been on come back at once.** A folder, the gallery, Home, Starred, Recent, Deleted
+  and search results are remembered while the page is open, with what the status said then. Going
+  back while nothing has changed shows them without asking the server. Anything you change throws
+  that away, and what changes elsewhere changes the status, so it is what the server would answer.
+- **A page starts loading when the pointer is on its link** (a finger touches it): the menu's pages,
+  and a folder in a list once the pointer rests on it. The click then finds it there.
+- **Several files upload at once**: three at a time instead of one after the other, with a folder's
+  folders made first. Many small files are much quicker.
+- **The status that is asked for every few seconds answers "the same" in a few bytes** when nothing
+  changed, instead of the whole status every time. The figures of the Resources page, which are
+  different every time, are only asked for while that page is open.
+- **Less work in the page for a big encrypted account**: the account is only counted again when it
+  changed (it was on every status), what its devices are fetching is asked for every 20 seconds
+  instead of every 3 unless something is being fetched, and two things reading the list at the same
+  moment no longer read the same changes twice.
+- **Parts few visits need are fetched when asked for**: the "Don't trust, verify" page and moving the
+  drive into an account are no longer loaded with every page.
+- **How long the drive worked on each answer** is in a `Server-Timing` header: the browser's developer
+  tools (Network, a request, Timing) show it, so a slow page can be told apart: the drive, or the way
+  to it.
+
 ## 2.24.1 (2026-10-13)
 
 - **Thumbnails are loaded and made where you are looking.** Every tile that had come near the screen
