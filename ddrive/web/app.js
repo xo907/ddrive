@@ -207,6 +207,7 @@ const pageFetch = window.fetch;
 window.fetch = function (input, init) {
   const method = ((init && init.method) || "GET").toUpperCase();
   const url = typeof input === "string" ? input : input.url;
+  if (method !== "GET" && /\/api\/logout\b/.test(url) && typeof thumbsForget === "function") thumbsForget();
   if (method !== "GET" && !/\/api\/(thumb|vault|chat|logout)\b/.test(url)) {
     pageCache.clear();
     return pageFetch(input, init).finally(() => pageCache.clear());
@@ -1312,10 +1313,10 @@ function uploadFile(file, dir) {
       sub.textContent = ok ? "On the drive · uploading to Discord next" : "Not uploaded";
       if (!ok) { try { toast(JSON.parse(xhr.responseText).error); } catch { toast("Upload failed"); } }
       setTimeout(() => item.remove(), ok ? 1500 : 6000);
-      const up = { name: file.name, path: join(dir, file.name), dir: false };
+      const up = { name: file.name, path: join(dir, file.name), dir: false, size: file.size, mtime: (file.lastModified || Date.now()) / 1000 };
       if (ok && isMedia(up) && file.size < 2 ** 31) {
         const src = URL.createObjectURL(file);
-        makeThumb(src, kind(file.name)).then((b) => b && storeThumb(up.path, b)).catch(() => null).finally(() => URL.revokeObjectURL(src));
+        makeThumb(src, kind(file.name)).then((b) => b && storeThumb(up, b)).catch(() => null).finally(() => URL.revokeObjectURL(src));
       }
       resolve(ok);
     };
@@ -1931,6 +1932,13 @@ const SETTING_ROWS = [
     ["web_public_url", "Address for share links", "Used when you share from this computer itself, e.g. https://drive.example.com. Empty: the first domain name.", "text"],
     ["webdav_enabled", "Other apps (WebDAV)", "File managers, “Map network drive”, rclone and backup apps can open the drive at /dav/, with a name and password you set for them under Sign-in.", "bool"],
     ["web_lan", "On your network", "Phones and computers at home (and a reverse proxy on another machine) can open the dashboard.", "bool"],
+  ]],
+  ["Thumbnails", [
+    ["thumbs_store", "Keep thumbnails", "The small pictures the gallery shows are made by the browser that looks at them. “server”: they are then handed to this computer, which keeps them "
+      + "(encrypted, in its data folder: see Resources for how much) so that every device has them at once; an end-to-end encrypted account's go sealed into the account instead. "
+      + "“browser”: each browser keeps the ones it made for itself, and none take room here; a new browser or device makes them again as pictures are looked at. "
+      + "For everybody on this dashboard. Thumbnails this computer already has stay, and are still used.", ["server", "browser"]],
+    ["thumbs_bulk", "“Create all thumbnails”", "The gallery's button that makes every missing thumbnail in one go. Off: the button is gone for everybody, and thumbnails are only made as pictures are looked at.", "bool"],
   ]],
   ["Discord", [
     ["discord_pace", "Pace", "How fast to talk to Discord. Gentle stays far below Discord's limits so it never has to slow you down; fast uploads quicker but can hit them.", ["gentle", "balanced", "fast"]],
@@ -2780,9 +2788,60 @@ async function makeThumb(url, k, heard = () => {}, bytes = 0) {
   } finally { v.removeAttribute("src"); v.load(); }
 }
 
-async function storeThumb(path, blob) {
-  await fetch("/api/thumb" + q({ path }), { method: "POST", credentials: "same-origin", headers: { "X-DD": "1" },
-                                           body: blob || new Blob([]) }).catch(() => null);
+// Where a thumbnail goes once it is made is the owner's choice (Settings, Thumbnails; `status.thumbs`):
+// to the drive, which keeps it for every device (on the computer that runs it; for an end-to-end
+// encrypted account sealed, in the account), or into the browser that made it, where it takes no room
+// on that computer at all and each browser makes its own. Here: the ones kept in this browser
+// (IndexedDB), by who is signed in and the file's path, good for as long as the file is the same.
+const thumbsHere = () => !!(status && status.thumbs && status.thumbs.store === "browser");
+const thumbWho = () => (status && status.account) || "owner";
+let thumbDbP = null;
+const thumbDb = () => thumbDbP || (thumbDbP = new Promise((resolve, reject) => {
+  const r = indexedDB.open("ddrive-thumbs", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("t");
+  r.onsuccess = () => resolve(r.result);
+  r.onerror = () => reject(r.error);
+}));
+async function thumbTx(mode, fn) {
+  const d = await thumbDb();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction("t", mode), req = fn(tx.objectStore("t"));
+    tx.oncomplete = () => resolve(req && req.result);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+/** The thumbnail of `it` kept in this browser: its address, null (none can be made of it), or undefined (not here). */
+async function thumbKept(it) {
+  try {
+    const rec = await thumbTx("readonly", (s) => s.get(`${thumbWho()}|${it.path}`));
+    if (!rec || rec.size !== it.size || Math.abs((rec.mtime || 0) - (it.mtime || 0)) >= 2) return undefined;
+    return rec.blob ? URL.createObjectURL(rec.blob) : null;
+  } catch { return undefined; }
+}
+let thumbsKept = 0;
+async function thumbKeep(it, blob) {
+  try {
+    await thumbTx("readwrite", (s) => s.put({ size: it.size, mtime: it.mtime, at: Date.now(), blob: blob || null }, `${thumbWho()}|${it.path}`));
+    if (++thumbsKept % 500 === 1) {            // (now and then: no more than this many are kept, the first to be found go)
+      const n = await thumbTx("readonly", (s) => s.count());
+      if (n > 20000) {
+        await thumbTx("readwrite", (s) => { let left = 4000; s.openCursor().onsuccess = (e) => { const c = e.target.result; if (c && left-- > 0) { c.delete(); c.continue(); } }; });
+      }
+    }
+  } catch { /* no room, or a private window: it is made again when it is looked at */ }
+}
+/** Signing out takes them along: they are pictures of what was signed in to. */
+function thumbsForget() {
+  const p = thumbDbP;
+  thumbDbP = null;
+  Promise.resolve(p).then((d) => { if (d) d.close(); }, () => null).then(() => { try { indexedDB.deleteDatabase("ddrive-thumbs"); } catch { /* not there */ } });
+}
+
+/** Put a thumbnail that was made where thumbnails are kept (`it`: the file, with its size and date). */
+async function storeThumb(it, blob) {
+  if (thumbsHere()) { if (it.size !== undefined) await thumbKeep(it, blob); return; }
+  await fetch("/api/thumb" + q({ path: it.path }), { method: "POST", credentials: "same-origin", headers: { "X-DD": "1" },
+                                                    body: blob || new Blob([]) }).catch(() => null);
 }
 
 /** `heard(0..1)`: told how far the thumbnail is while it is being made (not while it waits its turn). */
@@ -2824,10 +2883,10 @@ function pumpThumbs() {
       heard(0.04);                             // (its turn has come)
       try { blob = await makeThumb(fileUrl(job.it.path), kind(job.it.name), heard, job.it.size); } catch { blob = null; }
       if (blob) heard(0.95);
-      await storeThumb(job.it.path, blob);
+      await storeThumb(job.it, blob);
       const url = blob ? URL.createObjectURL(blob) : null;
       thumbMade.set(job.it.path, url);
-      job.it.thumb = blob ? 1 : -1;
+      job.it.thumb = blob ? (thumbsHere() ? job.it.thumb : 1) : -1;      // (1: the drive has it now; kept in this browser, it is found there)
       for (const cb of job.cbs) cb(url);
       if (thumbBatch && job.batch) { thumbBatch.done++; if (!blob) thumbBatch.failed++; thumbBatch.tick(); }
       thumbActive--;
@@ -2847,6 +2906,7 @@ const thumbSeen = new IntersectionObserver((entries) => {
     const box = e.target;
     clearTimeout(box.dwell);
     if (!e.isIntersecting) { box.dropThumb(); continue; }
+    box.left = false;
     if (box.waiting) continue;
     if (box.thumbThere()) box.loadThumb();     // (it exists and only has to be fetched: at once)
     else box.dwell = setTimeout(() => box.loadThumb(), THUMB_DWELL);
@@ -2888,11 +2948,20 @@ function thumbBox(it) {
       box.waiting = true;
       box.classList.add("pending");
       box.append(h("svg", { viewBox: "0 0 32 32", class: "thumb-ring", "aria-hidden": "true", html: THUMB_RING }));
-      wantThumb(it, show, true, false, progress);
+      if (!thumbsHere()) return wantThumb(it, show, true, false, progress);
+      // Thumbnails are kept in this browser: is this one here already? Only if not is it made.
+      box.looking = true;
+      thumbKept(it).then((url) => {
+        box.looking = false;
+        if (url !== undefined) { thumbMade.set(it.path, url); if (url === null) it.thumb = -1; return show(url); }
+        if (box.left) { box.left = false; box.waiting = null; return settle(); }       // (scrolled past meanwhile)
+        wantThumb(it, show, true, false, progress);
+      });
     }
   };
   // Out of sight before its turn came: back to how it was, and it asks again when it is looked at.
   box.dropThumb = () => {
+    if (box.looking) { box.left = true; return; }
     if (!box.waiting || !unwantThumb(it, show, progress)) return;      // (being made already: that is finished)
     box.waiting = null;
     settle();
@@ -2926,7 +2995,9 @@ async function renderGallery(quiet) {
   const more = h("div", { class: "g-more" });
   const info = h("span", { class: "muted g-count" });
   const prog = h("div", { class: "g-progress", hidden: true });
-  const all = h("button", { class: "btn ghost", onclick: () => thumbsForAll(path, prog) }, "Create all thumbnails");
+  // (the owner may have turned this off: thumbnails are then made as pictures are looked at, and only so)
+  const all = status && status.thumbs && status.thumbs.bulk === false ? null
+    : h("button", { class: "btn ghost", onclick: () => thumbsForAll(path, prog) }, "Create all thumbnails");
   const bar = h("div", { class: "bar" },
          path === "/" ? h("h1", { style: "margin:0" }, "Gallery") : crumbs(path, "Gallery", (p) => "#/gallery" + enc(p)),
          info,
@@ -2978,14 +3049,25 @@ async function thumbsForAll(path, prog) {
   for (let offset = 0; ; offset += 1000) {
     const data = await api("/api/media" + q({ path, offset, limit: 1000 })).catch(() => null);
     if (!data) break;
-    for (const it of data.items) if (it.thumb == null && !thumbMade.has(it.path)) { todo.push(it); if (kind(it.name) === "image") bytes += it.size; }
+    for (const it of data.items) {
+      if (it.thumb != null || thumbMade.has(it.path)) continue;
+      if (thumbsHere()) {                        // (kept in this browser already?)
+        const url = await thumbKept(it);
+        if (url !== undefined) { thumbMade.set(it.path, url); continue; }
+      }
+      todo.push(it);
+      if (kind(it.name) === "image") bytes += it.size;
+    }
     if (offset + data.items.length >= data.total || !data.items.length) break;
   }
   prog.hidden = true;
   if (!todo.length) { toast("Every photo and video here already has a thumbnail"); return; }
   const ok = await ask({ title: `Create ${plural(todo.length, "thumbnail")}?`, ok: "Create",
                          text: `Each photo is read once from Discord (${size(bytes)} in total; videos only a small part), so this takes a while. `
-                             + "It runs while this page stays open, and you can keep using the dashboard. Thumbnails are stored encrypted on the computer running the drive." });
+                             + "It runs while this page stays open, and you can keep using the dashboard. "
+                             + (thumbsHere() ? "The thumbnails are kept in this browser: they take no room on the computer that runs the drive, and another browser or device makes its own."
+                                : status && status.e2e ? "The thumbnails are kept sealed in your account, for all your devices."
+                                : "Thumbnails are stored encrypted on the computer running the drive.") });
   if (!ok) return;
   const b = thumbBatch = { todo: todo.length, done: 0, failed: 0, stop: false, el: null,
     show(el) { b.el = el; b.tick(); },

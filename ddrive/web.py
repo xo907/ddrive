@@ -1136,6 +1136,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "quota": {"bytes": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]},
                 "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
                 "fetches": self._fetch_list(), "public": self.public_base(),
+                "thumbs": self._thumbs_rule(),
             }, fresh=True)
         devices = []
         for dev, info in sorted(d.index.devices().items(), key=lambda kv: -kv[1].get("seen", 0)):
@@ -1176,6 +1177,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "snapshots": {"interval": d.cfg.snapshot_interval_hours, "keep": d.cfg.snapshot_keep_days},
             "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
             "fetches": [] if self._admin else self._fetch_list(),
+            "thumbs": self._thumbs_rule(),
         }
         # What the computer is using right now is different every time it is asked: it is only given to
         # the page that shows it (?res=1), so that every other page's status can be "the same as before".
@@ -2718,8 +2720,19 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if self.command != "HEAD":
             self.wfile.write(data)
 
+    def _thumbs_rule(self):
+        """What the owner decided about thumbnails, for every page of this dashboard (Settings):
+        where the ones a browser makes are kept ("server": on this computer, as ever; "browser": in
+        the browser that made them, so that they take no room here), and whether the gallery offers
+        to make them all at once."""
+        cfg = self.server.app.cfg
+        store = str(getattr(cfg, "thumbs_store", "") or "server")
+        return {"store": store if store in ("server", "browser") else "server", "bulk": bool(getattr(cfg, "thumbs_bulk", True))}
+
     def _post_api_thumb(self):
         """Store the thumbnail the browser made (an empty body: none can be made, don't try again)."""
+        if self._thumbs_rule()["store"] != "server":
+            raise ApiError(409, "Thumbnails are kept in the browser here, not on this computer.")
         path, node = self._node(self._query().get("path"), want_dir=False)
         n = int(self.headers.get("Content-Length") or 0)
         if n > 400 * 1024:
@@ -3008,6 +3021,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         "hidden_folders": (list, False, None),
         "lock_timeout_minutes": (float, False, lambda v: 0 <= v <= 100000),
         "webdav_enabled": (bool, False, None),
+        "thumbs_store": (str, False, lambda v: v in ("server", "browser")),
+        "thumbs_bulk": (bool, False, None),
         "signup_mode": (str, False, lambda v: v in MODES),
         "account_quota_bytes": (int, False, lambda v: v >= 0),
         "accounts_max": (int, False, lambda v: v >= 0),

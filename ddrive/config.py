@@ -148,6 +148,8 @@ class Config:
     web_password: str = ""             # ...and this password (a scrypt hash; set with 'webdav-password'). Not for the dashboard.
     web_passkeys: list = field(default_factory=list)  # passkeys that sign the owner in to the dashboard (public keys only)
     webdav_enabled: bool = False       # the drive for other apps at /dav/ (web_user and web_password)
+    thumbs_store: str = "server"       # where the dashboard keeps the thumbnails it makes: server | browser (each visitor's own)
+    thumbs_bulk: bool = True           # the gallery's "Create all thumbnails" (off: they are made as pictures are looked at)
     signup_mode: str = "closed"        # who may make an account on the dashboard: closed | invite | public
     account_quota_bytes: int = 5 * 1024 * MiB  # what one account may store, earlier versions included (0 = no limit)
     accounts_max: int = 100            # no more accounts than this are made (0 = no limit)

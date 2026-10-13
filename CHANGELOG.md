@@ -3,6 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.27.0 (2026-10-13)
+
+- **The owner decides where thumbnails are kept**: Settings → Thumbnails → "Keep thumbnails".
+  - **server** (as it was): a thumbnail a browser makes is handed to the computer that runs the
+    drive, which keeps it encrypted in its data folder, so that every device has it at once. (An
+    end-to-end encrypted account's go sealed into the account instead, not onto that computer's disk.)
+  - **browser**: each browser keeps the thumbnails it made for itself, and none take room on the
+    computer that runs the drive. A new browser or device makes them again as pictures are looked
+    at. They are kept by account, and signing out removes them from that browser.
+  It is for everybody on the dashboard. Thumbnails the computer already has stay and are still used;
+  Resources → "Thumbnails" clears them.
+- **"Create all thumbnails" can be turned off**: Settings → Thumbnails. The gallery's button is then
+  gone for everybody, and thumbnails are only made as pictures are looked at, as before.
+- With thumbnails kept in the browser, "Create all thumbnails" skips the ones that browser has, and
+  says where they go before it starts.
+
 ## 2.26.0 (2026-10-13)
 
 - **Identical files are found in end-to-end encrypted accounts.** There, two copies of a file are each

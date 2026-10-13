@@ -223,6 +223,26 @@ class WebTest(helpers.DriveTest):
         for needed in (b'id="pick"', b'id="pick-dir"', b'id="drop"'):
             self.assertIn(needed, html)
 
+    def test_the_owner_says_where_thumbnails_are_kept(self):
+        self.login()
+        rule = lambda: json.loads(self.req("GET", "/api/status")[2])["thumbs"]
+        self.assertEqual(rule(), {"store": "server", "bulk": True})          # as it always was
+        self.write(self.d, "/pic.png", b"\x89PNG a picture")
+        thumb = "/api/thumb?" + urllib.parse.urlencode({"path": "/pic.png"})
+        self.assertEqual(self.req("POST", thumb, body=b"\x89PNG small")[0], 200)
+        self.assertEqual(self.req("GET", thumb)[2], b"\x89PNG small")
+        # in the browsers: this computer takes no more of them (the ones it has are still given out)
+        self.assertEqual(self.req("POST", "/api/settings", {"thumbs_store": "nowhere"})[0], 400)
+        self.assertEqual(self.req("POST", "/api/settings", {"thumbs_store": "browser", "thumbs_bulk": False})[0], 200)
+        self.assertEqual(rule(), {"store": "browser", "bulk": False})
+        self.write(self.d, "/other.png", b"\x89PNG another picture")
+        other = "/api/thumb?" + urllib.parse.urlencode({"path": "/other.png"})
+        self.assertEqual(self.req("POST", other, body=b"\x89PNG small")[0], 409)
+        self.assertEqual(self.req("GET", other)[0], 404)
+        self.assertEqual(self.req("GET", thumb)[2], b"\x89PNG small")
+        self.assertEqual(self.req("POST", "/api/settings", {"thumbs_store": "server"})[0], 200)
+        self.assertEqual(self.req("POST", other, body=b"\x89PNG small")[0], 200)
+
     def test_the_status_says_when_files_changed(self):
         """Pages that list files look again when `rev` went up, instead of fetching their lists on a timer."""
         self.login()
