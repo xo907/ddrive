@@ -163,6 +163,12 @@ is sent. The computer that runs DDrive only ever gets locked pieces under random
 them on Discord like any others, with its own encryption around them, and repairs them when Discord
 loses one, all without a key that opens them.
 
+**"Sealed" and "encrypted" are the same thing done in two places.** Both are AES-256-GCM. This
+README says *sealed* (or *locked*) for what an account's own device does with the account's keys,
+before anything is sent, and *encrypted* for what the computer that runs DDrive does with the drive's
+key, before anything goes to Discord. Your drive's files are encrypted once. An account's files are
+sealed and then encrypted: two layers, and the computer that runs DDrive can only take off its own.
+
 | | Your drive | An account |
 |---|---|---|
 | Encrypted | on each device that runs DDrive | in the account holder's browser (or in DDrive Lite or the phone app on their own device) |

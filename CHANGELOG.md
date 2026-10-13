@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.29.2 (2026-10-13)
+
+- **The README says what "sealed" means next to "encrypted".** They are the same thing (AES-256-GCM)
+  done in two places: sealed by an account's own device with the account's keys, encrypted by the
+  computer that runs DDrive with the drive's key. An account's files get both. Nothing in the program
+  changes.
+
 ## 2.29.1 (2026-10-13)
 
 - **The README says who can read what.** The overview picture showed only the owner's drive: devices
