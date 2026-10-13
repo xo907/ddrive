@@ -3,6 +3,21 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.36.0 (2026-10-13)
+
+- **Uploads from the dashboard go in the order that fits the server's disk.** Several files chosen
+  at once were started three at a time in the order they were chosen. On a computer with little room
+  (every file lies there whole until it is on Discord, and some of the disk is always kept free:
+  `min_free_disk_bytes`) they filled what there was together, and then all of them waited or failed.
+  Now the page asks the server how much it can take in right now, and of the files that wait starts
+  the biggest one that fits next to the ones being sent, then the biggest that fits next to that,
+  and so on. A file that doesn't fit stays in the queue without holding a place ("Waiting for room on
+  the server · needs 4.5 GB, the server can take 1.2 GB more right now") and goes when what was sent
+  has moved on to Discord and made room. When nothing fits and nothing is on its way, the smallest
+  one goes and waits at the server itself, which lets it through the moment there is room.
+- Where the server keeps nothing free, or doesn't say, files go in the order they were chosen, as
+  before. Still three at a time at most.
+
 ## 2.35.1 (2026-10-13)
 
 - **Half-sent files from the last hour can be removed too.** "Remove half-sent files" on the

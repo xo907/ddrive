@@ -1447,6 +1447,65 @@ async function settleExisting(entries, dir) {
   return entries.filter((e) => !skip.has(e));
 }
 
+// ---------- which file goes next
+// Files wait here for their turn, a few being sent at a time. Which one goes next is decided by the room
+// the computer that runs the drive has: every file lies there whole until it is on Discord, and that
+// computer always keeps some of its disk free (min_free_disk_bytes). So of the files that wait, the
+// biggest one that still fits next to the ones being sent goes next, then the biggest that fits next
+// to that, and so on; one that doesn't fit stays where it is, without holding a place, until what was
+// sent has gone on to Discord and made room. Started all at once and in the order they were chosen,
+// they filled the disk together and none of them got through.
+// (The server says how much it can take: /api/queue, `room`. Where it doesn't, files go in the order
+// they were chosen.)
+const upWaiting = [];                  // {file, into, t, done(ok)}
+const upRoom = { at: 0, bytes: null };
+let upPumping = false, upTimer = 0;
+async function serverRoom() {
+  if (Date.now() - upRoom.at > 4000) {
+    upRoom.at = Date.now();
+    try { const r = (await api("/api/queue")).room; upRoom.bytes = typeof r === "number" ? r : null; } catch { upRoom.bytes = null; }
+  }
+  return upRoom.bytes;
+}
+async function pumpUploads() {
+  if (upPumping) return;
+  upPumping = true;
+  try {
+    for (;;) {
+      for (let i = upWaiting.length - 1; i >= 0; i--) if (upWaiting[i].t.state !== "waiting") upWaiting.splice(i, 1)[0].done(null);      // taken out of the queue
+      if (!upWaiting.length) break;
+      const room = await serverRoom();
+      const going = [...transfers.values()].filter((t) => t.dir === "up" && t.state === "going");
+      const free = going.length < UPLOADS_AT_ONCE;
+      let job = null;
+      if (room == null) {
+        for (const w of upWaiting) w.t.held = "";
+        job = free ? upWaiting.find((w) => w.t.state === "waiting") : null;
+      } else {
+        // what the ones being sent still need is spoken for
+        const left = room - going.reduce((s, t) => s + Math.max(0, t.size - (t.done || 0)), 0);
+        for (const w of upWaiting) {
+          if (w.t.state !== "waiting") continue;
+          const fits = w.t.size <= left;
+          w.t.held = fits ? "" : `needs ${size(w.t.size)}, the server can take ${size(Math.max(0, left))} more right now`;
+          if (fits && (!job || w.t.size > job.t.size)) job = w;
+        }
+        // Nothing fits and nothing is on its way: the smallest one goes and waits at the server itself,
+        // which says why and lets it through the moment there is room.
+        if (!job && !going.length) job = upWaiting.filter((w) => w.t.state === "waiting").sort((a, b) => a.t.size - b.t.size)[0] || null;
+        if (!free) job = null;
+      }
+      queueTouched();
+      if (!job) break;
+      upWaiting.splice(upWaiting.indexOf(job), 1);
+      job.t.held = "";
+      uploadFile(job.file, job.into, job.t).then((ok) => { job.done(ok); upRoom.at = 0; pumpUploads(); });
+    }
+  } finally { upPumping = false; }
+  clearTimeout(upTimer);
+  if (upWaiting.length) upTimer = setTimeout(pumpUploads, 5000);      // (room comes as what was sent goes on to Discord)
+}
+
 async function uploadAll(entries, dir) {
   entries = await settleExisting(entries, dir);
   if (!entries || !entries.length) return;
@@ -1465,14 +1524,9 @@ async function uploadAll(entries, dir) {
     // (on the Queue page from now on: waiting for its turn, where it can still be taken out)
     jobs.push([file, cur, track({ dir: "up", name: file.name, path: join(cur, file.name), size: file.size, done: 0, state: "waiting" })]);
   }
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(UPLOADS_AT_ONCE, jobs.length) }, async () => {
-    while (next < jobs.length) {
-      const [file, into, t] = jobs[next++];
-      if (t.state !== "waiting") continue;       // taken out of the queue
-      if (await uploadFile(file, into, t)) n++; else failed++;
-    }
-  }));
+  const sent = Promise.all(jobs.map(([file, into, t]) => new Promise((done) => { upWaiting.push({ file, into, t, done }); })));
+  pumpUploads();
+  for (const ok of await sent) { if (ok === true) n++; else if (ok === false) failed++; }      // (null: taken out of the queue)
   if (n) toast(`${plural(n, "file")} added.` + (status && status.e2e ? "" : ` ${n === 1 ? "It uploads" : "They upload"} to Discord in the background.`)
                + (failed ? ` ${plural(failed, "file")} could not be uploaded.` : ""));
   if (route.name === "files") render();
@@ -1599,7 +1653,7 @@ function queueRows(a) {
   for (const t of transfers.values()) {
     const up = t.dir === "up", r = { key: "t" + t.id, dir: t.dir, name: t.path || t.name };
     if (t.state === "waiting") {
-      wait.push({ ...r, sub: `Waiting for its turn in this browser · ${size(t.size)}`,
+      wait.push({ ...r, held: !!t.held, sub: t.held ? `Waiting for room on the server · ${t.held}` : `Waiting for its turn in this browser · ${size(t.size)}`,
                   act: ["Take out", () => { t.state = "cancelled"; t.ended = Date.now(); queueTouched(); }] });
     } else if (t.state === "going") {
       const pct = t.size ? Math.min(100, (t.done / t.size) * 100) : up ? 100 : null;

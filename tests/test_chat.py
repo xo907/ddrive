@@ -149,7 +149,7 @@ class PaceTest(helpers.unittest.TestCase):
             self.assertGreaterEqual(api.sent[1] - api.sent[0], 0.2 + 0.5 - 0.02)
             self.assertGreater(api._slow, 1.9)
             api.messages("1", stop=stop), api.messages("1", stop=stop)
-            self.assertGreaterEqual(api.sent[3] - api.sent[2], 0.1 * 0.85 * 1.9 - 0.02)   # twice the distance, nearly
+            self.assertGreaterEqual(api.sent[3] - api.sent[2], 0.1 * 0.85 * 1.9 - 0.04)   # twice the distance, nearly (a clock that ticks every 16 ms is allowed for)
             self.assertLess(api._slow, 2.0)                                               # ...and slowly back
             stop.set()
             with self.assertRaises(InterruptedError):

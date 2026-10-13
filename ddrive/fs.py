@@ -225,6 +225,13 @@ class DDriveFS(Operations):
         return (f"{free / 2**30:.1f} GiB are free and {reserve / 2**30:.1f} GiB of that are always kept free "
                 "(min_free_disk_bytes)")
 
+    def room(self):
+        """How many bytes more fit on this computer's disk right now without going below what is always
+        kept free (min_free_disk_bytes); None when nothing is kept free or the disk can't be asked."""
+        reserve = int(getattr(self.cfg, "min_free_disk_bytes", 0) or 0)
+        free = self._free_disk()
+        return None if reserve <= 0 or free is None else max(0, free - reserve)
+
     def could_hold(self, nbytes):
         """False when a file of `nbytes` can't be on this computer's disk whatever else goes from it:
         the whole disk, less what is always kept free, is smaller than that."""

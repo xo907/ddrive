@@ -490,6 +490,17 @@ class WebTest(helpers.DriveTest):
         self.assertGreaterEqual(qd["queued"], len(qd["queue"]))
         self.assertEqual((qd["downloads"], qd["offline"]), ([], []))
         self.assertNotIn("sync", qd)
+        # how much more this computer can take in, for a page that has several files to send: what is free less what is always kept free
+        self.d.cfg.min_free_disk_bytes, kept = 1024, self.d.cfg.min_free_disk_bytes
+        free, self.d.fs._free_disk = self.d.fs._free_disk, lambda: 5000
+        try:
+            self.assertEqual(json.loads(self.req("GET", "/api/queue")[2])["room"], 3976)
+            self.d.fs._free_disk = lambda: 500
+            self.assertEqual(json.loads(self.req("GET", "/api/queue")[2])["room"], 0)
+            self.d.cfg.min_free_disk_bytes = 0
+            self.assertIsNone(json.loads(self.req("GET", "/api/queue")[2])["room"])
+        finally:
+            self.d.cfg.min_free_disk_bytes, self.d.fs._free_disk = kept, free
         page = self.req("GET", "/app.js")[2].decode()
         for needed in ("async function renderQueue(", "queue: renderQueue", "function track("):
             self.assertIn(needed, page)

@@ -1448,6 +1448,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "uploads": uploads,
             "queue": queue,
             "queued": len(d.uploader._pending) if d.uploader else 0,     # (all that wait: `queue` names the next 200)
+            # how much more this computer can take in right now: a page with several files to send
+            # starts the ones that fit (app.js, "which file goes next")
+            "room": d.fs.room(),
             "upload_speed": up_speed,
             "upload_eta": queued_bytes / up_speed if up_speed else None,
             "downloads": list(downloads.values()),
