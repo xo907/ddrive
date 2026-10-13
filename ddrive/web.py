@@ -1713,6 +1713,17 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         path, size, offset, mtime = self._part_args()
         self._take_part(path, size, offset, mtime)
 
+    _part_locks, _part_guard = {}, threading.Lock()
+
+    @classmethod
+    def _part_lock(cls, part):
+        """One at a time writes to the file the parts of an upload are collected in."""
+        with cls._part_guard:
+            if len(cls._part_locks) > 2000:      # (of uploads long over)
+                for k in [k for k, v in cls._part_locks.items() if not v.locked()]:
+                    del cls._part_locks[k]
+            return cls._part_locks.setdefault(part, threading.Lock())
+
     def _take_part(self, path, size, offset, mtime):
         """One part of a file that is sent in parts; answers how far it is, and "done" with the last one."""
         n = int(self.headers.get("Content-Length") or 0)
@@ -1725,47 +1736,75 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             raise ApiError(400, f"{path} is a folder")
         fs._refuse_hidden(path)
         fs._check_size_limit(size, path)
-        part, note, have = self._partial(path, size, mtime)
-        if offset != have:
-            if offset:                           # not where we are: say where that is, and the sender goes on from there
-                return self._json({"ok": False, "offset": have})
-            self._drop_partial(part)             # from the start again
-            have = 0
-        why = fs.holding_back(extra=n)
-        full = None if why else fs.room_for(size - have)
-        if full and (fs._pending_staging_bytes() or not self.drive.uploader.is_idle()):
-            why = f"its uploads have to free room first ({full})"
-        if why:
-            return self._json({"ok": False, "offset": have, "wait": why})
-        if full:
-            self._drop_partial(part)
-            raise ApiError(507, f"There is no room for this file ({size / 2**30:.2f} GiB) on the computer that runs the "
-                                f"drive: {full}.")
-        if not have:
-            now = time.time()
-            for old in os.listdir(os.path.dirname(part)):        # what nobody came back for
-                p = os.path.join(os.path.dirname(part), old)
-                try:
-                    if now - os.path.getmtime(p) > PART_DAYS * 86400:
-                        os.remove(p)
-                except OSError:
-                    pass
-            with open(note, "w", encoding="utf-8") as f:
-                json.dump({"path": path, "size": size, "mtime": mtime}, f)
-        left = n
-        with open(part, "ab") as out:
+        # The sender says where its part starts. Further on than what is here: it is told how much is
+        # here and goes on from there (it goes back, if it has to). At or before the end of what is
+        # here: that is where the file goes on, and what was here after that point is the sender's to
+        # replace (a part that was sent twice, or half of one that was cut off). So no order in which
+        # parts, repeats of parts and late ends of dropped connections arrive leaves a file that
+        # can't be gone on with.
+        # (An answer that doesn't take the part is given after the part was read all the same: answered
+        # while the sender is still sending, the connection is reset under it, and without something
+        # in between that keeps the answer, a reverse proxy, the sender never sees what was said.)
+        def skip():
+            left = n
             while left > 0:
                 data = self.rfile.read(min(PIECE, left))
                 if not data:
                     break
-                out.write(data)
                 left -= len(data)
+
+        part, note, have = self._partial(path, size, mtime)
+        if offset > have:
+            skip()
+            return self._json({"ok": False, "offset": have})
+        why = fs.holding_back(extra=n)
+        full = None if why else fs.room_for(size - offset)
+        if full and (fs._pending_staging_bytes() or not self.drive.uploader.is_idle()):
+            why = f"its uploads have to free room first ({full})"
+        if why:
+            skip()
+            return self._json({"ok": False, "offset": min(have, offset), "wait": why})
+        if full:
+            skip()
+            self._drop_partial(part)
+            raise ApiError(507, f"There is no room for this file ({size / 2**30:.2f} GiB) on the computer that runs the "
+                                f"drive: {full}.")
+        # The whole part first, then the file: a connection that stalls halfway holds nothing up, and
+        # two requests for the same file (the one that was given up and the one that tries again) can't
+        # write into each other.
+        body, left = [], n
+        while left > 0:
+            data = self.rfile.read(min(PIECE, left))
+            if not data:
+                break
+            body.append(data)
+            left -= len(data)
         if left:
-            raise ApiError(400, "upload was cut off")           # (what came is kept: the sender asks how much)
-        if have + n < size:
-            return self._json({"ok": True, "offset": have + n})
-        fs.adopt_file(path, part, mtime)
-        self._drop_partial(part)
+            raise ApiError(400, "upload was cut off")           # (nothing of it is kept: the sender sends the part again)
+        with self._part_lock(part):
+            part, note, have = self._partial(path, size, mtime)
+            if offset > have:                    # (it changed while the part was on its way)
+                return self._json({"ok": False, "offset": have})
+            if not offset:
+                now = time.time()
+                for old in os.listdir(os.path.dirname(part)):        # what nobody came back for
+                    p = os.path.join(os.path.dirname(part), old)
+                    try:
+                        if now - os.path.getmtime(p) > PART_DAYS * 86400:
+                            os.remove(p)
+                    except OSError:
+                        pass
+                with open(note, "w", encoding="utf-8") as f:
+                    json.dump({"path": path, "size": size, "mtime": mtime}, f)
+            with open(part, "r+b" if os.path.exists(part) else "w+b") as out:
+                out.truncate(offset)
+                out.seek(offset)
+                for data in body:
+                    out.write(data)
+            if offset + n < size:
+                return self._json({"ok": True, "offset": offset + n})
+            fs.adopt_file(path, part, mtime)
+            self._drop_partial(part)
         node = self.drive.index.resolve(path)
         self._json({"ok": True, "done": True, "offset": size, "path": path, "size": size,
                     "mtime": node["mtime"] if node else None})

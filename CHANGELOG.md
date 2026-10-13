@@ -3,6 +3,30 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.31.1 (2026-10-13)
+
+- **"The server lost its place in this file. Upload it again." is gone: the upload goes back and
+  carries on by itself.** An end-to-end encrypted account's browser gave a file up when the server
+  had another amount of it than the browser had sent, and a file of several GB had to be started
+  over. Four things, each of which could lead there or made it worse:
+  - **The browser goes back.** When the server has less of a file than was sent (it lost some of it,
+    or all), the upload returns to the last whole piece the server has, seals on from there and says
+    so in the Queue. The file is in the browser, so nothing has to be given up.
+  - **The server takes a part from where the sender says it starts.** A part that is sent twice (its
+    answer never arrived), or that starts in the middle of what is there, replaces what was there
+    after that point instead of being refused. Only a part that starts further on than what is there
+    is answered with where the server is.
+  - **Two requests for the same file can't write into each other any more.** A part is read whole
+    and then written under a lock, so the end of a connection that was given up and the try that
+    follows it can't both add to the file (which left more in it than was sent, and that was the end
+    of the upload).
+  - **"No room" is said as that.** When the computer that runs the drive has no room for a file, the
+    browser stops and shows that reason. It used to try again, find the half-sent file gone and
+    report that the server had lost its place.
+- An answer that doesn't take a part ("I am somewhere else", "wait") is given after the part was
+  read. Answered while the sender was still sending, the connection was reset under it, and without
+  a reverse proxy in between the sender never saw the answer and tried again without end.
+
 ## 2.31.0 (2026-10-13)
 
 - **Uploading a file that is already there asks first.** Until now it was overwritten without a word.

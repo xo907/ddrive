@@ -256,6 +256,16 @@ class LiteSyncTest(helpers.DriveTest):
         # a part that isn't the next one is answered with where the host is
         got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={3 * part}", b"x"))
         self.assertEqual((got["ok"], got["offset"]), (False, 2 * part))
+        # a part that was sent already is sent again (its answer never arrived), and one that starts in the
+        # middle of what is there (the sender went back): the file goes on from where the part starts,
+        # and what was there after that point is replaced. Nothing is in it twice.
+        got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={part}", data[part:2 * part]))
+        self.assertEqual((got["ok"], got["offset"]), (True, 2 * part))
+        got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={part // 2}", data[part // 2:part]))
+        self.assertEqual((got["ok"], got["offset"]), (True, part))
+        self.assertEqual(json.loads(self.page.request("GET", f"/api/upload/part?{q}"))["offset"], part)
+        got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={part}", data[part:2 * part]))
+        self.assertEqual((got["ok"], got["offset"]), (True, 2 * part))
         # the sender goes on from there; meanwhile the host has to catch up once and says so
         heard, real = [], self.host.fs.holding_back
         holds = iter(["upload backlog is 2.0 GiB (limit 2.0 GiB)"])

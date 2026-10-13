@@ -176,7 +176,7 @@
   async function patient(fn, signal, told = () => {}) {
     for (let tries = 0; ;) {
       try { return await fn(); } catch (e) {
-        if ((signal && signal.aborted) || e instanceof Gone || (e.status && e.status < 500 && e.status !== 408 && e.status !== 429)) throw e;
+        if ((signal && signal.aborted) || e instanceof Gone || e.status === 507 || (e.status && e.status < 500 && e.status !== 408 && e.status !== 429)) throw e;      // (507: no room, and the server says so)
         tries++;
         told(navigator.onLine === false ? "No connection. It carries on when there is one again." : "The connection dropped. Trying again…");
         await reconnect(Math.min(30000, 1500 * 2 ** Math.min(tries, 5)), signal);
@@ -387,11 +387,16 @@
      *  before sealing: they go into the sealed list with the file, to find identical files by. */
     async _store(id, key, blob, heard = () => {}, signal, where = "/api/vault/object") {
       const size = blob.size, count = chunksOf(size), total = sealedSize(size), sums = [];
-      let offset = 0, part = [new Uint8Array([...MAGIC, CHUNK_LOG])];
+      const head = () => new Uint8Array([...MAGIC, CHUNK_LOG]);
+      let offset = 0, part = [head()], back = 0;
       // A part that doesn't arrive (the connection dropped, the network was changed, the server was
       // restarted) is sent again, from where the server says it has the file up to, for as long as it
       // takes: an upload waits for the connection, it doesn't give up or hang. The very bytes that were
       // being sent are kept for that (a piece sealed again would not fit the half of it that arrived).
+      // And when the server has less of the file than was sent (it lost what it had, or all of it),
+      // the upload goes back to the piece the server has it up to and seals on from there: post()
+      // answers with how much the server has, and the loop below goes back. The file is here, so
+      // nothing has to be given up for that.
       const post = async () => {
         let body = new Blob(part), tries = 0;
         part = [];
@@ -401,7 +406,8 @@
             got = await steady((s) => call(`${where}?id=${id}&size=${total}&offset=${offset}`,
                                            { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal: s }), signal);
           } catch (e) {
-            if ((signal && signal.aborted) || e instanceof Gone || (e.status && e.status < 500 && e.status !== 408 && e.status !== 429)) throw e;
+            // (507: the server has no room for the file, and says so. Trying again would only hide that.)
+            if ((signal && signal.aborted) || e instanceof Gone || e.status === 507 || (e.status && e.status < 500 && e.status !== 408 && e.status !== 429)) throw e;
             tries++;
             heard({ note: navigator.onLine === false ? "No connection. It carries on when there is one again." : "The connection dropped. Trying again…" });
             await reconnect(Math.min(30000, 1500 * 2 ** Math.min(tries, 5)), signal);
@@ -420,7 +426,9 @@
             // (the last part arrived whole and only the answer was lost: then the object is there)
             if (where === "/api/vault/object" && offset + body.size === total
                 && await call(`${where}?id=${id}`, { raw: true, headers: { Range: "bytes=0-0" } }).then(() => true, () => false)) { offset = total; heard({ note: "" }); return; }
-            throw new Error("The server lost its place in this file. Upload it again.");
+            // (again and again without ever getting further: something is wrong that going back doesn't mend)
+            if (have < offset && ++back <= 25) return have;
+            throw new Error("The server keeps losing what was sent of this file. Upload it again.");
           }
           offset = got.offset;
           heard({ note: "" });
@@ -432,7 +440,19 @@
         const data = new Uint8Array(await blob.slice(n * CHUNK, Math.min(size, (n + 1) * CHUNK)).arrayBuffer());
         sums.push(await pieceSum(data));
         part.push(await seal(key, data, chunkLabel(n, n === count - 1)));
-        if ((n + 1) % PART_CHUNKS === 0 || n === count - 1) { await post(); heard({ bytes: Math.min(size, (n + 1) * CHUNK) }); }
+        if ((n + 1) % PART_CHUNKS === 0 || n === count - 1) {
+          const have = await post();
+          if (have !== undefined) {              // the server has less: back to the last whole piece it has
+            const from = have < HEAD ? 0 : Math.min(n, Math.floor((have - HEAD) / (CHUNK + OVERHEAD)));
+            offset = from ? HEAD + from * (CHUNK + OVERHEAD) : 0;
+            part = from ? [] : [head()];
+            sums.length = from;
+            n = from - 1;
+            heard({ bytes: from * CHUNK, note: "The server had less of this file than was sent. Going on from where it is…" });
+            continue;
+          }
+          heard({ bytes: Math.min(size, (n + 1) * CHUNK) });
+        }
       }
       return prints(sums);
     }
