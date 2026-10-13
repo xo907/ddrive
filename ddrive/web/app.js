@@ -4040,7 +4040,7 @@ function drawSaved(body) {
         { label: "Delete saved previews", icon: "trash", run: async () => {
           if (!await ask({ title: "Delete every saved preview?", ok: "Delete them", danger: true,
                            text: `Earlier versions kept a small copy of each picture and video next to the attachment itself (in “files/previews” of every conversation in ${chat.folder}). `
-                                 + "This removes all of those small copies, everywhere on the drive, for good. The attachments themselves and the messages stay. No new previews are saved any more." })) return;
+                                 + "This removes all of those small copies, everywhere on the drive (also in the folder of an account that was moved into this one), for good. The attachments themselves and the messages stay. No new previews are saved any more." })) return;
           toast("Deleting the previews…");
           const w = await attempt(() => api("/api/chat/previews/clear", {}));
           if (w) { toast(w.files ? `${plural(w.files, "preview")} deleted, ${size(w.bytes)} freed` : "There are no saved previews"); load(); }

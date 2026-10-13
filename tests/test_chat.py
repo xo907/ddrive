@@ -462,14 +462,25 @@ class ChatWebTest(helpers.DriveTest):
         helpers.DriveTest.write(self.d, kept, b"\x89PNG kept on the drive")
         helpers.DriveTest.write(self.d, "/Discord/Servers/Book Club [300]/general [400]/files/previews/1.webp", b"\x89PNG another")
         helpers.DriveTest.write(self.d, "/Discord/Servers/Book Club [300]/general [400]/files/1-previews.png", b"an attachment")
+        # (also in a copy of /Discord elsewhere on the drive, as an account that was moved in has; nothing else called previews)
+        moved = "/From account abc/Discord/Direct messages/Anna [500]/files"
+        helpers.DriveTest.write(self.d, f"{moved}/previews/7.webp", b"\x89PNG moved")
+        helpers.DriveTest.write(self.d, f"{moved}/7-cat.png", b"an attachment")
+        mine = ["/Work/files/previews/7.webp", "/Photos [2024]/files/previews/holiday.webp", "/Photos [2024]/files/previews/sub/8.webp"]
+        for path in mine:
+            helpers.DriveTest.write(self.d, path, b"mine")
         store = self.d.chat.store
         row = json.loads(store.get("82")["attachments"])
         row[0]["preview"] = kept
         store._run("UPDATE messages SET attachments=? WHERE id='82'", (json.dumps(row),))
         self.assertEqual(self.req("GET", "/api/chat/preview?" + at)[2], b"\x89PNG kept on the drive")
         # ...until all of them are removed, from every conversation, for good; the attachments stay
-        self.assertEqual(self.post("/api/chat/previews/clear", {})[1], {"ok": True, "files": 2, "bytes": 34})
+        self.assertEqual(self.post("/api/chat/previews/clear", {})[1], {"ok": True, "files": 3, "bytes": 44})
         self.assertIsNone(self.d.index.resolve(kept))
+        self.assertIsNone(self.d.index.resolve(f"{moved}/previews"))
+        self.assertIsNotNone(self.d.index.resolve(f"{moved}/7-cat.png"))
+        for path in mine:
+            self.assertIsNotNone(self.d.index.resolve(path), path)
         self.assertIsNone(self.d.index.resolve(f"{files}/previews"))
         self.assertIsNone(self.d.index.resolve("/Discord/Servers/Book Club [300]/general [400]/files/previews"))
         self.assertIsNotNone(self.d.index.resolve("/Discord/Servers/Book Club [300]/general [400]/files/1-previews.png"))

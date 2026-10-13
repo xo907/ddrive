@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.20.1 (2026-10-12)
+
+- **"Delete saved previews" covers the whole drive.** It only looked in `/Discord`, so the previews in
+  a copy of it elsewhere were left: an account that was moved into this one brings its own, under
+  "From account …". Now every conversation's `files/previews` is cleared wherever it is on the drive.
+  Only files that are unmistakably such previews are removed (`<attachment id>.webp` in
+  `<conversation> [<id>]/files/previews`); other folders that happen to be called previews are left
+  alone.
+
 ## 2.20.0 (2026-10-12)
 
 - **A move between two accounts can be followed from any page.** Once its window was closed, there

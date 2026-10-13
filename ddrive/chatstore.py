@@ -306,8 +306,13 @@ class ChatStore:
 
     def clear_previews(self):
         """Remove, for good, every small picture of an attachment that versions before 2.19.0 kept next
-        to the attachment itself (.../files/previews/), in every conversation on the drive. The
-        attachments stay. Returns (how many files, how many bytes)."""
+        to the attachment itself, in every conversation anywhere on the drive: in /Discord, and in a
+        copy of it somewhere else (an account that was moved into this one has its own under "From
+        account ..."). The attachments stay. Returns (how many files, how many bytes).
+
+        Only what is unmistakably one of those is touched: a file <attachment id>.webp in
+        <conversation> [<its id>]/files/previews/. Anything else that happens to be in a folder
+        called previews is left alone."""
         idx, fs = self.d.index, self.d.fs
         purge = getattr(idx, "purge_node", None)         # (an end-to-end account's unlink is for good already)
         count = size = 0
@@ -315,19 +320,20 @@ class ChatStore:
         if sync_now is not None:
             sync_now()
         with self.io, self._everything():
-            root = idx.resolve(FOLDER)
-            todo = [(root, FOLDER)] if root is not None and root["is_dir"] else []
+            root = idx.resolve("/")
+            todo = [(root, "")] if root is not None and root["is_dir"] else []
             while todo:
                 node, path = todo.pop()
                 for c in idx.children(node["id"]):
                     cpath = f"{path}/{c['name']}"
                     if not c["is_dir"]:
                         continue
-                    if c["name"] != "previews" or posixpath.basename(path) != "files":
+                    if not (c["name"] == "previews" and posixpath.basename(path) == "files"
+                            and re.search(r" \[\d+\]$", posixpath.basename(posixpath.dirname(path)))):
                         todo.append((c, cpath))
                         continue
                     for p in idx.children(c["id"]):
-                        if p["is_dir"]:
+                        if p["is_dir"] or not re.fullmatch(r"\d+\.webp", p["name"]):
                             continue
                         try:
                             if purge is not None:
