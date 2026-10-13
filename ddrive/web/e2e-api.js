@@ -374,6 +374,30 @@
       if (rows.length) { await v._send(...rows.map((n) => ({ op: "del", id: n.id }))); await drop(objects); }
       return { ok: true, count: rows.length };
     },
+    /** The small pictures of Discord attachments that versions before 2.19.0 kept next to them: all of
+     *  them, anywhere in the account, for good (what chatstore.clear_previews does on a drive). The
+     *  list of files is open here, so this page does it itself: no computer of the account has to be
+     *  on for it, as it has to be for everything else about Messages. Only <id>.webp in
+     *  "<conversation> [<id>]/files/previews" is touched. */
+    async "chat/previews/clear"() {
+      await v.sync();
+      const inside = new Map();
+      for (const n of v.nodes.values()) { if (!inside.has(n.parent)) inside.set(n.parent, []); inside.get(n.parent).push(n); }
+      const preview = (n) => !n.dir && /^\d+\.webp$/.test(n.name);
+      const files = [], folders = [];
+      for (const dir of v.nodes.values()) {
+        if (!dir.dir || dir.name !== "previews") continue;
+        const up = v.nodes.get(dir.parent), conv = up && v.nodes.get(up.parent);
+        if (!up || up.name !== "files" || !conv || !/ \[\d+\]$/.test(conv.name)) continue;
+        const all = inside.get(dir.id) || [];
+        files.push(...all.filter(preview));
+        if (all.every(preview)) folders.push(dir);              // nothing else in it: the folder goes too
+      }
+      const gone = [...files, ...folders];
+      for (let i = 0; i < gone.length; i += 400) await v._send(...gone.slice(i, i + 400).map((n) => ({ op: "del", id: n.id })));
+      await drop(files.flatMap(objectsOf));
+      return { ok: true, files: files.length, bytes: files.reduce((s, n) => s + (n.size || 0), 0) };
+    },
     async "versions/restore"(b) {
       const path = clean(b.path), n = at(path, "file"), i = Number(b.n) - 1, was = (n.versions || [])[i];
       if (!was) throw new Fail(400, "no such version");

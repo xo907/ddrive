@@ -848,7 +848,8 @@ itself while they are still there (it checks first); the copy on your drive is t
 once Discord no longer has them. Only the attachment itself is saved, as it was sent: no smaller copy
 of a picture or video is made or downloaded next to it. (Versions before 2.19.0 kept one, in a
 `previews` folder inside each conversation's `files`. Messages → ⋯ → **Delete saved previews** removes
-all of those, from every conversation, for good.) Other
+all of those, from every conversation anywhere on the drive, for good; the same is on the Messages
+page while it is empty, and under *Your account* for an account, where the browser does it by itself.) Other
 devices read these files, so Messages works on all of them. Deleting a file removes its messages
 from the lists. `/Discord` can be [password-locked](#password-locked-folders): recording carries on,
 and the messages are hidden in the dashboard until you unlock it.

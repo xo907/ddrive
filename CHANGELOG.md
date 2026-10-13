@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.20.2 (2026-10-12)
+
+- **Saved previews can be deleted where Messages shows no conversations.** After an account is moved
+  into another, its Discord attachments (and the previews next to them) are in the "From account …"
+  folder, and Messages shows none of it, so the button to delete the previews wasn't there. It now
+  is: on the Messages page also while it is empty ("Delete previews of attachments saved by earlier
+  versions"), and under Your account ("Previews of Discord attachments").
+- **An end-to-end encrypted account needs no computer for it.** Messages needs one of the account's
+  own computers to be on, and so did deleting the previews. The browser has the account's list of
+  files open, so it now removes them itself.
+
 ## 2.20.1 (2026-10-12)
 
 - **"Delete saved previews" covers the whole drive.** It only looked in `/Discord`, so the previews in

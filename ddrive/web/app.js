@@ -3403,6 +3403,8 @@ async function renderAccount() {
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
          a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         !(status && status.retired) && row("Previews of Discord attachments", "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself. Remove all of those copies, everywhere in this account; the attachments stay.",
+             h("button", { class: "btn ghost small", onclick: async () => { if (await deletePreviews()) render(); } }, "Delete previews…")),
          status && status.move && window.accountMove && row(status.move.side === "to" ? "Another account is moving into this one" : "This account is moving into another one",
              moveText(status.move), h("button", { class: "btn small", onclick: () => window.accountMove.show(status.move) }, "Show the move")),
          status && status.e2e && window.accountMove && row("Move another account into this one", "Everything in another end-to-end encrypted account of yours comes into a new folder here, and that account is deleted. The server copies the sealed files; the keys are agreed between your two screens.",
@@ -4037,14 +4039,7 @@ function drawSaved(body) {
           const w = await attempt(() => api("/api/chat/rebuild", {}));
           if (w) { toast(`Read ${plural(w.files, "file")}`); load(); }
         } },
-        { label: "Delete saved previews", icon: "trash", run: async () => {
-          if (!await ask({ title: "Delete every saved preview?", ok: "Delete them", danger: true,
-                           text: `Earlier versions kept a small copy of each picture and video next to the attachment itself (in “files/previews” of every conversation in ${chat.folder}). `
-                                 + "This removes all of those small copies, everywhere on the drive (also in the folder of an account that was moved into this one), for good. The attachments themselves and the messages stay. No new previews are saved any more." })) return;
-          toast("Deleting the previews…");
-          const w = await attempt(() => api("/api/chat/previews/clear", {}));
-          if (w) { toast(w.files ? `${plural(w.files, "preview")} deleted, ${size(w.bytes)} freed` : "There are no saved previews"); load(); }
-        } },
+        { label: "Delete saved previews", icon: "trash", run: async () => { if (await deletePreviews()) load(); } },
       ], r.right - 220, r.bottom + 4, "Messages");
     } }, icon("more")));
   body.replaceChildren(h("div", { class: "ch-filters" }, search, place),
@@ -4227,6 +4222,20 @@ function drawArchive(body) {
   }, 1500);
 }
 
+/** Remove every small copy of a Discord picture or video that versions before 2.19.0 kept next to the
+ *  attachment itself, wherever on the drive it is: also where Messages doesn't show the conversation
+ *  (the Discord folder of an account that was moved into this one). Returns true when it was done. */
+async function deletePreviews() {
+  if (!await ask({ title: "Delete every saved preview?", ok: "Delete them", danger: true,
+                   text: "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself, in “files/previews” of every conversation. "
+                         + "This removes all of those small copies, everywhere on the drive (also in the folder of an account that was moved into this one), for good. "
+                         + "The attachments themselves and the messages stay. No new previews are saved any more." })) return false;
+  toast("Deleting the previews…");
+  const w = await attempt(() => api("/api/chat/previews/clear", {}));
+  if (w) toast(w.files ? `${plural(w.files, "preview")} deleted, ${size(w.bytes)} freed` : "There are no saved previews");
+  return !!w;
+}
+
 async function renderMessages() {
   clearInterval(chatTimer);
   chatTimer = null;
@@ -4243,7 +4252,9 @@ async function renderMessages() {
     return page(head, h("div", { class: "empty" }, h("b", {}, "Keep your Discord conversations on your drive"),
       s.error || "Record messages as they arrive, with the original text of ones later edited or deleted, and archive whole conversations. "
         + `Everything is saved in ${s.folder}: encrypted, on all your devices, at no cost.`,
-      h("div", { class: "ch-cta" }, h("button", { class: "btn", onclick: () => discordLogin(render) }, "Log in with Discord"))));
+      h("div", { class: "ch-cta" }, h("button", { class: "btn", onclick: () => discordLogin(render) }, "Log in with Discord")),
+      // (there may be attachments on the drive that no conversation here shows: an account that was moved in)
+      h("div", { class: "ch-cta" }, h("button", { class: "link", onclick: deletePreviews }, "Delete previews of attachments saved by earlier versions"))));
   }
   const body = h("div", {});
   page(head,
