@@ -44,6 +44,7 @@ SERVERS = FOLDER + "/Servers"
 DMS = FOLDER + "/Direct messages"
 PIECE = 1024 * 1024
 PREVIEW_MAX = 400 * 1024
+PICTURE_MAX = 8 * 1024 * 1024     # a saved picture up to this size is shown small in the list as it is
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);

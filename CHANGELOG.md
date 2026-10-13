@@ -3,6 +3,23 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.21.0 (2026-10-12)
+
+- **Going from page to page is immediate and can't get stuck.**
+  - A click is answered at once: a line runs along the top and the page before steps back until the
+    new one is drawn. Until now nothing moved before the answer came, which looked as if the click
+    hadn't been taken.
+  - Clicking on to another page (or the same one again) drops what the page before was still waiting
+    for, so its connection is free for the new page straight away.
+  - A slow answer can no longer draw an old page over the one that is shown. That was what looked
+    like a page stuck "loading" until other tabs were clicked: the menu said one page, and the page
+    that had been asked for before it had been drawn over it.
+- **Messages: a picture that is gone from Discord is shown from the copy on the drive.** The list
+  shows the saved file itself, made small by the browser. Nothing is made of it and nothing more is
+  stored. (While Discord still has an attachment, the small picture in the list comes from Discord,
+  one request per picture, and nothing of it is kept either. A video that is gone from Discord shows
+  as a file to open.)
+
 ## 2.20.4 (2026-10-12)
 
 - **`lite connect` with the owner's words works while wrong tries are being refused.** DDrive Lite

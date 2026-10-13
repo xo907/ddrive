@@ -175,13 +175,28 @@ function base(path) { return path.slice(path.lastIndexOf("/") + 1); }
 function enc(path) { return path.split("/").map(encodeURIComponent).join("/"); }
 
 // ------------------------------------------------------------------ api
+// What a page asks for when it is opened is only wanted while it is the page being opened. Somebody who
+// clicks on to another page (or on the same one again) before the answer is there gets the new page:
+// the earlier question is dropped (its connection is free for the new one at once) and whoever asked
+// never hears back, so a slow answer can't draw an old page over the one that is shown. `nav` is the
+// page being opened now; `viewNav` is set while its drawing function starts (render), so that only the
+// questions it asks right then are tied to it, and nothing asked in the background or after an action.
+let nav = new AbortController();
+let viewNav = null;
+const NEVER = new Promise(() => {});
 async function api(path, body) {
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json", "X-DD": "1" }, body: JSON.stringify(body),
   };
-  const r = await fetch(path, { credentials: "same-origin", ...opts });
+  const mine = body === undefined ? viewNav : null;
+  const dropped = () => !!mine && mine.signal.aborted;
+  let r;
+  try { r = await fetch(path, { credentials: "same-origin", ...opts, ...(mine ? { signal: mine.signal } : {}) }); }
+  catch (e) { if (dropped()) return NEVER; throw e; }
+  if (dropped()) return NEVER;
   if (r.status === 401) { location.reload(); throw new Error("Signed out"); }
   const data = await r.json().catch(() => ({}));
+  if (dropped()) return NEVER;
   if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
   return data;
 }
@@ -477,13 +492,21 @@ function render() {
   leaveNotes();
   leaveMessages();
   if (notHere(route.name)) return go(SERVER ? "#/settings" : "#/home");
+  // The page that was being opened until now is no longer wanted (api): what it asked is dropped.
+  nav.abort();
+  const mine = nav = new AbortController();
+  main.classList.add("loading");               // shown at once (app.css): the click was taken, the page is coming
   if (route.name !== "files" || route.path !== currentDir) sel.clear();
   const views = { files: renderFiles, search: renderSearch, deleted: renderDeleted, snapshots: renderSnapshots,
                   snapshot: renderSnapshot, health: renderHealth, notes: renderNotes, shared: renderShared,
                   settings: isAccount() ? renderAccount : renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
                   history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources };
-  (views[route.name] || renderFiles)();
+  const loaded = () => { if (mine === nav) main.classList.remove("loading"); };
+  viewNav = mine;
+  try { Promise.resolve((views[route.name] || renderFiles)()).then(loaded, loaded); }
+  catch (e) { loaded(); throw e; }
+  finally { viewNav = null; }
 }
 window.addEventListener("hashchange", render);
 
@@ -512,6 +535,7 @@ function keepKeys(root) {
  *  that was opened stays open, scrolled to where it was, and nothing is replaced under a selection
  *  that is being made to copy something. */
 function page(...children) {
+  main.classList.remove("loading");
   const next = h("div", { class: "page" }, ...children);
   const old = main.firstElementChild;
   if (keepScroll && old) {

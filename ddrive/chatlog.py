@@ -770,9 +770,15 @@ class ChatHandlers:
             node = self.drive.index.resolve(a["preview"])
             if node is not None and not node["is_dir"]:
                 data = self.drive.fs.read_file(node["id"], 0, min(node["size"], chatstore.PREVIEW_MAX))
-        if data is None and a.get("path"):           # saved by 1.3.2, with the dashboard's own thumbnails
+        if data is None and a.get("path"):
+            # Gone from Discord: the picture itself, as it is kept on the drive, and the page shows it
+            # small. Nothing is made of it and nothing more is stored. (A video has no picture to show.)
             node = self.drive.index.resolve(a["path"])
-            data = self._thumb_read(node) if node is not None else None
+            if node is not None and not node["is_dir"] and 0 < node["size"] <= chatstore.PICTURE_MAX \
+                    and (a.get("content_type") or "").startswith("image/"):
+                data = self.drive.fs.read_file(node["id"], 0, node["size"])
+            if (not data or not chatstore.picture_type(data)) and node is not None and hasattr(self, "_thumb_read"):
+                data = self._thumb_read(node)        # (the dashboard's own thumbnail of it, where there is one)
         if not data or not chatstore.picture_type(data):
             return self._error(404, "no preview")
         self.send_response(200)

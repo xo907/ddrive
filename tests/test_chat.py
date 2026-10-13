@@ -490,6 +490,12 @@ class ChatWebTest(helpers.DriveTest):
         status, headers, _ = self.req("GET", "/api/chat/open?" + at)
         self.assertEqual((status, headers["Location"]), (303, "/api/file?path=" + urllib.parse.quote(pic["path"])))
         self.assertEqual(self.req("GET", headers["Location"])[2], b"hello")
+        # a picture that is gone from Discord is shown from the copy on the drive: the file itself, nothing made of it
+        before = sorted(c["name"] for c in self.d.index.children(self.d.index.resolve(files)["id"]))
+        helpers.DriveTest.write(self.d, pic["path"], b"\x89PNG the picture itself")
+        status, headers, body = self.req("GET", "/api/chat/preview?" + at)
+        self.assertEqual((status, headers["Content-Type"], body), (200, "image/png", b"\x89PNG the picture itself"))
+        self.assertEqual(sorted(c["name"] for c in self.d.index.children(self.d.index.resolve(files)["id"])), before)
         self.d.fs.unlink(pic["path"])                                 # neither on Discord nor on the drive
         self.assertEqual(self.req("GET", "/api/chat/open?" + at)[0], 404)
         FakeAccount.gone = False
