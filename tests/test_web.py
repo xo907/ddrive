@@ -197,6 +197,23 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(post("cache")["freed"], 0)
         self.assertEqual(self.read(self.d, "/kept.txt", cold=False), b"the uploaded version")
         self.assertEqual((post("thumbs")["freed"], post("fetches")["count"]), (0, 0))
+        # half-sent files: the drive's own and an account's. The ones nothing arrived for in an hour go,
+        # with their notes; one that is still being sent to stays.
+        data = self.d.cfg.resolved_data_dir
+        mine, theirs = os.path.join(data, "partials"), os.path.join(data, "accounts", "0123456789abcdef", "partials")
+        long_ago = __import__("time").time() - 7200
+        for folder, name, n, old in ((mine, "a" * 32, 5000, True), (theirs, "b" * 32, 7000, True), (mine, "c" * 32, 900, False)):
+            os.makedirs(folder, exist_ok=True)
+            for ext, body in ((".part", b"x" * n), (".json", b"{}")):
+                with open(os.path.join(folder, name + ext), "wb") as f:
+                    f.write(body)
+                if old:
+                    os.utime(os.path.join(folder, name + ext), (long_ago, long_ago))
+        hs = json.loads(self.req("GET", "/api/status?res=1")[2])["resources"]["half_sent"]
+        self.assertEqual(hs, {"count": 3, "bytes": 12900, "idle_count": 2, "idle_bytes": 12000})
+        self.assertEqual(post("partials"), {"ok": True, "count": 2, "freed": 12000})
+        self.assertEqual((sorted(os.listdir(mine)), os.listdir(theirs)), (["c" * 32 + ".json", "c" * 32 + ".part"], []))
+        self.assertEqual(post("partials")["count"], 0)
         self.assertEqual(self.req("POST", "/api/resources/clean", {"what": "everything"})[0], 400)
 
     def test_forged_or_old_sessions_fail(self):

@@ -3,6 +3,16 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.35.0 (2026-10-13)
+
+- **Resources: "Remove half-sent files".** What arrived of an upload that never finished (it failed,
+  was stopped, or its page was closed) stays on the disk of the computer that runs the drive for a
+  week, in case it is taken up again. On a small disk that is room other uploads are waiting for.
+  The Resources page now says how many such files there are and how much they hold, the accounts'
+  included, and removes the ones nothing has arrived for in an hour. Files still being sent to are
+  left alone; no file that is on the drive is touched. An upload that is only waiting for room and
+  is removed with them starts again from its beginning.
+
 ## 2.34.0 (2026-10-13)
 
 - **An end-to-end encrypted account's upload goes on after the page was reloaded, closed or

@@ -1968,7 +1968,7 @@ function renderResources(quiet) {
       `It is still running version ${status.version}, from before the update. Stop the drive and start it again `
       + "(menu: 2, then 1), then reload this page."));
   }
-  const m = r.memory || {}, d = r.disk, sz = r.sizes || {}, lim = r.limits || {};
+  const m = r.memory || {}, d = r.disk, sz = r.sizes || {}, lim = r.limits || {}, hs = r.half_sent || {};
   const used = d ? d.total - d.free : 0;
   const mine = (sz.cache || 0) + (sz.staging || 0) + (sz.thumbs || 0) + (sz.index || 0) + (sz.messages || 0);
   const memPct = m.total && m.available != null ? Math.round(100 * (m.total - m.available) / m.total) : null;
@@ -2008,6 +2008,15 @@ function renderResources(quiet) {
               "Clear", { what: "cache" }, (x) => `Read cache cleared: ${size(x.freed)} freed`),
       tidyRow("Delete thumbnails", `Removes the stored small pictures (${size(sz.thumbs || 0)}). They are made again when you look at pictures and videos.`,
               "Delete", { what: "thumbs" }, (x) => `Thumbnails deleted: ${size(x.freed)} freed`),
+      tidyRow("Remove half-sent files", hs.count
+                ? `${plural(hs.count, "file")} that ${hs.count === 1 ? "was" : "were"} being uploaded and didn't finish ${hs.count === 1 ? "holds" : "hold"} ${size(hs.bytes)} on this disk, the accounts' included. `
+                  + (hs.idle_count ? `Nothing has arrived for ${hs.idle_count === hs.count ? (hs.count === 1 ? "it" : "any of them") : plural(hs.idle_count, "of them", "of them")} in an hour (${size(hs.idle_bytes)}): those are removed. `
+                                     + "An upload that is only waiting for room and is among them starts again from its beginning."
+                                   : "All of them had something arrive in the last hour, so they are still being sent and are left alone.")
+                : "No upload was left half-sent.", "Remove", { what: "partials" },
+              (x) => `${plural(x.count, "half-sent file")} removed: ${size(x.freed)} freed`, !hs.idle_count,
+              { title: `Remove ${plural(hs.idle_count || 0, "half-sent file")}?`, ok: "Remove", danger: true,
+                text: `Frees ${size(hs.idle_bytes || 0)}. They are what arrived of uploads that stopped more than an hour ago. No file that is on the drive is touched.` }),
       tidyRow("Stop downloads from links", running ? `${plural(running, "download")} from a web address ${running === 1 ? "is" : "are"} running. What they fetched so far is removed.`
                 : "No download from a web address is running.", "Stop all", { what: "fetches" }, (x) => `${plural(x.count, "download")} stopped`, !running),
       tidyRow("Cancel waiting uploads", r.waiting ? `${plural(r.waiting, "file")} (${size(sz.staging || 0)}) ${r.waiting === 1 ? "is" : "are"} waiting to go to Discord or stuck. Uploads being sent this moment are left alone.`

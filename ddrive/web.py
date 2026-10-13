@@ -1253,6 +1253,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             for i in running:
                 self.app.fetches.cancel(i["id"])
             return self._json({"ok": True, "count": len(running)})
+        if what == "partials":
+            count, freed = resources.clear_half_sent(d)
+            log.info("Web dashboard: %d half-sent file(s) that nobody came back for were removed (%d bytes)", count, freed)
+            return self._json({"ok": True, "count": count, "freed": freed})
         if what == "uploads":
             count, skipped, freed = resources.cancel_waiting_uploads(d)
             log.warning("Web dashboard: %d waiting upload(s) were cancelled (%d being sent were left alone)", count, skipped)

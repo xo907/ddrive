@@ -143,6 +143,64 @@ def clear_thumbnails(drive):
     return freed
 
 
+PARTIAL_IDLE = 3600.0     # a half-sent file nothing has arrived for in this long is taken to be left behind
+
+
+def _partials(data_dir):
+    """The files that parts of uploads are collected in (web.py, "a file sent in parts"): the drive's own
+    and those of every account on it. Yields (path, size, seconds since something was added)."""
+    folders = [os.path.join(data_dir, "partials")]
+    try:
+        with os.scandir(os.path.join(data_dir, "accounts")) as it:
+            folders += [os.path.join(e.path, "partials") for e in it if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        pass
+    now = time.time()
+    for folder in folders:
+        try:
+            with os.scandir(folder) as it:
+                for e in it:
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                        yield e.path, st.st_size, now - st.st_mtime
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+
+def half_sent(data_dir):
+    """What half-sent files hold on this disk: all of them, and the ones that look left behind."""
+    out = {"count": 0, "bytes": 0, "idle_count": 0, "idle_bytes": 0}
+    for path, size, idle in _partials(data_dir):
+        if not path.endswith(".part"):
+            continue
+        out["count"] += 1
+        out["bytes"] += size
+        if idle > PARTIAL_IDLE:
+            out["idle_count"] += 1
+            out["idle_bytes"] += size
+    return out
+
+
+def clear_half_sent(drive):
+    """Remove the half-sent files nothing has arrived for in an hour (an upload that was given up, or
+    whose page was closed). One that is still being sent to is left alone; one that waits for room and
+    is removed here starts again from its beginning. Returns (files, bytes freed)."""
+    count = freed = 0
+    for path, size, idle in _partials(drive.cfg.resolved_data_dir):
+        if idle <= PARTIAL_IDLE:
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            continue
+        if path.endswith(".part"):
+            count += 1
+            freed += size
+    return count, freed
+
+
 def cancel_waiting_uploads(drive):
     """Give up on the uploads that are waiting or stuck (not the ones being sent this moment): a changed
     file goes back to its last uploaded version, a file that was never uploaded is removed.
@@ -205,7 +263,7 @@ def snapshot(drive):
     return {
         "cpu": _process_cpu(), "cores": os.cpu_count() or 1, "load": load,
         "memory": memory, "threads": threading.active_count(), "started": _STARTED,
-        "disk": disk, "folder": data_dir, "sizes": _data_sizes(data_dir),
+        "disk": disk, "folder": data_dir, "sizes": _data_sizes(data_dir), "half_sent": half_sent(data_dir),
         "waiting": len(drive.index.unsynced_ids()) if drive.index is not None else 0,
         "limits": {"cache": 0 if memory_cache else cfg.cache_max_bytes, "staging": cfg.staging_max_bytes,
                    "min_free": cfg.min_free_disk_bytes, "memory_cache": getattr(drive.cache, "memory_bytes", 0) if memory_cache else 0},
