@@ -4392,7 +4392,42 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(
 // ------------------------------------------------------------------ start
 dropTarget(document.querySelector('#nav a[data-nav="files"]'), "/");
 dropTarget(document.querySelector('#nav a[data-nav="deleted"]'), "/", "delete");
-refreshStatus().then(render);          // who is signed in decides which pages there are
+// ------------------------------------------------------------------ connecting
+// While the top right says "Connecting" (the page was just opened and doesn't know yet who is signed in;
+// for an end-to-end encrypted account: until its list of files is read and opened here), the page would
+// be empty. If that lasts long enough to be noticed, it says what is being done and why, quietly, where
+// the page will be. It is never shown at any other time, and is gone the moment the page is there.
+const CONNECT_STEPS = [["server", "Asking the server who is signed in"], ["key", "Getting the key kept in this browser"],
+                       ["list", "Reading your list of files and opening it here"], ["pictures", "Getting ready to show pictures and videos"]];
+let connectBox = null;
+function drawConnecting() {
+  if (!connectBox || !connectBox.isConnected) return;
+  const c = (window.E2E && E2E.connecting) || { step: "server", detail: "" };
+  const at = Math.max(0, CONNECT_STEPS.findIndex(([k]) => k === c.step));
+  const mine = at > 0;                         // (past the first step: an end-to-end encrypted account, which has the others)
+  connectBox.replaceChildren(
+    h("div", { class: "cn-title" }, mine ? "Opening your files" : "Connecting"),
+    h("div", { class: "cn-bar" }, h("i", { style: `width:${mine ? Math.round((at + 0.5) / CONNECT_STEPS.length * 100) : 20}%` })),
+    h("ol", { class: "cn-steps" }, (mine ? CONNECT_STEPS : CONNECT_STEPS.slice(0, 1)).map(([k, label], i) =>
+      h("li", { class: i < at ? "done" : i === at ? "now" : "" }, label, i === at && c.detail ? h("span", { class: "muted" }, ` · ${c.detail}`) : null))),
+    h("p", { class: "cn-why" }, mine ? "Your account is end-to-end encrypted: the server only has your list of files locked, so it is opened here, in your browser, each time the page is loaded. The more there is in the account, the longer this takes. Nothing is wrong."
+                                     : "This usually takes a moment. If it stays like this, the computer that runs the drive may be slow to answer or hard to reach from here."));
+}
+const connectTimer = setTimeout(() => {
+  if (status || statusSeen || main.firstElementChild) return;
+  connectBox = h("div", { class: "cn-box" });
+  main.replaceChildren(h("div", { class: "connecting", role: "status", "aria-live": "polite" }, connectBox));
+  drawConnecting();
+}, 500);
+window.addEventListener("dd-connecting", drawConnecting);
+function connected() {
+  clearTimeout(connectTimer);
+  window.removeEventListener("dd-connecting", drawConnecting);
+  if (connectBox && connectBox.isConnected) main.replaceChildren();
+  connectBox = null;
+}
+
+refreshStatus().then(connected, connected).then(render);          // who is signed in decides which pages there are
 // Asked again every few seconds while the page is shown (every second while something is moving), not
 // at all while it is in the background: it is asked again the moment it is looked at.
 (function poll() {

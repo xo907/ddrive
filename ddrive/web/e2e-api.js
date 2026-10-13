@@ -1182,6 +1182,9 @@
   E.ready = (async () => {
     if (!window.DDV) return;
     let s;
+    // What is being done while the page says "Connecting" (app.js shows it, if it takes long enough to be seen).
+    const stage = (step, detail) => { E.connecting = { step, detail: detail || "" }; window.dispatchEvent(new Event("dd-connecting")); };
+    stage("server");
     try {
       const r = await realFetch("/api/status", cred);
       if (SERVER && r.status === 403) { location.replace("/"); return new Promise(() => {}); }     // not an admin account
@@ -1192,15 +1195,20 @@
     if (!s.e2e) return;
     E.status = s;
     if (!DDV.usable) { document.body.innerHTML = '<p style="padding:40px">An end-to-end encrypted account can only be opened on an https address (or on the computer itself): a browser doesn\'t encrypt on plain http.</p>'; return new Promise(() => {}); }
+    stage("key");
     const meta = await DDV.keys.get().catch(() => null);
     if (!meta) return unlock("");
     const vault = new DDV.Vault(meta);
+    stage("list");
+    vault.heard = (x) => stage("list", x.nodes.size ? `${x.nodes.size.toLocaleString()} files and folders so far` : "");
     try { await vault.sync(); }
     catch (e) {
       if (e instanceof DDV.Gone) { location.reload(); return new Promise(() => {}); }
       return unlock(/can't be opened/.test(e.message) ? "The key kept in this browser is for another account." : `Your files could not be loaded: ${e.message}`);
     }
+    vault.heard = null;
     v = E.vault = vault;
+    stage("pictures");
     if (navigator.serviceWorker) {
       try {
         await navigator.serviceWorker.register("/sw.js");

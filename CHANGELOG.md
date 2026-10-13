@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.23.1 (2026-10-13)
+
+- **While the page is "Connecting", it says what it is doing.** A page that was just opened was empty
+  until it knew who is signed in, which for an end-to-end encrypted account takes as long as reading
+  and opening its list of files. Now, if that lasts more than half a second, the place where the page
+  will be shows quietly what is being done: asking the server, getting the key kept in the browser,
+  reading the list (with how many files and folders so far), getting ready to show pictures; and why
+  it takes time: the list is locked on the server and opened in the browser on every load.
+- It is only there while the top right says "Connecting", never afterwards, and is gone the moment the
+  page is drawn. A page that connects at once never shows it.
+
 ## 2.23.0 (2026-10-12)
 
 - **Files and the Gallery keep themselves up to date.** What another device, a synced folder, the

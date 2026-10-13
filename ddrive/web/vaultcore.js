@@ -164,6 +164,7 @@
           const raw = await this._openAll(this.meta, snap.object, snap.size);
           this.nodes = new Map(Object.entries(JSON.parse(dec.decode(raw)).nodes));
           this.seq = snap.seq; this.since = 0;
+          if (this.heard) this.heard(this);
           continue;
         }
         for (const [seq, batch] of got.batches) {
@@ -176,6 +177,7 @@
           }
           this.seq = seq;
         }
+        if (this.heard) this.heard(this);          // (whoever shows the list being read: how far it is)
         if (!got.more) return this;
       }
     }

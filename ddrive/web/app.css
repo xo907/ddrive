@@ -1332,3 +1332,21 @@ body.server #locks, body.server #apps, body.server .usage, body.server .tray, bo
 .vf .small { font-size: 12.5px; }
 .vf a.link { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .vf .err { color: var(--accent); }
+
+/* ------------------------------------------------------------------ connecting (app.js): only while the page doesn't know yet who is signed in */
+.connecting { display: grid; place-items: center; min-height: 60vh; padding: 24px; animation: cn-in .4s ease both; }
+.cn-box { width: 100%; max-width: 420px; color: var(--muted); }
+.cn-title { margin: 0 0 12px; font-size: 14px; font-weight: 500; color: var(--ink); }
+.cn-bar { height: 2px; margin: 0 0 16px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.cn-bar i { display: block; height: 100%; background: var(--muted); border-radius: 2px; transition: width .5s ease; }
+.cn-steps { margin: 0 0 16px; padding: 0; list-style: none; font-size: 13px; line-height: 1.5; }
+.cn-steps li { position: relative; padding: 3px 0 3px 20px; color: var(--faint); }
+.cn-steps li::before { content: ""; position: absolute; left: 3px; top: 10px; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.cn-steps li.done { color: var(--muted); }
+.cn-steps li.done::before { background: var(--ok); }
+.cn-steps li.now { color: var(--ink); }
+.cn-steps li.now::before { background: var(--ink); animation: cn-pulse 1.2s ease-in-out infinite; }
+.cn-why { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--faint); }
+@keyframes cn-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .connecting, .cn-steps li.now::before { animation: none; } }
