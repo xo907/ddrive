@@ -3021,6 +3021,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         "hidden_folders": (list, False, None),
         "lock_timeout_minutes": (float, False, lambda v: 0 <= v <= 100000),
         "webdav_enabled": (bool, False, None),
+        "chat_pace": (str, False, lambda v: v in ("gentle", "normal")),
         "thumbs_store": (str, False, lambda v: v in ("server", "browser")),
         "thumbs_bulk": (bool, False, None),
         "signup_mode": (str, False, lambda v: v in MODES),

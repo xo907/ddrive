@@ -93,6 +93,69 @@ class FakeAccount:
         return {u: u.replace("ex=1&", "ex=7fffffff&") for u in urls}
 
 
+class Answer:
+    """What Discord answers a request with, as urllib hands it over."""
+
+    def __init__(self, status=200, body=None, **headers):
+        self.status, self._body, self.headers = status, json.dumps(body if body is not None else []).encode(), headers
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class PaceTest(helpers.unittest.TestCase):
+    """Asking Discord as the account keeps its distance (chat.AccountAPI)."""
+
+    def api(self, answers, pace="normal"):
+        api = chat.AccountAPI("token")
+        api.pace = pace
+        api.sent = []
+
+        def answer(req):
+            api.sent.append(time.monotonic())
+            return answers.pop(0)
+        api._open = answer
+        return api
+
+    def test_requests_keep_a_distance(self):
+        with helpers.mock.patch.dict(chat.PACES, {"normal": (0.2, 0.5)}):
+            api = self.api([Answer(), Answer(), Answer(), Answer(), Answer()])
+            api.guilds(), api.dms(), api.guilds()                        # somebody is waiting: the short distance
+            self.assertGreaterEqual(api.sent[1] - api.sent[0], 0.2 * 0.85 - 0.02)
+            self.assertGreaterEqual(api.sent[2] - api.sent[1], 0.2 * 0.85 - 0.02)
+            stop = threading.Event()
+            api.messages("1", stop=stop), api.messages("1", stop=stop)   # in the background: the long one
+            self.assertGreaterEqual(api.sent[4] - api.sent[3], 0.5 * 0.85 - 0.02)
+
+    def test_an_announced_limit_is_waited_for_before_it_is_hit(self):
+        with helpers.mock.patch.dict(chat.PACES, {"normal": (0.0, 0.0)}):
+            api = self.api([Answer(**{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "0.6"}), Answer()])
+            api.guilds(), api.guilds()
+        self.assertGreaterEqual(api.sent[1] - api.sent[0], 0.6)
+        self.assertEqual(api.rate_limited, 0)                            # it never came to "slow down"
+
+    def test_after_a_slow_down_the_background_goes_slower(self):
+        with helpers.mock.patch.dict(chat.PACES, {"normal": (0.0, 0.1)}), helpers.mock.patch("ddrive.chat.random.uniform", lambda a, b: a):
+            api = self.api([Answer(429, {"retry_after": 0.2}), Answer(200, [{"id": "5"}]), Answer(), Answer()])
+            stop = threading.Event()
+            self.assertEqual(api.messages("1", stop=stop), [{"id": "5"}])     # waited, and asked again
+            self.assertEqual(api.rate_limited, 1)
+            self.assertGreaterEqual(api.sent[1] - api.sent[0], 0.2 + 0.5 - 0.02)
+            self.assertGreater(api._slow, 1.9)
+            api.messages("1", stop=stop), api.messages("1", stop=stop)
+            self.assertGreaterEqual(api.sent[3] - api.sent[2], 0.1 * 0.85 * 1.9 - 0.02)   # twice the distance, nearly
+            self.assertLess(api._slow, 2.0)                                               # ...and slowly back
+            stop.set()
+            with self.assertRaises(InterruptedError):
+                api.messages("1", stop=stop)
+
+
 class FakeGateway:
     last = None
 

@@ -148,6 +148,7 @@ class Config:
     web_password: str = ""             # ...and this password (a scrypt hash; set with 'webdav-password'). Not for the dashboard.
     web_passkeys: list = field(default_factory=list)  # passkeys that sign the owner in to the dashboard (public keys only)
     webdav_enabled: bool = False       # the drive for other apps at /dav/ (web_user and web_password)
+    chat_pace: str = "gentle"          # how fast Discord is asked as your account (Messages): gentle | normal
     thumbs_store: str = "server"       # where the dashboard keeps the thumbnails it makes: server | browser (each visitor's own)
     thumbs_bulk: bool = True           # the gallery's "Create all thumbnails" (off: they are made as pictures are looked at)
     signup_mode: str = "closed"        # who may make an account on the dashboard: closed | invite | public

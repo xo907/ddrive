@@ -1945,6 +1945,9 @@ const SETTING_ROWS = [
     ["uploads_per_minute", "Uploads per minute (per bot)", "0 = from the pace (gentle: 30, about 4.5 MB/s per bot).", "num"],
     ["deletes_per_minute", "Deletes per minute (per bot)", "Removing old pieces happens in the background. 0 = from the pace (gentle: 15).", "num"],
     ["requests_per_minute", "Other requests per minute", "Checks, syncing and refreshing links. 0 = from the pace (gentle: 90).", "num"],
+    ["chat_pace", "Messages pace", "How fast Discord is asked as your own account, for Messages (the drive itself talks to Discord as a bot, above). "
+      + "Gentle: an archive reads a page of 100 messages every 2 to 3 seconds, rests after every 20 pages and between conversations, and takes a breath between downloads. "
+      + "Normal: about one page a second, without the rests. Either way a limit Discord announces is waited for before it is reached, and after a “slow down” the archive goes on at half the speed for a while.", ["gentle", "normal"]],
   ]],
   ["Protection", [
     ["parity_enabled", "Self-healing", "Spare pieces let lost pieces be rebuilt.", "bool"],

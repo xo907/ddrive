@@ -3,6 +3,27 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.28.0 (2026-10-13)
+
+- **Messages asks Discord more carefully.** Reading your conversations uses your own account, not a
+  bot, and an account that asks a lot gets noticed. Now:
+  - **Requests keep a distance from each other**, all of them together: an archive and the dashboard
+    at the same time are never faster than one of them alone.
+  - **A limit Discord announces is waited for before it is reached.** Every answer says how many
+    requests are left and when there are more; when none are left, the next request waits for that,
+    instead of being sent and turned down.
+  - **After a "slow down", the archive goes on at half the speed** (down to an eighth if it keeps
+    happening) and comes back up slowly over the next few hundred requests. Before, it waited out
+    the one pause and carried on as fast as before.
+  - **An archive reads at a walking pace**: a page of 100 messages every 2 to 3 seconds instead of
+    about one a second, a rest of 8 to 16 seconds after every 20 pages, a few seconds between
+    conversations, and a breath between attachment downloads.
+- **Settings → Discord → "Messages pace"**: gentle (the above, and what it is set to) or normal (about
+  as fast as it was, still with the distance, the waiting for announced limits and the slowing down).
+  An archive of a long conversation takes two to three times as long on gentle.
+- Working links to attachments that Discord was asked for are no longer all forgotten at once when
+  there are many, so the same ones are not asked for again.
+
 ## 2.27.0 (2026-10-13)
 
 - **The owner decides where thumbnails are kept**: Settings → Thumbnails → "Keep thumbnails".

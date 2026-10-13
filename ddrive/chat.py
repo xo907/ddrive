@@ -66,17 +66,51 @@ def dm_name(channel):
     return ", ".join(n for n in names if n) or "Unknown DM"
 
 
+# How fast Discord is asked as the account, by pace (Settings, Discord, "Messages pace"): the least
+# seconds between two requests when somebody is waiting for the answer (the dashboard), and when
+# nobody is (an archive running in the background). All requests of the account share this, so an
+# archive and the dashboard together are never faster than one of them alone.
+PACES = {"gentle": (0.4, 1.6), "normal": (0.15, 0.5)}
+SLOWEST = 8.0             # after "slow down" answers the background waits up to this many times longer
+
+
 class AccountAPI:
+    """Requests to Discord as the account. Careful on purpose: an account is not a bot, and one that asks
+    a lot gets noticed. So requests keep a distance from each other (PACES), a limit Discord announces
+    is waited for before it is hit (its X-RateLimit headers) instead of after, and when it says "slow
+    down" anyway, the background goes on at half the speed for a good while (and back up slowly)."""
+
     def __init__(self, token, timeout=30.0):
         self.token = clean_token(token)
         self.timeout = timeout
         self.rate_limited = 0
+        self.pace = "gentle"
+        self._turn_lock = threading.Lock()
+        self._next = 0.0                 # (monotonic) not before this is the next request sent
+        self._slow = 1.0                 # the background's distance is multiplied by this
 
     def _open(self, req):
         return urllib.request.urlopen(req, timeout=self.timeout)
 
-    def request(self, method, path, query=None, stop=None, body=None):
-        """The decoded answer of one request. Waits out "slow down" answers; `stop` (an Event) ends the waiting."""
+    def _turn(self, stop, background):
+        """Wait until this request may go."""
+        fore, back = PACES.get(self.pace, PACES["gentle"])
+        gap = back * self._slow if background else fore
+        with self._turn_lock:
+            now = time.monotonic()
+            at = max(now, self._next)
+            self._next = at + gap * random.uniform(0.85, 1.3)
+        if at > now:
+            self._wait(at - now, stop)
+
+    def _hold(self, seconds):
+        with self._turn_lock:
+            self._next = max(self._next, time.monotonic() + seconds)
+
+    def request(self, method, path, query=None, stop=None, body=None, background=None):
+        """The decoded answer of one request. Waits its turn, and out "slow down" answers; `stop` (an Event)
+        ends the waiting. `background`: nobody is waiting for this one (by default: when it can be stopped)."""
+        background = (stop is not None) if background is None else background
         data_out = json.dumps(body).encode("utf-8") if body is not None else None
         pairs = [(k, v) for k, v in (query or {}).items() if v not in (None, "")]
         url = API + path + ("?" + urllib.parse.urlencode(pairs) if pairs else "")
@@ -84,14 +118,15 @@ class AccountAPI:
         while True:
             if stop is not None and stop.is_set():
                 raise InterruptedError("stopped")
+            self._turn(stop, background)
             req = urllib.request.Request(url, data=data_out, method=method, headers={
                 "Authorization": self.token, "User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9",
                 **({"Content-Type": "application/json"} if data_out is not None else {})})
             try:
                 with self._open(req) as resp:
-                    status, data = resp.status, resp.read()
+                    status, data, said = resp.status, resp.read(), resp.headers
             except urllib.error.HTTPError as e:
-                status, data = e.code, e.read()
+                status, data, said = e.code, e.read(), e.headers
             except OSError as e:
                 attempt += 1
                 if attempt > 4:
@@ -102,10 +137,20 @@ class AccountAPI:
                 body = json.loads(data) if data else None
             except ValueError:
                 body = None
+            try:                                 # the limit is used up: wait for it to be there again, before asking
+                if said is not None and said.get("X-RateLimit-Remaining") == "0":
+                    self._hold(min(120.0, float(said.get("X-RateLimit-Reset-After") or 0)) + 0.25)
+            except (TypeError, ValueError):
+                pass
             if status == 429:
                 self.rate_limited += 1
-                self._wait(float((body or {}).get("retry_after") or 2) + 0.3, stop)
+                self._slow = min(SLOWEST, self._slow * 2)
+                wait = float((body or {}).get("retry_after") or 2) + random.uniform(0.5, 1.5)
+                self._hold(wait)
+                self._wait(wait, stop)
                 continue
+            if background and self._slow > 1.0:
+                self._slow = max(1.0, self._slow * 0.985)      # (back to the usual distance over a few hundred requests)
             if status >= 500 and attempt < 4:
                 attempt += 1
                 self._wait(2.0 ** attempt, stop)

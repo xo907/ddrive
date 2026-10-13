@@ -363,6 +363,7 @@ class Archiver:
     def _work(self, job):
         chat, store, stats, cfg = self.chat, self.chat.store, job["stats"], job["config"]
         api, me = chat.api, chat.me["id"]
+        api.pace = chat.pace()                   # (as it is set now: it may have been changed since logging in)
         only = set(cfg["userIds"])
         if job["channels"] is None:
             job["channels"] = self._expand(job)
@@ -374,7 +375,7 @@ class Archiver:
             ch = channels[job["index"]]
             stats["current"] = ch["name"]
             cursor = job["cursor"] or (snowflake_from_ms(cfg["before"]) if cfg["before"] else None)
-            saved_here = unwritten = 0
+            saved_here = unwritten = pages = 0
             try:
                 while True:
                     page = api.messages(ch["id"], before=cursor, stop=self._stop)
@@ -394,7 +395,11 @@ class Archiver:
                                 continue
                             m = without_text(store, m)
                         if (cfg["downloadAttachments"] or cfg.get("attachmentsOnly")) and m.get("attachments"):
-                            stats["files"] += store.save_attachments(api, m, ch["guildId"], self._stop)
+                            got = store.save_attachments(api, m, ch["guildId"], self._stop)
+                            stats["files"] += got
+                            # (downloads don't follow one another without a breath either)
+                            if got and getattr(chat.d.cfg, "chat_pace", "gentle") != "normal" and self._stop.wait(random.uniform(0.3, 0.7) * got):
+                                raise InterruptedError("stopped")
                         if store.save_message(m, "archive", me, guild_id=ch["guildId"]):
                             saved_here += 1
                             unwritten += 1
@@ -407,7 +412,14 @@ class Archiver:
                     self._save()
                     if reached_start or len(page) < 100:
                         break
-                    if self._stop.wait(random.uniform(0.4, 1.0)):      # read like a person scrolling back, not a burst
+                    # Read like a person scrolling back, not a burst: a pause after every page, and a
+                    # longer one now and then (the requests themselves also keep their distance: chat.py).
+                    pages += 1
+                    gentle = getattr(chat.d.cfg, "chat_pace", "gentle") != "normal"
+                    pause = random.uniform(1.2, 2.8) if gentle else random.uniform(0.4, 1.0)
+                    if gentle and pages % 20 == 0:
+                        pause += random.uniform(8.0, 16.0)
+                    if self._stop.wait(pause):
                         raise InterruptedError("stopped")
                 self._log("info", f"{ch['name']}: {saved_here} new message(s).")
             except AccountError as e:
@@ -418,6 +430,10 @@ class Archiver:
             job.update(index=job["index"] + 1, cursor=None)
             stats["channelsDone"] = job["index"]
             self._save()
+            # A rest before the next conversation, when this one was more than a glance.
+            if pages and job["index"] < len(channels) and getattr(chat.d.cfg, "chat_pace", "gentle") != "normal":
+                if self._stop.wait(random.uniform(2.0, 5.0)):
+                    raise InterruptedError("stopped")
         self._log("success", f"Done. {stats['saved']} new message(s) and {stats['files']} file(s) are in {FOLDER} on your drive.")
 
 
@@ -523,11 +539,16 @@ class Chat:
             if self.d.web is not None:
                 self.d.web._cfg_mtime = os.path.getmtime(config_path())
 
+    def pace(self):
+        """How fast Discord is asked as the account (chat.PACES): gentle unless the owner said otherwise."""
+        return "normal" if getattr(self.d.cfg, "chat_pace", "gentle") == "normal" else "gentle"
+
     def connect(self, token, save=True):
         token = clean_token(token)
         if not token:
             raise ApiErrorProxy(400, "Paste your Discord token to log in.")
         api = self.make_api(token)
+        api.pace = self.pace()
         try:
             me = api.me()
         except AccountError as e:
@@ -568,8 +589,10 @@ class Chat:
         now = time.time()
         stale = [a for a in attachments if a.get("url") and self._urls.get(a.get("id"), (None, 0))[1] <= now
                  and (self._expires(a["url"]) or now + 600) < now + 300]
-        if len(self._urls) > 5000:
-            self._urls.clear()
+        if len(self._urls) > 5000:               # (the ones that ran out go; what is still good is not asked for again)
+            self._urls = {k: v for k, v in self._urls.items() if v[1] > now}
+            if len(self._urls) > 5000:
+                self._urls.clear()
         for i in range(0, len(stale), 50):
             some, got = stale[i:i + 50], {}
             if self.api is not None:
