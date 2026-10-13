@@ -811,7 +811,9 @@ def cmd_connect(args):
     try:
         client.login()
     except HostError as e:
-        if e.status != 401:
+        # (429: wrong tries from this address are being refused for a while, and as an end-to-end account's
+        # these words are a wrong try. As the owner's they may be right, and the right ones still get in.)
+        if e.status not in (401, 429):
             raise
         e2e, client = False, HostClient(address, phrase)     # the owner, or an account from before 2.5.0: the words are sent
         client.login()

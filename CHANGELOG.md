@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.20.4 (2026-10-12)
+
+- **`lite connect` with the owner's words works while wrong tries are being refused.** DDrive Lite
+  tries typed words as an end-to-end encrypted account's first, and as the owner's (or an earlier
+  account's) only when that is turned down. While wrong tries from the address were being refused it
+  stopped at the first answer, "Too many wrong tries", and never got to the second. It goes on now,
+  as the sign-in page does since 2.20.3. The host has to be on 2.20.3 or later for either to help.
+
 ## 2.20.3 (2026-10-12)
 
 - **The right 24 words always sign in.** After five wrong sign-ins from an address, every sign-in

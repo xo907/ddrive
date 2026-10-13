@@ -139,6 +139,11 @@ class LiteTest(helpers.DriveTest):
             return code, out.getvalue()
         self.assertEqual(run("ls")[0], 1)                              # not connected yet
         self.assertEqual(run("connect", self.address, "-p", words.key_to_phrase(os.urandom(32)))[0], 1)
+        # wrong tries from this address are refused for a while after a few: the right words still connect
+        for _ in range(4):
+            code, text = run("connect", self.address, "-p", words.key_to_phrase(os.urandom(32)))
+        self.assertEqual(code, 1)
+        self.assertIn("Too many wrong tries", text)
         code, text = run("connect", self.address, "-p", self.phrase)
         self.assertEqual(code, 0, text)
         self.assertIn("as the owner", text)
