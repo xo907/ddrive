@@ -2681,10 +2681,24 @@ function wantThumb(it, cb, first, batch, heard) {
   pumpThumbs();
 }
 
+/** A tile that asked for a thumbnail went out of sight before its turn came: it no longer waits for one
+ *  (it asks again when it is looked at). False when the thumbnail is being made already, or is done. */
+function unwantThumb(it, cb, heard) {
+  const job = thumbJobs.get(it.path);
+  if (!job) return false;
+  job.cbs = job.cbs.filter((f) => f !== cb);
+  job.heard = job.heard.filter((f) => f !== heard);
+  if (job.cbs.length) return true;             // (shown in another tile too, which still waits)
+  if (job.batch) job.first = false;            // a "create all" still wants it, in its own time
+  else thumbJobs.delete(it.path);
+  return true;
+}
+
 function pumpThumbs() {
   while (thumbActive < 2 && thumbJobs.size) {
-    // what is on screen goes before the rest of a "create all"
-    const job = [...thumbJobs.values()].reverse().find((j) => j.first) || thumbJobs.values().next().value;
+    // What is on screen goes before the rest of a "create all", from the top down (tiles that are out
+    // of sight are not in here: unwantThumb).
+    const job = [...thumbJobs.values()].find((j) => j.first) || thumbJobs.values().next().value;
     if (!job.first && thumbBatch && thumbBatch.stop) { thumbJobs.delete(job.it.path); continue; }
     thumbJobs.delete(job.it.path);
     thumbActive++;
@@ -2707,9 +2721,21 @@ function pumpThumbs() {
   if (thumbBatch && !thumbJobs.size && !thumbActive) { const b = thumbBatch; thumbBatch = null; b.tick(true); }
 }
 
+// Thumbnails are loaded, and made, for what is being looked at: the tiles on screen and a row or so
+// beyond, nothing further down until it is scrolled to. A tile that is scrolled past before its turn
+// came stops waiting (so a long scroll doesn't leave a queue of thumbnails for places nobody is looking
+// at), and one that only flies by while scrolling doesn't start at all: it has to stay a moment.
+const THUMB_AHEAD = "180px", THUMB_DWELL = 180;
 const thumbSeen = new IntersectionObserver((entries) => {
-  for (const e of entries) if (e.isIntersecting) { thumbSeen.unobserve(e.target); e.target.loadThumb(); }
-}, { root: main, rootMargin: "400px" });
+  for (const e of entries) {
+    const box = e.target;
+    clearTimeout(box.dwell);
+    if (!e.isIntersecting) { box.dropThumb(); continue; }
+    if (box.waiting) continue;
+    if (box.thumbThere()) box.loadThumb();     // (it exists and only has to be fetched: at once)
+    else box.dwell = setTimeout(() => box.loadThumb(), THUMB_DWELL);
+  }
+}, { root: main, rootMargin: THUMB_AHEAD });
 
 const THUMB_RING = '<circle class="t" cx="16" cy="16" r="12" pathLength="100"/><circle class="a" cx="16" cy="16" r="12" pathLength="100"/>';
 
@@ -2722,27 +2748,38 @@ function thumbBox(it) {
   const k = it.dir ? "folder" : kind(it.name);
   const box = h("span", { class: "thumb" }, icon(k === "pdf" ? "text" : k, it.dir ? "folder" : ""));
   if (!isMedia(it) || it.thumb === -1) return box;
+  const settle = () => { box.classList.remove("pending", "working", "loading"); const ring = box.querySelector(".thumb-ring"); if (ring) ring.remove(); };
+  const done = () => { box.waiting = null; thumbSeen.unobserve(box); };          // (nothing more to watch it for)
+  const show = (url) => {
+    done();
+    if (!url) return settle();                 // (none can be made of it: the icon it is)
+    const img = h("img", { alt: "", draggable: "false" });
+    img.onload = () => { settle(); box.replaceChildren(...[img, k === "video" && h("span", { class: "play" }, icon("play"))].filter(Boolean)); box.classList.add("has"); };
+    img.onerror = settle;
+    img.src = url;
+  };
+  const progress = (p) => {
+    box.classList.remove("pending");
+    box.classList.add("working");
+    box.style.setProperty("--p", String(Math.round(Math.max(0, Math.min(1, p)) * 100)));
+  };
+  box.thumbThere = () => !!thumbMade.get(it.path) || it.thumb === 1;
   box.loadThumb = () => {
-    const settle = () => { box.classList.remove("pending", "working", "loading"); const ring = box.querySelector(".thumb-ring"); if (ring) ring.remove(); };
-    const show = (url) => {
-      if (!url) return settle();               // (none can be made of it: the icon it is)
-      const img = h("img", { alt: "", draggable: "false" });
-      img.onload = () => { settle(); box.replaceChildren(...[img, k === "video" && h("span", { class: "play" }, icon("play"))].filter(Boolean)); box.classList.add("has"); };
-      img.onerror = settle;
-      img.src = url;
-    };
-    const progress = (p) => {
-      box.classList.remove("pending");
-      box.classList.add("working");
-      box.style.setProperty("--p", String(Math.round(Math.max(0, Math.min(1, p)) * 100)));
-    };
+    if (box.waiting) return;
     if (thumbMade.get(it.path)) show(thumbMade.get(it.path));
     else if (it.thumb === 1) { box.classList.add("loading"); show(thumbUrl(it)); }
     else {
+      box.waiting = true;
       box.classList.add("pending");
       box.append(h("svg", { viewBox: "0 0 32 32", class: "thumb-ring", "aria-hidden": "true", html: THUMB_RING }));
       wantThumb(it, show, true, false, progress);
     }
+  };
+  // Out of sight before its turn came: back to how it was, and it asks again when it is looked at.
+  box.dropThumb = () => {
+    if (!box.waiting || !unwantThumb(it, show, progress)) return;      // (being made already: that is finished)
+    box.waiting = null;
+    settle();
   };
   thumbSeen.observe(box);
   return box;

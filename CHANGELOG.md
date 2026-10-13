@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.24.1 (2026-10-13)
+
+- **Thumbnails are loaded and made where you are looking.** Every tile that had come near the screen
+  queued its thumbnail and kept its place, so after scrolling the page was busy with parts nobody was
+  looking at, and what was on screen waited behind them. Now only what is on screen, and about a row
+  beyond it, is worked on, from the top down. A tile that is scrolled past before its turn came stops
+  waiting and asks again when it is looked at; one that only flies by during a fast scroll doesn't
+  start at all. The next ones begin when you scroll to them.
+- A thumbnail that is already being made is finished, also if its tile has left the screen meanwhile
+  (two are made at a time).
+
 ## 2.24.0 (2026-10-13)
 
 - **A picture or video without a thumbnail shows that one is coming.** Until its thumbnail was made, a
