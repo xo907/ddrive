@@ -298,33 +298,10 @@ dialog input[hidden] { display: none; }
          padding: 10px 14px; border-radius: var(--radius); background: var(--ink); color: var(--bg); font-size: 13px;
          opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 40; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
-.tray { position: fixed; right: 20px; bottom: 20px; width: 280px; display: flex; flex-direction: column; gap: 6px;
-        z-index: 30; pointer-events: none; }
-.tray .item { pointer-events: auto; }
-.tray .item:nth-child(n+5) { display: none; }      /* a big batch of uploads from this browser: the first few show */
-.tray .item.discord { cursor: pointer; padding: 8px 8px 8px 12px; }
-.tray .item.discord .n { align-items: center; }
-.tray .item.discord .n span:first-child { font-weight: 500; flex: 1; min-width: 0; }
-.tray .item.discord .sub + .sub { margin-top: 2px; }
-.tray .item.discord .sub[hidden] { display: none; }
-.tray .item.discord .pct { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
-.tray .item.discord.mini { align-self: flex-end; padding: 5px 6px 5px 11px; }
-.tray .item.discord.mini .meter, .tray .item.discord.mini .sub, .tray .item.discord.mini .tray-min { display: none; }
-.tray .item.discord.mini .n span:first-child { flex: none; }
 .reload-bar { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center;
               gap: 12px; padding: 8px 10px 8px 14px; border: 1px solid var(--line); border-radius: var(--radius);
               background: var(--panel); box-shadow: var(--shadow); font-size: 13px; max-width: calc(100vw - 32px); }
-.tray-x { display: grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px;
-          background: none; color: var(--muted); cursor: pointer; }
-.tray-x:hover { background: var(--hover); color: var(--ink); }
-.tray-x svg { width: 14px; height: 14px; }
 .sync-note { margin-top: 8px; }
-.tray .item { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
-              box-shadow: var(--shadow); font-size: 12.5px; }
-.tray .item .n { display: flex; justify-content: space-between; gap: 8px; }
-.tray .item .n span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tray .item .n span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
-.tray .meter { margin-top: 8px; }
 .drop { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(251, 251, 250, .9);
         border: 2px dashed var(--faint); color: var(--muted); font-size: 15px; opacity: 0; pointer-events: none;
         transition: opacity .12s; z-index: 50; }
@@ -377,7 +354,6 @@ body.signin b { color: var(--ink); font-weight: 500; }
   .stat:nth-child(3) { padding-left: 0; border-left: 0; }
   .stat:nth-child(n+3) { border-top: 1px solid var(--line); }
   .kv { grid-template-columns: 130px minmax(0, 1fr); }
-  .tray { left: 16px; right: 16px; bottom: 80px; width: auto; }
   .sheet { width: 100%; border-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -654,9 +630,6 @@ button.link { padding: 0; border: 0; background: none; color: var(--ink); text-d
 }
 
 /* ------------------------------------------------------------------ progress in the tray */
-.tray .item .sub { margin-top: 6px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
-                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tray .item.discord .meter i { background: var(--accent); }
 .note-meter { width: 120px; margin: 0; }
 .note-meter i { background: var(--accent); }
 
@@ -986,7 +959,6 @@ dialog.palette input:focus { box-shadow: none; }
 .pal-row .l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pal-row .hint { flex: none; max-width: 45%; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pal-empty { padding: 18px 12px; }
-.tray .item .sub .link { margin-left: 6px; }
 @media (max-width: 760px) {
   .home-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .h-tiles { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
@@ -1305,7 +1277,7 @@ body.server #nav a:not(.srv) { display: none; }
 body.server #nav a.srv:last-of-type { margin-top: 10px; }
 .server-tag { flex: none; white-space: nowrap; }
 @media (max-width: 760px) { .server-tag { display: none; } body.server #nav a.srv:last-of-type { margin-top: 0; } }
-body.server #locks, body.server #apps, body.server .usage, body.server .tray, body.server .drop { display: none !important; }
+body.server #locks, body.server #apps, body.server .usage, body.server .drop { display: none !important; }
 
 /* ------------------------------------------------------------------ a page is being opened */
 /* From the click until the page is drawn (app.js, render): a line runs along the top and what is still
@@ -1381,7 +1353,6 @@ body.server #locks, body.server #apps, body.server .usage, body.server .tray, bo
 @media (min-width: 761px) { .app.rail .side a .nav-n { display: block; position: absolute; top: 1px; right: 1px; min-width: 15px; padding: 0 4px; font-size: 9.5px; line-height: 15px; }
                             .app.rail .side a .nav-n[hidden] { display: none; } }
 @media (max-width: 760px) { .nav-n { position: absolute; top: 2px; left: 50%; margin-left: 6px; min-width: 15px; padding: 0 4px; font-size: 9.5px; line-height: 15px; } }
-body.on-queue .tray { display: none; }       /* the page itself shows all of it */
 .q-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 18px 0 6px; }
 .q-bar .seg { min-width: 280px; }
 .q-bar .actions { margin-left: auto; }

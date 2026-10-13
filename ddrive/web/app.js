@@ -553,9 +553,7 @@ async function refreshStatus() {
   else { dot.className = "dot ok"; text.textContent = "Up to date"; }
   const quota = status.quota && status.quota.bytes;
   $("#usage").textContent = `${plural(st.files, "file")} · ${size(quota ? status.quota.used : st.bytes)}${quota ? " of " + size(quota) : ""}`;
-  showDiscordUploads(status.uploads, status.queued);
   showFetches(status.fetches);
-  showMove(status.move);
   queueCount();
   if (route.name === "queue" && queueDraw) queueDraw();
   if (note && route.name === "notes") noteUploadState();
@@ -638,7 +636,6 @@ function render() {
   for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("on", a.dataset.nav === route.name);
   $("#apps").classList.toggle("on", inMenu(TOOL_PAGES));
   $("#account").classList.toggle("on", route.name === "settings" || inMenu(DRIVE_PAGES));
-  document.body.classList.toggle("on-queue", route.name === "queue");      // (the cards in the corner say what that page says: app.css)
   closeSheet();
   leaveNotes();
   leaveMessages();
@@ -1302,7 +1299,6 @@ async function remove(it) {
 }
 
 // ------------------------------------------------------------------ uploads
-const tray = $("#tray");
 const UPLOAD_PART = 4 * 1024 * 1024;
 /** Send a file to the drive in parts (web.py, "a file sent in parts"), in the shape uploadFile uses
  *  (what a request object has of it). The server keeps what has arrived, also over a reload of the
@@ -1344,40 +1340,26 @@ function uploadFile(file, dir, t) {
     t.started = Date.now();
     queueTouched();
     const over = (ok, why) => { t.state = ok ? "done" : "failed"; t.note = ok ? "" : why || "Not uploaded"; t.ended = Date.now(); if (ok) t.done = t.size; queueTouched(); };
-    const bar = h("i", { style: "width:0%" });
-    const pct = h("span", {}, "0%");
-    const sub = h("div", { class: "sub" }, "Sending to the drive…");
-    const item = h("div", { class: "item" }, h("div", { class: "n" }, h("span", {}, file.name), pct), h("div", { class: "meter" }, bar), sub);
-    tray.prepend(item);
-    const started = Date.now();
+    // (How it goes is on the Queue page, and the number next to "Queue" in the menu says that something is.)
     // An end-to-end account: sealed here, then sent. The drive itself: sent in parts. Either way a part
     // that doesn't arrive (the connection dropped, the network changed) is sent again from where the
     // server has the file up to, so a big upload carries on by itself instead of failing or hanging.
     const xhr = window.E2E && E2E.active ? E2E.xhr() : partsXhr();
     xhr.open("POST", "/api/upload" + q({ path: join(dir, file.name) }));
     xhr.setRequestHeader("X-DD", "1");
-    xhr.upload.onnote = (text) => { t.note = text || ""; queueTouched(); if (text) { pct.textContent = "Waiting"; sub.textContent = text; } };
+    xhr.upload.onnote = (text) => { t.note = text || ""; queueTouched(); };
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       t.note = "";
       moved(t, Math.min(t.size, e.loaded));
       queueTouched();
-      const p = Math.round((e.loaded / e.total) * 100);
-      const bps = e.loaded / Math.max(0.3, (Date.now() - started) / 1000);
-      bar.style.width = p + "%";
-      pct.textContent = p < 100 ? p + "%" : "Saving";
-      sub.textContent = p < 100 ? `${size(e.loaded)} of ${size(e.total)} · ${speed(bps)} · ${eta((e.total - e.loaded) / bps)}`
-                                : "Saving on the drive…";
     };
     xhr.onload = () => {
       pageCache.clear();                       // (the lists that were kept don't have it)
       const ok = xhr.status >= 200 && xhr.status < 300;
-      pct.textContent = ok ? "Done" : "Failed";
-      sub.textContent = ok ? "On the drive · uploading to Discord next" : "Not uploaded";
       let why = "Upload failed";
-      if (!ok) { try { why = JSON.parse(xhr.responseText).error || why; } catch { /* no reason came with it */ } toast(why); }
+      if (!ok) { try { why = JSON.parse(xhr.responseText).error || why; } catch { /* no reason came with it */ } toast(`${file.name}: ${why}`); }
       over(ok, why);
-      setTimeout(() => item.remove(), ok ? 1500 : 6000);
       const up = { name: file.name, path: join(dir, file.name), dir: false, size: file.size, mtime: (file.lastModified || Date.now()) / 1000 };
       if (ok && isMedia(up) && file.size < 2 ** 31) {
         const src = URL.createObjectURL(file);
@@ -1385,7 +1367,7 @@ function uploadFile(file, dir, t) {
       }
       resolve(ok);
     };
-    xhr.onerror = () => { over(false, "The drive could not be reached"); pct.textContent = "Failed"; sub.textContent = "Not uploaded: the drive could not be reached"; setTimeout(() => item.remove(), 6000); resolve(false); };
+    xhr.onerror = () => { over(false, "The drive could not be reached"); toast(`${file.name}: the drive could not be reached`); resolve(false); };
     xhr.send(file);
   });
 }
@@ -1523,89 +1505,18 @@ document.addEventListener("drop", async (e) => {
   uploadAll(await droppedFiles(e), currentDir);
 });
 
-/** Uploads from the drive to Discord, live: one small card for all of them. (A card per file, as it
- *  used to be, came and went all the time during a big copy and sat on top of the page's buttons.)
- *  It can be made small (a line with the count and the percentage; remembered in this browser) or
- *  closed, and then stays away until the uploads are over. */
-let discordCard = null, discordHidden = false;
-let discordMini = (() => { try { return localStorage.getItem("dd-uploads-mini") === "1"; } catch { return false; } })();
 // A move between two end-to-end encrypted accounts (accountmove.js) runs on the server for as long as it
-// takes, whatever page is open and also after the window it was started in is closed. So while this
-// account is in one, on either side, a card says how far it is, on every page; clicking it opens the
-// move's own window again.
-let moveCard = null;
+// takes, whatever page is open and also after the window it was started in is closed. How far it is, is
+// on the Queue page, from where its own window is opened again.
 function moveText(m) {
   const into = m.side === "to";
   if (m.state === "open") return "Waiting for the other account to type the code";
   if (m.state === "copying") return m.objects ? `Copying: ${m.copied || 0} of ${m.objects} pieces · ${size(m.done_bytes || 0)} of ${size(m.bytes || 0)}`
                                               : "Copying: looking at what there is to copy…";
-  if (m.state === "ready") return into ? "Everything is copied. Click to check the code and take it in." : "Everything is copied. Waiting for the other account to take it in.";
+  if (m.state === "ready") return into ? "Everything is copied. Check the code and take it in (Show)." : "Everything is copied. Waiting for the other account to take it in.";
   return into ? "Taken in. The files are being stored as this account's." : "Taken in. This account is deleted once the files are stored.";
 }
-function showMove(m) {
-  if (!m || !window.accountMove) {
-    if (moveCard) { moveCard.el.remove(); moveCard = null; }
-    return;
-  }
-  if (!moveCard) {
-    const c = moveCard = { bar: h("i", { style: "width:0%" }), title: h("span", {}), pct: h("span", { class: "pct" }), sub: h("div", { class: "sub" }) };
-    const open = () => { if (!document.querySelector("dialog.modal .move")) window.accountMove.show(status && status.move); };
-    c.el = h("div", { class: "item discord", role: "button", tabindex: "0", title: "Show the move", onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
-             h("div", { class: "n" }, c.title, c.pct), h("div", { class: "meter" }, c.bar), c.sub);
-    tray.prepend(c.el);
-  }
-  const pct = m.state === "open" ? 0 : m.state === "copying" ? (m.bytes ? Math.min(100, (m.done_bytes || 0) / m.bytes * 100) : 0) : 100;
-  moveCard.title.textContent = m.side === "to" ? (m.from ? `Receiving account ${m.from}` : "Receiving another account") : `Moving into account ${m.to}`;
-  moveCard.pct.textContent = m.state === "copying" ? Math.floor(pct) + "%" : m.state === "ready" ? "Copied" : "";
-  moveCard.bar.style.width = pct + "%";
-  moveCard.sub.textContent = moveText(m);
-}
-
-function showDiscordUploads(list, queued) {
-  list = list || [];
-  const files = list.length + (queued || 0);
-  if (!files) discordHidden = false;
-  if (!files || discordHidden) {
-    if (discordCard) { discordCard.el.remove(); discordCard = null; }
-    return;
-  }
-  if (!discordCard) {
-    const c = discordCard = { bar: h("i", { style: "width:0%" }), title: h("span", {}), pct: h("span", { class: "pct" }),
-                              now: h("div", { class: "sub" }), sub: h("div", { class: "sub" }) };
-    const setMini = (on) => {
-      discordMini = on;
-      try { localStorage.setItem("dd-uploads-mini", on ? "1" : "0"); } catch { /* private window */ }
-      c.el.classList.toggle("mini", on);
-      c.el.title = on ? "Show the upload progress" : "Show what is uploading";
-      showDiscordUploads(status && status.uploads, status && status.queued);
-    };
-    const small = h("button", { class: "tray-x tray-min", type: "button", title: "Make this small", "aria-label": "Make the upload progress small",
-                                onclick: (e) => { e.stopPropagation(); setMini(true); } }, icon("minus"));
-    const away = h("button", { class: "tray-x", type: "button", title: "Close until these uploads are done", "aria-label": "Close the upload progress",
-                               onclick: (e) => { e.stopPropagation(); discordHidden = true; c.el.remove(); discordCard = null; } }, icon("close"));
-    const open = () => discordMini ? setMini(false) : go("#/queue");
-    c.el = h("div", { class: "item discord" + (discordMini ? " mini" : ""), role: "button", tabindex: "0",
-                      title: discordMini ? "Show the upload progress" : "Show what is uploading",
-                      onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
-             h("div", { class: "n" }, c.title, c.pct, small, away), h("div", { class: "meter" }, c.bar), c.now, c.sub);
-    tray.append(c.el);
-  }
-  // Everything the cards per file said, in the one: how many, how far, which file is going now and
-  // what is being done with it, how fast, and how many wait.
-  const bps = list.reduce((n, u) => n + (u.speed || 0), 0);
-  const cur = list.find((u) => u.stage !== "spare pieces" && u.pct < 100) || list[0];
-  const pct = cur ? Math.min(100, cur.pct || 0) : 0;           // of the file named below (the rest are still to come)
-  const c = discordCard;
-  c.title.textContent = discordMini ? `↑ ${Number(files).toLocaleString()}` : `Uploading ${plural(files, "file")}`;
-  c.pct.textContent = list.length ? Math.floor(pct) + "%" : "";
-  c.bar.style.width = pct.toFixed(1) + "%";
-  c.now.textContent = !cur ? "Waiting for their turn"
-    : `${base(cur.path)} · ${cur.stage === "spare pieces" ? "adding spare pieces" : `${size(cur.bytes)} of ${size(cur.size)}`}`;
-  c.now.title = list.map((u) => `${base(u.path)}: ${u.stage === "spare pieces" ? "adding spare pieces" : Math.floor(u.pct) + "%"}`).join("\n");
-  const more = ["To Discord", list.length > 1 && `${list.length} at once`, bps > 0 && speed(bps), queued > 0 && `${Number(queued).toLocaleString()} waiting`].filter(Boolean);
-  c.sub.textContent = more.join(" · ");
-  c.sub.hidden = !more.length;
-}
+const showTheMove = () => { if (window.accountMove && !document.querySelector("dialog.modal .move")) window.accountMove.show(status && status.move); };
 
 // ------------------------------------------------------------------ queue
 // Everything that is on its way, on one page that moves as it goes: what this browser is sending and
@@ -1653,7 +1564,7 @@ function queueCount() {
   if (!b) return;
   let n = 0;
   for (const t of transfers.values()) if (t.state === "going" || t.state === "waiting") n++;
-  if (status && !SERVER) n += (status.uploads || []).length + (status.queued || 0) + (status.fetches || []).filter((f) => f.state === "running").length;
+  if (status && !SERVER) n += (status.uploads || []).length + (status.queued || 0) + (status.fetches || []).filter((f) => f.state === "running").length + (status.move ? 1 : 0);
   b.textContent = n > 999 ? "999+" : String(n);
   b.hidden = !n;
 }
@@ -1722,10 +1633,12 @@ function queueRows(a) {
     }
   }
   const m = status && status.move;
-  if (m && m.state !== "open") {
+  if (m) {                                         // (its own window is opened again from here)
     const copying = m.state === "copying";
-    now.push({ key: "move", dir: m.side === "to" ? "down" : "up", ico: "user", pct: copying ? (m.bytes ? Math.min(100, ((m.done_bytes || 0) / m.bytes) * 100) : null) : 100, busy: copying && !m.bytes,
-               name: m.side === "to" ? (m.from ? `Receiving account ${m.from}` : "Receiving another account") : `Moving into account ${m.to}`, sub: moveText(m) });
+    now.push({ key: "move", dir: m.side === "to" ? "down" : "up", ico: "user", busy: copying && !m.bytes,
+               pct: m.state === "open" ? null : copying ? (m.bytes ? Math.min(100, ((m.done_bytes || 0) / m.bytes) * 100) : null) : 100,
+               name: m.side === "to" ? (m.from ? `Receiving account ${m.from}` : "Receiving another account") : `Moving into account ${m.to}`, sub: moveText(m),
+               act: window.accountMove ? ["Show", showTheMove] : null });
   }
   // (two sealed things of an end-to-end account can have the same name here: each still gets a row of its own)
   const seen = new Map();
@@ -4469,28 +4382,19 @@ function saveFromLink(dir) {
   url.focus();
 }
 
-const fetchCards = new Map();
+const fetchState = new Map();
+/** What is being saved from a link (the status says): how it goes is on the Queue page; here the folder
+ *  that is open is drawn again when one of them is there, and one that failed is said. */
 function showFetches(list) {
   const seen = new Set();
   for (const f of list || []) {
     seen.add(f.id);
-    let c = fetchCards.get(f.id);
-    if (!c) {
-      c = { bar: h("i", { style: "width:0%" }), pct: h("span", {}), sub: h("div", { class: "sub" }), state: "" };
-      c.el = h("div", { class: "item" }, h("div", { class: "n" }, h("span", { title: f.url }, f.name), c.pct), h("div", { class: "meter" }, c.bar), c.sub);
-      fetchCards.set(f.id, c);
-      tray.append(c.el);
-    }
-    const pct = f.total ? Math.min(100, (f.bytes / f.total) * 100) : 0;
-    c.bar.style.width = (f.state === "done" ? 100 : pct) + "%";
-    c.pct.textContent = f.state === "done" ? "Done" : f.state === "error" ? "Failed" : f.total ? Math.floor(pct) + "%" : size(f.bytes);
-    c.sub.replaceChildren(f.state === "error" ? (f.error || "Could not be fetched") : f.state === "done" ? `Saved in ${f.folder}`
-      : `From the web · ${size(f.bytes)}${f.total ? " of " + size(f.total) : ""} `,
-      f.state === "running" && h("button", { class: "link", onclick: () => api("/api/fetch/cancel", { id: f.id }) }, "Cancel"));
-    if (f.state === "done" && c.state === "running" && route.name === "files") render();
-    c.state = f.state;
+    const was = fetchState.get(f.id);
+    if (was === "running" && f.state === "done") { toast(`${f.name} saved in ${f.folder}`); if (route.name === "files") render(); }
+    if (was === "running" && f.state === "error") toast(`${f.name}: ${f.error || "could not be fetched"}`);
+    fetchState.set(f.id, f.state);
   }
-  for (const [id, c] of fetchCards) if (!seen.has(id)) { fetchCards.delete(id); c.el.remove(); }
+  for (const id of [...fetchState.keys()]) if (!seen.has(id)) fetchState.delete(id);
 }
 
 // ------------------------------------------------------------------ file requests

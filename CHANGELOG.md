@@ -3,6 +3,19 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.32.0 (2026-10-13)
+
+- **The progress cards in the bottom right corner are gone: the Queue page is where progress is.**
+  The cards for files being sent from the browser, for uploads to Discord, for files saved from a
+  link and for an account being moved sat on top of the page's buttons and said less than the Queue
+  does. None of them is shown any more. The number next to "Queue" in the menu says that something
+  is going or waiting, on every page, and the Queue shows all of it.
+- What the cards did besides showing progress is kept: a file that could not be uploaded is said in
+  a message with its name and the reason (and stays under "Finished" in the Queue); a file saved
+  from a link is said when it is there or failed, and the folder that is open shows it; a move of an
+  account is a row in the Queue from the moment it is started, counted in the menu's number, with
+  "Show" to open its window again.
+
 ## 2.31.3 (2026-10-13)
 
 - **An upload no longer stalls on the browser's store for blobs.** A part of a file was handed to
