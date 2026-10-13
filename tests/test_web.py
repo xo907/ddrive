@@ -198,6 +198,19 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("GET", "/api/status")[0], 401)
         self.assertEqual(self.login()[0], 303)
 
+    def test_the_dashboard_has_what_uploading_needs(self):
+        """The Upload button only opens the file chooser; what takes the chosen files and sends them was once
+        lost from the page without any test noticing (2.4.0 to 2.23.1)."""
+        page = self.req("GET", "/app.js", auth=False)[2].decode()
+        for needed in ("async function uploadAll(", "function uploadFile(", "async function droppedFiles(",
+                       'for (const id of ["#pick", "#pick-dir"])', 'document.addEventListener("drop"'):
+            self.assertIn(needed, page)
+        html = self.req("GET", "/", auth=False)[2]
+        self.login()
+        html = self.req("GET", "/")[2]
+        for needed in (b'id="pick"', b'id="pick-dir"', b'id="drop"'):
+            self.assertIn(needed, html)
+
     def test_the_status_says_when_files_changed(self):
         """Pages that list files look again when `rev` went up, instead of fetching their lists on a timer."""
         self.login()

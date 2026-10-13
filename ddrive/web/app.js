@@ -1221,10 +1221,78 @@ function uploadFile(file, dir) {
       }
       resolve(ok);
     };
-    xhr.onerror = () => { pct.textContent = "Failed"; setTimeout(() => item.remove(), 6000); resolve(false); };
+    xhr.onerror = () => { pct.textContent = "Failed"; sub.textContent = "Not uploaded: the drive could not be reached"; setTimeout(() => item.remove(), 6000); resolve(false); };
     xhr.send(file);
   });
 }
+
+/** Upload files into `dir`, one after the other: [{file, rel}], `rel` being the file's path below `dir`
+ *  (a folder that was picked or dropped keeps its folders). */
+async function uploadAll(entries, dir) {
+  let n = 0, failed = 0;
+  for (const { file, rel } of entries) {
+    const folders = rel.split("/").slice(0, -1);
+    let cur = dir;
+    for (const f of folders) {
+      cur = join(cur, f);
+      await api("/api/mkdir", { path: cur }).catch(() => null);   // already exists: fine
+    }
+    if (await uploadFile(file, cur)) n++; else failed++;
+  }
+  if (n) toast(`${plural(n, "file")} added.` + (status && status.e2e ? "" : ` ${n === 1 ? "It uploads" : "They upload"} to Discord in the background.`)
+               + (failed ? ` ${plural(failed, "file")} could not be uploaded.` : ""));
+  if (route.name === "files") render();
+}
+
+for (const id of ["#pick", "#pick-dir"]) {
+  $(id).addEventListener("change", (e) => {
+    const files = [...e.target.files].map((file) => ({ file, rel: file.webkitRelativePath || file.name }));
+    e.target.value = "";
+    if (files.length) uploadAll(files, currentDir);
+  });
+}
+
+async function readEntries(entry, prefix, out) {
+  if (entry.isFile) {
+    await new Promise((res) => entry.file((file) => { out.push({ file, rel: prefix + file.name }); res(); }, res));
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    for (;;) {
+      const batch = await new Promise((res) => reader.readEntries(res, () => res([])));
+      if (!batch.length) break;
+      for (const e of batch) await readEntries(e, prefix + entry.name + "/", out);
+    }
+  }
+}
+
+/** What was dropped from the computer, folders with what is in them: [{file, rel}]. */
+async function droppedFiles(e) {
+  const out = [];
+  const items = [...(e.dataTransfer.items || [])].map((i) => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (items.length) for (const entry of items) await readEntries(entry, "", out);
+  else for (const file of e.dataTransfer.files) out.push({ file, rel: file.name });
+  return out;
+}
+
+// Files dragged in from the computer anywhere over the Files page go into the folder that is open
+// (dropped on a folder, a part of the path or "Files" in the menu: into that one, see dropTarget).
+let dragDepth = 0;
+const drop = $("#drop");
+document.addEventListener("dragenter", (e) => {
+  if (SERVER || route.name !== "files" || !hasFiles(e)) return;
+  dragDepth++;
+  if (!e.target.closest || !e.target.closest(".drop-into")) $("#drop-to").textContent = currentDir === "/" ? "Drive" : base(currentDir);
+  drop.classList.add("on");
+});
+document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; drop.classList.remove("on"); } });
+document.addEventListener("dragover", (e) => { if (!SERVER && route.name === "files" && hasFiles(e)) e.preventDefault(); });
+document.addEventListener("drop", async (e) => {
+  dragDepth = 0;
+  drop.classList.remove("on");
+  if (SERVER || route.name !== "files" || !hasFiles(e) || e.defaultPrevented) return;      // (a folder it was dropped on took it: dropTarget)
+  e.preventDefault();
+  uploadAll(await droppedFiles(e), currentDir);
+});
 
 /** Uploads from the drive to Discord, live: one small card for all of them. (A card per file, as it
  *  used to be, came and went all the time during a big copy and sat on top of the page's buttons.)
@@ -4410,7 +4478,7 @@ function drawConnecting() {
     h("div", { class: "cn-bar" }, h("i", { style: `width:${mine ? Math.round((at + 0.5) / CONNECT_STEPS.length * 100) : 20}%` })),
     h("ol", { class: "cn-steps" }, (mine ? CONNECT_STEPS : CONNECT_STEPS.slice(0, 1)).map(([k, label], i) =>
       h("li", { class: i < at ? "done" : i === at ? "now" : "" }, label, i === at && c.detail ? h("span", { class: "muted" }, ` · ${c.detail}`) : null))),
-    h("p", { class: "cn-why" }, mine ? "Your account is end-to-end encrypted: the server only has your list of files locked, so it is opened here, in your browser, each time the page is loaded. The more there is in the account, the longer this takes. Nothing is wrong."
+    h("p", { class: "cn-why" }, mine ? "Your account is end-to-end encrypted: the server only has your list of files locked, so it is opened here, in your browser, each time the page is loaded. The more there is in the account, the longer this takes."
                                      : "This usually takes a moment. If it stays like this, the computer that runs the drive may be slow to answer or hard to reach from here."));
 }
 const connectTimer = setTimeout(() => {

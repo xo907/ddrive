@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.23.2 (2026-10-13)
+
+- **Uploading from the dashboard works again.** The Upload button, "Upload a folder…", dropping
+  files on the page and pasting a screenshot all did nothing: the part of the dashboard that takes
+  the chosen files and sends them, folders included, had been lost in 2.4.0 (a browser's console
+  said "uploadAll is not defined"). It is back, for the owner's drive and for accounts, and a file
+  that fails now says so in its card and in the count at the end.
+- The "Connecting" notice no longer ends with "Nothing is wrong".
+
 ## 2.23.1 (2026-10-13)
 
 - **While the page is "Connecting", it says what it is doing.** A page that was just opened was empty
