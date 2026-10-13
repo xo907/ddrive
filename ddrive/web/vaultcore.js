@@ -9,6 +9,7 @@
   const INFO_AUTH = enc.encode("ddrive vault v1 auth"), INFO_META = enc.encode("ddrive vault v1 meta");
   const AAD_OP = enc.encode("ddv1 op"), AAD_CHUNK = enc.encode("ddv1 chunk"), AAD_SYNC = enc.encode("ddv1 sync");
   const AAD_KEPT = enc.encode("ddv1 list kept in this browser");
+  const AAD_UPLOAD = enc.encode("ddv1 upload kept in this browser"), UPLOAD_KEPT = 7 * 86400 * 1000;
   const MAGIC = enc.encode("DDV1"), CHUNK_LOG = 20, CHUNK = 1 << CHUNK_LOG, OVERHEAD = 28, HEAD = 5;
   const PART_CHUNKS = 8;                 // sealed pieces go to the server this many at a time
   const SNAPSHOT_EVERY = 400;
@@ -385,6 +386,56 @@
       for (const id of ids) for (const sub of this._under(id)) { const n = this.nodes.get(sub); if (n && n.obj) objects.push(n.obj); }
       await this._send(...ids.map((id) => ({ op: "del", id })));
       if (objects.length) await call("/api/vault/delete", { method: "POST", json: { ids: objects } }).catch(() => null);
+    }
+
+    // ---------- an upload that is taken up again after the page was closed
+    // A file is sealed with a key made for that upload, which is in this page's memory until the file
+    // is in the list. A page that is reloaded, closed or crashes halfway has lost it, and what had
+    // arrived on the server with it: the same file sent again is another object under another key.
+    // So for a big file the key and the object's name are kept in this browser while it is on its
+    // way (IndexedDB, next to the account's key and sealed with it, like the list above): chosen
+    // again, the file goes on from what the server has. It is known again by where it goes, its size
+    // and its date, and by the fingerprint of its first piece, so that another file under the same
+    // name is not joined onto it. Kept for as long as the server keeps half a file (a week), and
+    // gone with the key (signing out).
+    async _upload(who, path, blob, mtime) {
+      const name = hex(await pieceSum(enc.encode(`${who}
+${path}
+${blob.size}
+${Math.round((mtime || 0) * 1000)}`)));
+      const first = hex(await pieceSum(new Uint8Array(await blob.slice(0, CHUNK).arrayBuffer())));
+      return { at: "upload:" + name, first };
+    }
+    /** What an earlier try of this upload was sealed with, {raw, obj}, or null. */
+    async resumable(who, path, blob, mtime) {
+      try {
+        const { at, first } = await this._upload(who, path, blob, mtime);
+        const kept = await store("readonly", (s) => s.get(at));
+        if (!kept || !kept.sealed || Date.now() - (kept.at || 0) > UPLOAD_KEPT) return null;
+        const rec = JSON.parse(dec.decode(await unseal(this.meta, new Uint8Array(kept.sealed), AAD_UPLOAD)));
+        // (not the same content after all, or an object that became a file's meanwhile: a new upload)
+        const used = [...this.nodes.values()].some((n) => n.obj === rec.obj || (n.versions || []).some((x) => x.obj === rec.obj));
+        if (rec.first !== first || rec.size !== blob.size || used) { await store("readwrite", (s) => s.delete(at)).catch(() => null); return null; }
+        return { raw: unb64(rec.raw), obj: rec.obj };
+      } catch (e) { return null; }               // (another key, a private window: a new upload)
+    }
+    async remember(who, path, blob, mtime, raw, obj) {
+      try {
+        const { at, first } = await this._upload(who, path, blob, mtime), now = Date.now();
+        const sealed = await seal(this.meta, enc.encode(JSON.stringify({ obj, raw: b64(raw), first, size: blob.size })), AAD_UPLOAD);
+        await store("readwrite", (s) => {
+          s.openCursor(IDBKeyRange.bound("upload:", "upload:￿")).onsuccess = (e) => {      // what nobody came back for
+            const c = e.target.result;
+            if (!c) return;
+            if (now - ((c.value || {}).at || 0) > UPLOAD_KEPT) c.delete();
+            c.continue();
+          };
+          return s.put({ sealed: sealed.buffer, at: now }, at);
+        });
+      } catch (e) { /* no room, or a private window: then it can't be taken up again after a reload */ }
+    }
+    async forget(who, path, blob, mtime) {
+      try { const { at } = await this._upload(who, path, blob, mtime); await store("readwrite", (s) => s.delete(at)); } catch (e) { /* nothing kept */ }
     }
 
     // ---------- files

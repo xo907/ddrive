@@ -3,6 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.34.0 (2026-10-13)
+
+- **An end-to-end encrypted account's upload goes on after the page was reloaded, closed or
+  crashed.** A file is sealed with a key made for that upload, which was in the page's memory only:
+  after a reload the same file was a new upload from the start, and what had arrived of it lay on the
+  server unused for a week. Now, for a file of 32 MB or more, the browser keeps that key and the
+  name of the sealed object while the file is on its way, in its own storage next to the account's
+  key and sealed with it. Choose the same file again, into the same folder, and it goes on from what
+  the server has of it ("Going on where it stopped…" in the Queue): what is there already is read
+  once more here for the file's fingerprint, and not sealed or sent again.
+- The file is known again by where it goes, its size, its date and the fingerprint of its first
+  piece: another file under the same name is a new upload, not joined onto the old pieces. What is
+  kept goes when the file is in the list, after a week (as long as the server keeps half a file),
+  and with the account's key when signing out. It is in this browser on this device only, and not
+  in a private window.
+
 ## 2.33.0 (2026-10-13)
 
 - **A file there is no room for right now waits; it is not failed.** Uploading from the dashboard, a

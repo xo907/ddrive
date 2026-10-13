@@ -126,6 +126,7 @@
     const all = new Uint8Array(await new Blob(parts).arrayBuffer());
     return all.subarray(start - first * C, Math.min(all.length, end - first * C + 1));
   }
+  const KEEP_UPLOAD = 32 * 1024 * 1024;      // from this size on, an upload can be taken up again after a reload
   /** Store a Blob at a path. A file that is replaced keeps what it was as an earlier version. */
   async function putFile(path, blob, mtime, heard, signal, again) {
     index();
@@ -137,9 +138,17 @@
     // `again` is kept by whoever may try this upload once more (the Queue's "Try again"): the object
     // and the key of the first try are in it, and with them a later try goes on where that one
     // stopped instead of sealing and sending the whole file anew. It never leaves this page.
+    // For a big file they are kept in this browser too, sealed (vaultcore.js, "taken up again after the
+    // page was closed"): chosen again after a reload or a crash, it goes on as well.
+    const kept = !!again && !!E.who && blob.size >= KEEP_UPLOAD;
+    if (kept && !again.obj) {
+      const was = await v.resumable(E.who, path, blob, mtime);
+      if (was) { again.raw = was.raw; again.obj = was.obj; heard({ note: "Going on where it stopped…" }); }
+    }
     const first = !(again && again.obj);
     const raw = first ? crypto.getRandomValues(new Uint8Array(32)) : again.raw, obj = first ? DDV.newId() : again.obj;
     if (again) { again.raw = raw; again.obj = obj; }
+    if (kept && first) await v.remember(E.who, path, blob, mtime, raw, obj);
     const print = await v._store(obj, await DDV.fileKey(raw), blob, heard, signal, undefined, !first);
     let n = { id: DDV.newId(), parent: up.id, name, dir: false, at: now(), by: ME }, dropped = [];
     if (old) {
@@ -153,6 +162,7 @@
     Object.assign(n, { size: blob.size, mtime: mtime || now(), obj, key: DDV.b64(raw), print: { obj, ...print } });
     // (the file is on the server by now: a connection that drops just here must not cost all of that)
     await DDV.patient(() => v._send({ op: "put", ...n }), signal, (note) => heard({ note }));
+    if (kept) await v.forget(E.who, path, blob, mtime);
     await drop(dropped);
     return n;
   }
@@ -1384,6 +1394,7 @@
     document.addEventListener("visibilitychange", () => { if (!document.hidden) v.sync().catch(() => null); });
     // The opened list is kept in this browser for the next visit (vaultcore.js, keep): soon after
     // starting, now and then while it changes, and when the page is put away.
+    E.who = s.account;
     const keep = () => v.keep(s.account);
     setTimeout(keep, 2500);
     setInterval(keep, 45000);
