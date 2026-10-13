@@ -303,7 +303,8 @@
       } catch (e) { spare = 0; }
       return { total: { files: files.length, bytes: files.reduce((t, f) => t + f.size, 0) },
                kinds: [...kinds.entries()].map(([kind, k]) => ({ kind, files: k[0], bytes: k[1] })).sort((a, b) => b.bytes - a.bytes),
-               largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: spare, saved: {},
+               largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, duplicates_checked: false,      // (not looked for here yet: the page says so)
+               versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: spare, saved: {},
                deleted: { count: [...v.nodes.values()].filter((n) => n.trash).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
     async locks() { return { count: 0, open: [], minutes: 0, mount: "", host: "" }; },

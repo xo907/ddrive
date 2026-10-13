@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.25.2 (2026-10-13)
+
+- **The Storage page of an end-to-end encrypted account no longer says there are no identical copies.**
+  It said "0 B, none found" and "No file is stored twice", but identical files are not looked for in
+  such an account at all yet. It now says "Not checked", and that two copies of a file are each
+  stored in full there (the server can't tell that they are the same).
+
 ## 2.25.1 (2026-10-13)
 
 - **The Storage page of an end-to-end encrypted account shows its spare pieces.** It said "0 B", as if

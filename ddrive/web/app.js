@@ -3925,7 +3925,8 @@ async function renderStorage() {
     h("div", { class: "stats" },
       stat("Files", size(d.total.bytes), plural(d.total.files, "file")),
       stat("Earlier versions", size(d.versions.bytes), plural(d.versions.count, "version") + " kept"),
-      stat("Identical copies", size(d.duplicate_bytes), d.duplicates.length ? plural(d.duplicates.length, "file") + " stored more than once" : "none found"),
+      d.duplicates_checked === false ? stat("Identical copies", "Not checked", "not looked for in this kind of account yet")
+        : stat("Identical copies", size(d.duplicate_bytes), d.duplicates.length ? plural(d.duplicates.length, "file") + " stored more than once" : "none found"),
       stat("Spare pieces", size(d.spare_bytes), saved ? `${size(saved)} saved this session` : "for self-healing")),
     h("h2", {}, "By kind"),
     h("div", { class: "kindbar" }, d.kinds.map((k) => h("i", { style: `width:${(k.bytes / total) * 100}%;background:${KIND_COLORS[k.kind] || "#888"}`, title: KIND_NAMES[k.kind] || k.kind }))),
@@ -3941,7 +3942,9 @@ async function renderStorage() {
     h("h2", {}, "Largest files"),
     d.largest.length ? h("div", { class: "list" }, listHead(), d.largest.slice(0, 20).map((it) => itemRow(it, { where: true }))) : h("p", { class: "muted" }, "No files yet."),
     h("h2", {}, "Identical files"),
-    d.duplicates.length ? [h("p", { class: "muted", style: "margin:0 0 12px" }, "The same content under several names. Identical pieces are stored once in Discord, so copies cost almost nothing there; removing them only tidies up."),
+    d.duplicates_checked === false ? h("p", { class: "muted", style: "max-width:680px" }, "Files with the same content are not looked for in an end-to-end encrypted account yet, so this page can't say whether there are any. "
+        + "Unlike on the owner's drive, two copies of a file here are each stored in full: every file is sealed with a key of its own, so the server can't tell that they are the same and keep only one.")
+    : d.duplicates.length ? [h("p", { class: "muted", style: "margin:0 0 12px" }, "The same content under several names. Identical pieces are stored once in Discord, so copies cost almost nothing there; removing them only tidies up."),
       h("div", { class: "dups" }, d.duplicates.slice(0, 50).map((g) => h("div", { class: "dup" },
         h("div", { class: "dup-head" }, h("b", {}, `${g.files.length} × ${size(g.size)}`),
           h("button", { class: "btn ghost small", onclick: () => removeCopies(g) }, "Keep the oldest, delete the rest")),
