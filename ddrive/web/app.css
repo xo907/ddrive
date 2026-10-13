@@ -1398,3 +1398,11 @@ body.on-queue .tray { display: none; }       /* the page itself shows all of it 
 @keyframes q-slide { from { transform: translateX(-100%); } to { transform: translateX(334%); } }
 @media (prefers-reduced-motion: reduce) { .q-row.busy .meter i { animation: none; width: 100%; opacity: .35; } }
 @media (max-width: 760px) { .q-bar .seg { min-width: 0; flex: 1; } }
+
+/* A file that is being uploaded is already there: the two side by side, and whether that goes for the rest. */
+.ex-box { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 12px; }
+.ex-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ex-row + .ex-row { border-top: 1px solid var(--line); }
+.ex-l { color: var(--muted); }
+.ex-all { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; cursor: pointer; }
+@media (max-width: 480px) { .ex-row { flex-direction: column; gap: 2px; } }

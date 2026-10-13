@@ -215,6 +215,7 @@ class WebTest(helpers.DriveTest):
         lost from the page without any test noticing (2.4.0 to 2.23.1)."""
         page = self.req("GET", "/app.js", auth=False)[2].decode()
         for needed in ("async function uploadAll(", "function uploadFile(", "async function droppedFiles(",
+                       "entries = await settleExisting(entries, dir);", "function askExisting(",       # (a file that is already there is asked about)
                        'for (const id of ["#pick", "#pick-dir"])', 'document.addEventListener("drop"'):
             self.assertIn(needed, page)
         html = self.req("GET", "/", auth=False)[2]

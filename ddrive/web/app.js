@@ -1393,7 +1393,58 @@ function uploadFile(file, dir, t) {
 /** Upload files into `dir`, one after the other: [{file, rel}], `rel` being the file's path below `dir`
  *  (a folder that was picked or dropped keeps its folders). */
 const UPLOADS_AT_ONCE = 3;
+
+/** A file that is being uploaded is already there: overwrite it, skip it, or stop. Answers
+ *  {what: "overwrite" | "skip" | "cancel", all}; `all` when the same goes for the `left` others. */
+function askExisting(file, into, there, left) {
+  return new Promise((resolve) => {
+    let what = "cancel";
+    const all = h("input", { type: "checkbox", style: "width:auto;height:auto;margin:0;flex:none" });
+    const say = (label, bytes, at) => h("div", { class: "ex-row" }, h("span", { class: "ex-l" }, label),
+      h("span", {}, `${size(bytes)} · ${fmtFull.format(new Date(at))}`));
+    const pick = (v) => () => { what = v; m.close(); };
+    const m = modal("This file is already there",
+      h("p", { style: "margin:0 0 14px" }, h("b", {}, file.name), ` is already in ${into === "/" ? "the drive" : "“" + base(into) + "”"}.`),
+      h("div", { class: "ex-box" }, say("There now", there.size, (there.mtime || 0) * 1000), say("Uploading", file.size, file.lastModified || Date.now())),
+      left > 0 && h("label", { class: "ex-all" }, all, `Do the same for the ${left === 1 ? "other one" : "other " + Number(left).toLocaleString()} that ${left === 1 ? "is" : "are"} already there`),
+      h("div", { class: "modal-actions" },
+        h("button", { class: "btn ghost", type: "button", style: "margin-right:auto", onclick: pick("cancel") }, "Cancel upload"),
+        h("button", { class: "btn ghost", type: "button", onclick: pick("skip") }, "Skip"),
+        h("button", { class: "btn", type: "button", onclick: pick("overwrite") }, "Overwrite")));
+    m.dlg.addEventListener("close", () => resolve({ what, all: all.checked }));
+  });
+}
+
+/** Of the files to upload ([{file, rel}] into `dir`), the ones to go ahead with: for each that is
+ *  already there the user says whether to overwrite or skip it (once for all of them, if they like).
+ *  null when the whole upload was called off. */
+async function settleExisting(entries, dir) {
+  const into = (rel) => rel.split("/").slice(0, -1).reduce(join, dir);
+  const there = new Map();                 // folder -> what is in it by name (nothing, for a folder that isn't there yet)
+  for (const folder of new Set(entries.map((e) => into(e.rel)))) {
+    const names = new Map();
+    try { for (const it of (await api("/api/list" + q({ path: folder }))).items) if (!it.dir) names.set(it.name, it); }
+    catch { /* a new folder */ }
+    there.set(folder, names);
+  }
+  const clash = entries.filter((e) => there.get(into(e.rel)).has(e.file.name));
+  if (!clash.length) return entries;
+  const skip = new Set();
+  let rule = null;
+  for (let i = 0; i < clash.length; i++) {
+    const e = clash[i];
+    const said = rule || await askExisting(e.file, into(e.rel), there.get(into(e.rel)).get(e.file.name), clash.length - i - 1);
+    if (said.what === "cancel") return null;
+    if (said.all) rule = said;
+    if (said.what === "skip") skip.add(e);
+  }
+  if (skip.size) toast(`${plural(skip.size, "file")} skipped: already there.`);
+  return entries.filter((e) => !skip.has(e));
+}
+
 async function uploadAll(entries, dir) {
+  entries = await settleExisting(entries, dir);
+  if (!entries || !entries.length) return;
   let n = 0, failed = 0;
   // The folders first (each once, parents before what is in them), then the files, a few at a time:
   // many small files spend most of their time waiting for the answer, not sending.

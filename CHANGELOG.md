@@ -3,6 +3,16 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.31.0 (2026-10-13)
+
+- **Uploading a file that is already there asks first.** Until now it was overwritten without a word.
+  Now, before anything is sent, the dashboard looks at the folders the files go into, and for each
+  file that is already there it shows the two side by side (size and date of the one there and of the
+  one being uploaded) and asks: **Overwrite**, **Skip**, or **Cancel upload** (nothing is sent at
+  all). "Do the same for the other N that are already there" applies the answer to the rest, so a
+  folder uploaded twice is one question. Files that aren't there yet go up as before. It is so for
+  the Upload button, folders, files dropped or pasted, for the owner and for accounts.
+
 ## 2.30.0 (2026-10-13)
 
 - **Queue: a page that shows everything on its way, live.** In the menu, with the number of things
