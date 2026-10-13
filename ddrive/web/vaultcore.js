@@ -142,20 +142,26 @@
   // neither finishes nor fails: it just hangs, and with it whatever waited for it. So a request that
   // carries a part of a file is given up the moment the browser says the network went away or changed,
   // and after a long while without an answer in any case; who sent it then sends it again (reconnect).
+  // "Changed" is the kind of network becoming another (Wi-Fi, cable, the phone's), where the browser
+  // says which it is. It is not every "change" the browser reports: Chrome reports one each time its
+  // guess of the connection's speed moves, which it does all the time while a big upload is running,
+  // and giving up the parts on each of those kept an upload from ever getting a part through
+  // ("The connection dropped. Trying again…" on every file at once, for as long as one watched).
   const STALLED = 240000;                // a part is 8 MiB at most: longer than this, and it isn't coming
   async function steady(send, signal) {
     const mine = new AbortController();
     const cut = () => mine.abort();
-    const net = navigator.connection;
+    const net = navigator.connection, kind = net && net.type;
+    const moved = () => { if (net.type !== kind) cut(); };
     const timer = setTimeout(cut, STALLED);
     window.addEventListener("offline", cut);
-    if (net && net.addEventListener) net.addEventListener("change", cut);
+    if (net && net.addEventListener) net.addEventListener("change", moved);
     if (signal) signal.addEventListener("abort", cut);
     try { return await send(mine.signal); }
     finally {
       clearTimeout(timer);
       window.removeEventListener("offline", cut);
-      if (net && net.removeEventListener) net.removeEventListener("change", cut);
+      if (net && net.removeEventListener) net.removeEventListener("change", moved);
       if (signal) signal.removeEventListener("abort", cut);
     }
   }

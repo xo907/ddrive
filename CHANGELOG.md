@@ -3,6 +3,18 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.31.2 (2026-10-13)
+
+- **Uploads from a browser no longer give their parts up over nothing.** Since 2.29.0 a part that is
+  on its way is given up and sent again when the browser says the network changed, so that an upload
+  doesn't hang after switching from Wi-Fi to a cable or the phone's connection. But Chrome also says
+  "changed" each time its estimate of the connection's speed moves, which it does all the time while
+  a big upload runs. Every such report gave up every part that was being sent, on all files at once,
+  and when they came faster than a part takes to send, nothing got through: "Waiting · The connection
+  dropped. Trying again…" on every file, for minutes. Now a part is only given up when the kind of
+  network really is another one (where the browser says which it is), when the browser goes
+  offline, or after four minutes without an answer.
+
 ## 2.31.1 (2026-10-13)
 
 - **"The server lost its place in this file. Upload it again." is gone: the upload goes back and
