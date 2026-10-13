@@ -29,8 +29,10 @@ DDrive turns a private Discord channel into a drive of your own: a drive letter 
 on your computer before it leaves, so Discord only ever stores random-looking pieces. There is no
 subscription, no storage plan and no account with anyone but Discord, and the whole thing is one small
 open-source program in plain Python that runs on your own PC, server or Raspberry Pi. If you want to,
-you can let other people in: each gets [an account](#accounts) with storage of their own, encrypted
-with their own key.
+you can let other people in: each gets [an account](#accounts) with storage of their own, which is
+end-to-end encrypted. Their files are locked in their own browser with 24 words that never leave it,
+so the computer that runs DDrive stores them without being able to read them.
+[Who can read what](#who-can-read-what) says exactly where each of the two is encrypted.
 
 <table>
 <tr>
@@ -39,7 +41,8 @@ with their own key.
 **Private by design**
 
 AES-256-GCM encryption happens on your machine. File names, folders and contents never reach Discord
-in readable form. The key is yours alone: 24 words you write down.
+in readable form. The key is yours alone: 24 words you write down. Other people's accounts are
+encrypted one step earlier, in their browser: not even your computer can read them.
 
 </td>
 <td width="33%" valign="top">
@@ -124,7 +127,7 @@ All of it is described further down: [Web dashboard](#web-dashboard) ·
 |---|---|---|
 | Price | Free and open source | Free for a few GB, then a subscription |
 | Storage limit | None of its own (Discord's rules apply) | 2 to 15 GB free |
-| Who can read your files | Only you: encrypted before upload, key never leaves your devices | The provider holds the keys |
+| Who can read your files | Only you: encrypted before upload, key never leaves your devices. An account you give somebody: only them, not you either | The provider holds the keys |
 | File names visible to the provider | No | Yes |
 | Versions, undelete, snapshots | Yes | Usually, often on paid plans |
 | Sharing links, file requests | Yes | Yes |
@@ -137,11 +140,53 @@ All of it is described further down: [Web dashboard](#web-dashboard) ·
 DDrive gives you the features and the privacy; it cannot give you a provider's promise. That is
 what the heads-up above is about.
 
-<p align="center"><img src="docs/images/overview.svg" alt="Your devices sync through DDrive, which stores encrypted pieces in a private Discord channel" width="100%"></p>
+<p align="center"><img src="docs/images/overview.svg" alt="Your devices run DDrive, which encrypts your files and stores them as pieces in a private Discord channel. Other people's accounts are sealed in their own browser first, so the computer that runs DDrive stores them without being able to read them." width="100%"></p>
 
 Files you save are staged locally, split into pieces, compressed when that helps, encrypted, and
 uploaded as attachments to your channel together with a few spare pieces. Reading downloads only the
 pieces that cover what is being read. More in [How it works](#how-it-works).
+
+### Who can read what
+
+There are two kinds of storage here, and they are encrypted in different places.
+
+**Your drive** is the drive letter or folder on the devices where you set DDrive up. Each of those
+devices has the drive's key (your 24-word recovery phrase) and encrypts every piece itself before it
+goes to Discord. So Discord can't read it, and the devices that run DDrive can: they have to, to show
+you your files. That includes the dashboard: when you sign in as the owner, the computer that runs
+DDrive opens the files and sends them to your browser.
+
+**An account** is storage on your dashboard for somebody else (or for you: your drive can be moved
+into one). It is end-to-end encrypted: its 24 words are made in the account holder's browser and
+never leave it, and every file, every file name and the list of files is locked there before anything
+is sent. The computer that runs DDrive only ever gets locked pieces under random names. It stores
+them on Discord like any others, with its own encryption around them, and repairs them when Discord
+loses one, all without a key that opens them.
+
+| | Your drive | An account |
+|---|---|---|
+| Encrypted | on each device that runs DDrive | in the account holder's browser (or in DDrive Lite or the phone app on their own device) |
+| The key | your recovery phrase, on your devices | the account's 24 words, with the account holder only |
+| Discord | can't read it | can't read it |
+| The computer that runs DDrive | **can** read it (it is that computer's drive) | **can't** read it: no file, no name, no key |
+| You, as the owner | yes | no. You can switch it off or delete it, not open it |
+| An [admin account](#admin-accounts) | no: it manages the drive without opening its files | no |
+| If the words are lost | set up again from the phrase on another device | gone for good: nobody can reset them |
+
+What the computer that runs DDrive still sees of an account: that locked things exist, about how big
+they are, when they come and go, and from which address.
+
+Three things that are not the rule, said plainly:
+
+- **A drive can be set up without encryption.** Then its pieces are on Discord as they are. The
+  default, and everything above, is with encryption on.
+- **Accounts made before 2.5.0**, and until 2.18.0 on a plain `http` address, were of an earlier kind:
+  encrypted, but with a key the computer running DDrive kept. No such account is made any more, and
+  the ones there are can only be read until they are [moved into an end-to-end encrypted one](#accounts).
+- **The dashboard's own code comes from the computer that runs DDrive.** A browser that encrypts runs
+  the code it is served, here as on every such website. The dashboard's page **Don't trust, verify**
+  (in the account button's menu) shows what is sent, lets you try the lock on your own files, and
+  gives the fingerprints of the code that is running, to compare with this repository.
 
 <p align="center">Made by <b>XO.ST</b> · <a href="https://github.com/xo907/ddrive">github.com/xo907/ddrive</a></p>
 
@@ -305,7 +350,10 @@ other devices**:
 - **Client-side encryption (AES-256-GCM).** Chunks and index backups are encrypted before upload.
   Attachments get random names (`chk_<random>.bin`) and empty message text, so Discord never sees
   file names, folder structure, or contents. It can still see how many chunks there are, their
-  sizes, and when they were uploaded.
+  sizes, and when they were uploaded. That is the drive, encrypted by the devices that run DDrive.
+  [Accounts](#accounts) on the dashboard are encrypted earlier still, in the account holder's own
+  browser, so the computer that runs DDrive can't read them either
+  ([who can read what](#who-can-read-what)).
 - **Self-healing.** Spare pieces rebuild what Discord loses; a background check finds losses early.
 - **Compression and de-duplication** before encryption; extra bots and parallel uploads for speed.
 - **Web dashboard** for your browser and phone (installable as an app): a home page, a photo and video

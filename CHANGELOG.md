@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.29.1 (2026-10-13)
+
+- **The README says who can read what.** The overview picture showed only the owner's drive: devices
+  that run DDrive, encrypting for Discord. That is still true of the drive, but it left out accounts,
+  which are sealed in the account holder's browser before the computer that runs DDrive gets them.
+  The picture now shows both, and a new section, "Who can read what", sets the two side by side:
+  where each is encrypted, who has the key, and what Discord, the computer that runs DDrive, the
+  owner and an admin can and can't read. It also says plainly what is not the rule: a drive set up
+  without encryption, accounts of the earlier kind, and that the dashboard's code comes from the
+  computer that runs DDrive. Nothing in the program changes.
+
 ## 2.29.0 (2026-10-13)
 
 - **An upload from the dashboard carries on by itself after the connection drops or the network is
