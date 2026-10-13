@@ -294,9 +294,16 @@
       const folders = live().filter(([, n]) => n.dir).map(([p, n]) => ({ path: p, bytes: (sizes.get(n.id) || [0, 0])[0], files: (sizes.get(n.id) || [0, 0])[1] }))
         .sort((a, b) => b.bytes - a.bytes).slice(0, 40);
       const s = stats();
+      // The spare pieces are made and kept by the server, of the sealed pieces it stores: it knows how
+      // much there is of them, this page doesn't (and said 0, as if the account had none).
+      let spare = 0;
+      try {
+        const told = statusText ? JSON.parse(statusText) : await (await realFetch("/api/status", cred)).json();
+        spare = (told.stats || {}).spare_bytes || 0;
+      } catch (e) { spare = 0; }
       return { total: { files: files.length, bytes: files.reduce((t, f) => t + f.size, 0) },
                kinds: [...kinds.entries()].map(([kind, k]) => ({ kind, files: k[0], bytes: k[1] })).sort((a, b) => b.bytes - a.bytes),
-               largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: 0, saved: {},
+               largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: spare, saved: {},
                deleted: { count: [...v.nodes.values()].filter((n) => n.trash).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
     async locks() { return { count: 0, open: [], minutes: 0, mount: "", host: "" }; },

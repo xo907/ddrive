@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.25.1 (2026-10-13)
+
+- **The Storage page of an end-to-end encrypted account shows its spare pieces.** It said "0 B", as if
+  the account had none. It has them: the server adds spare pieces to the sealed pieces it stores, as
+  for any drive, so that lost pieces can be rebuilt. The page works out its figures in the browser,
+  which doesn't know how much the server keeps of them, and filled in 0. It now asks the server.
+  ("Identical copies" stays at 0 for these accounts: every file is sealed with a key of its own, so
+  two copies of a file don't look alike to anybody.)
+
 ## 2.25.0 (2026-10-13)
 
 Faster, most of all for end-to-end encrypted accounts:
