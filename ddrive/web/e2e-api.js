@@ -146,7 +146,8 @@
       n.versions = versions.slice(0, 10);
     }
     Object.assign(n, { size: blob.size, mtime: mtime || now(), obj, key: DDV.b64(raw), print: { obj, ...print } });
-    await v._send({ op: "put", ...n });
+    // (the file is on the server by now: a connection that drops just here must not cost all of that)
+    await DDV.patient(() => v._send({ op: "put", ...n }), signal, (note) => heard({ note }));
     await drop(dropped);
     return n;
   }
@@ -1166,7 +1167,10 @@
     const x = { upload: {}, status: 0, responseText: "", setRequestHeader() {}, open(method, url) { x.url = new URL(url, location.href); },
       send(file) {
         putFile(x.url.searchParams.get("path"), file, (file.lastModified || Date.now()) / 1000,
-                (p) => { if (p.bytes !== undefined && x.upload.onprogress) x.upload.onprogress({ lengthComputable: true, loaded: p.bytes, total: file.size || 1 }); })
+                (p) => {
+                  if (p.bytes !== undefined && x.upload.onprogress) x.upload.onprogress({ lengthComputable: true, loaded: p.bytes, total: file.size || 1 });
+                  if (p.note !== undefined && x.upload.onnote) x.upload.onnote(p.note);      // (waiting for the server, or for the connection)
+                })
           .then(() => { x.status = 200; x.responseText = '{"ok":true}'; if (x.onload) x.onload(); },
                 (e) => { x.status = e.status || 500; x.responseText = JSON.stringify({ error: e.message }); if (x.onload) x.onload(); });
       } };

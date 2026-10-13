@@ -137,6 +137,53 @@
     clear: () => store("readwrite", (s) => s.clear()),
   };
 
+  // ------------------------------------------------------------ a connection that comes and goes
+  // A request that is under way when the network changes (Wi-Fi to the phone's, a cable pulled) often
+  // neither finishes nor fails: it just hangs, and with it whatever waited for it. So a request that
+  // carries a part of a file is given up the moment the browser says the network went away or changed,
+  // and after a long while without an answer in any case; who sent it then sends it again (reconnect).
+  const STALLED = 240000;                // a part is 8 MiB at most: longer than this, and it isn't coming
+  async function steady(send, signal) {
+    const mine = new AbortController();
+    const cut = () => mine.abort();
+    const net = navigator.connection;
+    const timer = setTimeout(cut, STALLED);
+    window.addEventListener("offline", cut);
+    if (net && net.addEventListener) net.addEventListener("change", cut);
+    if (signal) signal.addEventListener("abort", cut);
+    try { return await send(mine.signal); }
+    finally {
+      clearTimeout(timer);
+      window.removeEventListener("offline", cut);
+      if (net && net.removeEventListener) net.removeEventListener("change", cut);
+      if (signal) signal.removeEventListener("abort", cut);
+    }
+  }
+  /** Wait before trying again: `ms`, or shorter when the connection is back before that. */
+  function reconnect(ms, signal) {
+    return new Promise((resolve, reject) => {
+      const done = () => { clearTimeout(timer); window.removeEventListener("online", back); if (signal) signal.removeEventListener("abort", stop); };
+      const back = () => { done(); setTimeout(resolve, 800); };        // (a moment for it to settle)
+      const stop = () => { done(); reject(new DOMException("Stopped", "AbortError")); };
+      const timer = setTimeout(() => { done(); resolve(); }, navigator.onLine === false ? Math.max(ms, 60000) : ms);
+      window.addEventListener("online", back);
+      if (signal) { if (signal.aborted) return stop(); signal.addEventListener("abort", stop); }
+    });
+  }
+
+  /** Do something that needs the server until it works, waiting for the connection in between. What the
+   *  server refuses for a reason of its own (4xx) is not tried again, and neither is anything once `signal` says stop. */
+  async function patient(fn, signal, told = () => {}) {
+    for (let tries = 0; ;) {
+      try { return await fn(); } catch (e) {
+        if ((signal && signal.aborted) || e instanceof Gone || (e.status && e.status < 500 && e.status !== 408 && e.status !== 429)) throw e;
+        tries++;
+        told(navigator.onLine === false ? "No connection. It carries on when there is one again." : "The connection dropped. Trying again…");
+        await reconnect(Math.min(30000, 1500 * 2 ** Math.min(tries, 5)), signal);
+      }
+    }
+  }
+
   // ------------------------------------------------------------ talking to the server
   class Gone extends Error {}            // signed out (the session ran out)
   let also = "";                         // a session of the account, for a page that is signed in as somebody else too (moving.js)
@@ -341,14 +388,40 @@
     async _store(id, key, blob, heard = () => {}, signal, where = "/api/vault/object") {
       const size = blob.size, count = chunksOf(size), total = sealedSize(size), sums = [];
       let offset = 0, part = [new Uint8Array([...MAGIC, CHUNK_LOG])];
+      // A part that doesn't arrive (the connection dropped, the network was changed, the server was
+      // restarted) is sent again, from where the server says it has the file up to, for as long as it
+      // takes: an upload waits for the connection, it doesn't give up or hang. The very bytes that were
+      // being sent are kept for that (a piece sealed again would not fit the half of it that arrived).
       const post = async () => {
-        const body = new Blob(part);
+        let body = new Blob(part), tries = 0;
         part = [];
         for (;;) {
-          const got = await call(`${where}?id=${id}&size=${total}&offset=${offset}`,
-                                 { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal });
+          let got;
+          try {
+            got = await steady((s) => call(`${where}?id=${id}&size=${total}&offset=${offset}`,
+                                           { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal: s }), signal);
+          } catch (e) {
+            if ((signal && signal.aborted) || e instanceof Gone || (e.status && e.status < 500 && e.status !== 408 && e.status !== 429)) throw e;
+            tries++;
+            heard({ note: navigator.onLine === false ? "No connection. It carries on when there is one again." : "The connection dropped. Trying again…" });
+            await reconnect(Math.min(30000, 1500 * 2 ** Math.min(tries, 5)), signal);
+            continue;
+          }
           if (got.wait) { heard({ note: "Waiting for the server: " + got.wait }); await sleep(15000); continue; }
-          if (!got.ok) throw new Error("The server lost its place in this file. Upload it again.");
+          if (!got.ok) {                         // the server has another amount of the file than this part starts at
+            const have = Number(got.offset) || 0;
+            if (have >= offset && have <= offset + body.size) {      // some or all of this part arrived before it was cut off
+              body = body.slice(have - offset);
+              offset = have;
+              if (body.size) continue;
+              heard({ note: "" });
+              return;
+            }
+            // (the last part arrived whole and only the answer was lost: then the object is there)
+            if (where === "/api/vault/object" && offset + body.size === total
+                && await call(`${where}?id=${id}`, { raw: true, headers: { Range: "bytes=0-0" } }).then(() => true, () => false)) { offset = total; heard({ note: "" }); return; }
+            throw new Error("The server lost its place in this file. Upload it again.");
+          }
           offset = got.offset;
           heard({ note: "" });
           return;
@@ -416,7 +489,7 @@
   }
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
-                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64, pieceSum, prints,
+                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64, pieceSum, prints, steady, reconnect, patient,
                  /** Do what follows as this account (a session the server handed out), next to who the page is signed in as. */
                  as: (session) => { also = String(session || ""); },
                  /** Seal a file and send it as an object to an address that takes them (a file request's). */

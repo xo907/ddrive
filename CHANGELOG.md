@@ -3,6 +3,26 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.29.0 (2026-10-13)
+
+- **An upload from the dashboard carries on by itself after the connection drops or the network is
+  changed.** It used to hang (the card stood still for good) or fail, and the file had to be sent again
+  from the start. Now:
+  - **A part that doesn't arrive is sent again**, from where the server has the file up to, for as
+    long as it takes. Nothing that arrived is sent twice.
+  - **A request that hangs is noticed.** When the browser says the network went away or changed
+    (Wi-Fi to a phone's connection, a cable pulled), the part under way is given up at once and sent
+    again once there is a connection; after four minutes without an answer in any case.
+  - The upload's card says what it is waiting for ("No connection. It carries on when there is one
+    again.") instead of standing still.
+- **The owner's drive takes uploads in parts now** (4 MiB each), as an end-to-end encrypted account
+  already did. So a big file no longer depends on one long request, a reverse proxy's limit on a
+  request's size no longer stops it, and what arrived is kept by the server: the same file chosen
+  again, also after the page was loaded again, goes on where it stopped. The file keeps the date it
+  has on your device.
+- For an end-to-end encrypted account an upload that was interrupted by closing or reloading the page
+  still starts over: its pieces are sealed with a key that only that page had.
+
 ## 2.28.0 (2026-10-13)
 
 - **Messages asks Discord more carefully.** Reading your conversations uses your own account, not a

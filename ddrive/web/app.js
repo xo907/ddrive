@@ -1286,6 +1286,40 @@ async function remove(it) {
 
 // ------------------------------------------------------------------ uploads
 const tray = $("#tray");
+const UPLOAD_PART = 4 * 1024 * 1024;
+/** Send a file to the drive in parts (web.py, "a file sent in parts"), in the shape uploadFile uses
+ *  (what a request object has of it). The server keeps what has arrived, also over a reload of the
+ *  page: the same file sent again goes on where it stopped. */
+function partsXhr() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const x = { upload: {}, status: 0, responseText: "", setRequestHeader() {}, open(method, url) { x.url = new URL(url, location.href); },
+    send(file) {
+      const path = x.url.searchParams.get("path"), size = file.size, mtime = (file.lastModified || Date.now()) / 1000;
+      const at = (offset) => "/api/upload/part" + q(offset === undefined ? { path, size, mtime } : { path, size, offset, mtime });
+      const note = (text) => { if (x.upload.onnote) x.upload.onnote(text); };
+      const far = (bytes) => { if (x.upload.onprogress) x.upload.onprogress({ lengthComputable: true, loaded: bytes, total: size || 1 }); };
+      (async () => {
+        // where an earlier try got to
+        let offset = (await DDV.patient(() => DDV.steady((s) => DDV.call(at(), { signal: s })), null, note)).offset || 0;
+        if (offset > size) offset = 0;
+        far(offset);
+        for (;;) {
+          const body = file.slice(offset, Math.min(size, offset + UPLOAD_PART));
+          const got = await DDV.patient(() => DDV.steady((s) => DDV.call(at(offset), { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal: s })), null, note);
+          if (got.wait) { note("Waiting for the drive: " + got.wait); await sleep(15000); continue; }
+          if (!got.ok) { offset = Number(got.offset) || 0; far(offset); continue; }      // it has another amount of it: on from there
+          offset = got.offset;
+          far(offset);
+          if (got.done) return;
+        }
+      })().then(() => { x.status = 200; x.responseText = '{"ok":true}'; if (x.onload) x.onload(); },
+                (e) => {
+                  if (e instanceof DDV.Gone) return location.reload();
+                  x.status = e.status || 500; x.responseText = JSON.stringify({ error: e.message || "Upload failed" }); if (x.onload) x.onload();
+                });
+    } };
+  return x;
+}
 function uploadFile(file, dir) {
   return new Promise((resolve) => {
     const bar = h("i", { style: "width:0%" });
@@ -1294,9 +1328,13 @@ function uploadFile(file, dir) {
     const item = h("div", { class: "item" }, h("div", { class: "n" }, h("span", {}, file.name), pct), h("div", { class: "meter" }, bar), sub);
     tray.prepend(item);
     const started = Date.now();
-    const xhr = window.E2E && E2E.active ? E2E.xhr() : new XMLHttpRequest();      // (an end-to-end account: sealed here, then sent)
+    // An end-to-end account: sealed here, then sent. The drive itself: sent in parts. Either way a part
+    // that doesn't arrive (the connection dropped, the network changed) is sent again from where the
+    // server has the file up to, so a big upload carries on by itself instead of failing or hanging.
+    const xhr = window.E2E && E2E.active ? E2E.xhr() : partsXhr();
     xhr.open("POST", "/api/upload" + q({ path: join(dir, file.name) }));
     xhr.setRequestHeader("X-DD", "1");
+    xhr.upload.onnote = (text) => { if (text) { pct.textContent = "Waiting"; sub.textContent = text; } };
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const p = Math.round((e.loaded / e.total) * 100);
