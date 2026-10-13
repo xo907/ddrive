@@ -3926,7 +3926,8 @@ async function renderStorage() {
       stat("Files", size(d.total.bytes), plural(d.total.files, "file")),
       stat("Earlier versions", size(d.versions.bytes), plural(d.versions.count, "version") + " kept"),
       d.duplicates_checked === false ? stat("Identical copies", "Not checked", "not looked for in this kind of account yet")
-        : stat("Identical copies", size(d.duplicate_bytes), d.duplicates.length ? plural(d.duplicates.length, "file") + " stored more than once" : "none found"),
+        : stat("Identical copies", size(d.duplicate_bytes), (d.duplicates.length ? plural(d.duplicates.length, "file") + " stored more than once" : d.duplicates_open ? "none found so far" : "none found")
+                                                            + (d.duplicates_open ? ` · ${plural(d.duplicates_open, "file")} not compared yet` : "")),
       stat("Spare pieces", size(d.spare_bytes), saved ? `${size(saved)} saved this session` : "for self-healing")),
     h("h2", {}, "By kind"),
     h("div", { class: "kindbar" }, d.kinds.map((k) => h("i", { style: `width:${(k.bytes / total) * 100}%;background:${KIND_COLORS[k.kind] || "#888"}`, title: KIND_NAMES[k.kind] || k.kind }))),
@@ -3942,15 +3943,58 @@ async function renderStorage() {
     h("h2", {}, "Largest files"),
     d.largest.length ? h("div", { class: "list" }, listHead(), d.largest.slice(0, 20).map((it) => itemRow(it, { where: true }))) : h("p", { class: "muted" }, "No files yet."),
     h("h2", {}, "Identical files"),
+    copiesCheck(d),
     d.duplicates_checked === false ? h("p", { class: "muted", style: "max-width:680px" }, "Files with the same content are not looked for in an end-to-end encrypted account yet, so this page can't say whether there are any. "
         + "Unlike on the owner's drive, two copies of a file here are each stored in full: every file is sealed with a key of its own, so the server can't tell that they are the same and keep only one.")
-    : d.duplicates.length ? [h("p", { class: "muted", style: "margin:0 0 12px" }, "The same content under several names. Identical pieces are stored once in Discord, so copies cost almost nothing there; removing them only tidies up."),
+    : d.duplicates.length ? [h("p", { class: "muted", style: "margin:0 0 12px" }, d.copies_whole
+          ? "The same content under several names. In this account every copy is stored in full (each is sealed with a key of its own, so the server can't keep just one): deleting the copies frees their space, once they are gone from Deleted too."
+          : "The same content under several names. Identical pieces are stored once in Discord, so copies cost almost nothing there; removing them only tidies up."),
       h("div", { class: "dups" }, d.duplicates.slice(0, 50).map((g) => h("div", { class: "dup" },
         h("div", { class: "dup-head" }, h("b", {}, `${g.files.length} × ${size(g.size)}`),
           h("button", { class: "btn ghost small", onclick: () => removeCopies(g) }, "Keep the oldest, delete the rest")),
         g.files.map((f, i) => h("a", { class: "dup-file", href: "#/files" + enc(parent(f.path)) }, icon(kind(f.name) === "pdf" ? "text" : kind(f.name)),
           h("span", {}, f.path), i === 0 && h("span", { class: "tag" }, "Oldest"))))))]
-      : h("p", { class: "muted" }, "No file is stored twice."));
+      : h("p", { class: "muted" }, d.duplicates_open ? "None found among the files that were compared." : "No file is stored twice."));
+}
+
+/** An end-to-end encrypted account: the files that may have a copy and were never compared (they came
+ *  from another device, or before files carried fingerprints) are looked at here, in the browser, when
+ *  asked to. Only files of the same size are read, and of most of those only the first 1 MiB. */
+let copiesRun = null;                // the look that is running: {stop, text}
+function copiesCheck(d) {
+  if (!(window.E2E && E2E.active && E2E.findCopies) || d.duplicates_open === undefined) return null;
+  const line = h("span", { class: "muted" }, "");
+  const button = h("button", { class: "btn small", type: "button" });
+  const draw = () => {
+    button.textContent = copiesRun ? "Stop" : d.duplicates_open ? "Look for identical files" : "Look again";
+    button.className = copiesRun ? "btn ghost small" : "btn small";
+    if (copiesRun) { copiesRun.line = line; line.textContent = copiesRun.text; }      // (the page was left and come back to: it says it here now)
+  };
+  button.onclick = async () => {
+    if (copiesRun) { copiesRun.stop(); return; }
+    const ctl = new AbortController();
+    const run = copiesRun = { stop: () => ctl.abort(), text: "Starting…" };
+    draw();
+    try {
+      const got = await E2E.findCopies((p) => {
+        run.text = p.name ? `Comparing ${p.done + 1} of ${p.total}: ${base(p.name)}` : "Putting it together…";
+        if (run.line && run.line.isConnected) run.line.textContent = run.text;
+      }, ctl.signal);
+      toast(got.found.length ? `${plural(got.found.length, "file")} stored more than once` : "No identical files found");
+    } catch (e) {
+      toast(e.name === "AbortError" ? "Stopped. What was compared so far is kept." : e.message);
+    }
+    copiesRun = null;
+    if (route.name === "storage") renderStorage();
+  };
+  draw();
+  return h("div", { class: "settings", style: "margin:0 0 16px" }, h("div", { class: "set-row" },
+    h("div", { class: "set-text" },
+      h("div", { class: "t" }, d.duplicates_open ? `${plural(d.duplicates_open, "file")} may have a copy and ${d.duplicates_open === 1 ? "was" : "were"} not compared yet` : "Every file that could have a copy was compared"),
+      h("div", { class: "s" }, "Looking is done in this browser: files of the same size are fetched and opened here, of most only the first part, of the ones that start the same all of it. "
+        + "What is found out is kept with the files, so each is only ever read once. Keep this tab open while it runs; it can be stopped and carried on later."),
+      h("div", { class: "s" }, line)),
+    h("div", { class: "set-ctl" }, button)));
 }
 
 // ------------------------------------------------------------------ editing text files

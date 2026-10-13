@@ -3,6 +3,25 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.26.0 (2026-10-13)
+
+- **Identical files are found in end-to-end encrypted accounts.** There, two copies of a file are each
+  stored in full (the server can't tell that they are the same), and the Storage page could not say
+  whether there were any. Now:
+  - **Files carry a fingerprint of their content** from the moment they are uploaded in a browser.
+    It is in the sealed list with the file, so the server doesn't see it. Two such files that are
+    the same show up under Storage → Identical files at once.
+  - **"Look for identical files"** on the Storage page compares the ones that have no fingerprint yet:
+    what came from DDrive Lite or the phone app, from before this version, or with an account that
+    was moved in. It is done in the browser. Only files of the same size can be the same, so only
+    those are fetched, and of most of them just the first 1 MiB; the ones that start the same are
+    read whole. What is found out is kept with the files, so each is read once. It can be stopped
+    and carried on later; the page says how many files are still to be compared.
+  - "Keep the oldest, delete the rest" works as on the owner's drive. Here it frees real space, once
+    the copies are gone from Deleted too.
+- A fingerprint only counts for the content it was made of: a device that replaces a file without
+  knowing about fingerprints can't leave a wrong one behind.
+
 ## 2.25.2 (2026-10-13)
 
 - **The Storage page of an end-to-end encrypted account no longer says there are no identical copies.**

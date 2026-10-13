@@ -100,6 +100,17 @@
   /** What is said between this page and a device that syncs folders, sealed (the server passes it on unread). */
   const sealMessage = async (meta, obj) => b64(await seal(meta, enc.encode(JSON.stringify(obj)), AAD_SYNC));
   const openMessage = async (meta, text) => text ? JSON.parse(dec.decode(await unseal(meta, unb64(text), AAD_SYNC))) : null;
+  // A file's fingerprints, to tell whether two files are the same without comparing them byte by byte.
+  // A file of any size has to be fingerprinted as it goes by, piece by piece, and a browser can only
+  // fingerprint something it has whole. So: the SHA-256 of each 1 MiB piece, and the SHA-256 of those
+  // in a row ("sum": the same for the same content, and for nothing else). "head" is the first piece's
+  // alone: two files whose heads differ are different, which is known after reading 1 MiB of each.
+  const pieceSum = async (data) => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+  async function prints(sums) {
+    const all = new Uint8Array(sums.length * 32);
+    sums.forEach((s, i) => all.set(s, i * 32));
+    return { sum: "t1:" + hex(await pieceSum(all)), head: "h1:" + hex(sums[0] || await pieceSum(new Uint8Array(0))) };
+  }
   const chunksOf = (size) => Math.max(1, Math.ceil(size / CHUNK));
   const sealedSize = (size) => HEAD + size + OVERHEAD * chunksOf(size);
 
@@ -324,9 +335,11 @@
     }
 
     // ---------- files
-    /** Seal a Blob piece by piece and send it as object `id`. heard({bytes, note}) tells how it is going. */
+    /** Seal a Blob piece by piece and send it as object `id`. heard({bytes, note}) tells how it is going.
+     *  Returns the content's fingerprints (prints), worked out on the way from the pieces as they are
+     *  before sealing: they go into the sealed list with the file, to find identical files by. */
     async _store(id, key, blob, heard = () => {}, signal, where = "/api/vault/object") {
-      const size = blob.size, count = chunksOf(size), total = sealedSize(size);
+      const size = blob.size, count = chunksOf(size), total = sealedSize(size), sums = [];
       let offset = 0, part = [new Uint8Array([...MAGIC, CHUNK_LOG])];
       const post = async () => {
         const body = new Blob(part);
@@ -344,9 +357,11 @@
       for (let n = 0; n < count; n++) {
         if (signal && signal.aborted) throw new DOMException("Stopped", "AbortError");
         const data = new Uint8Array(await blob.slice(n * CHUNK, Math.min(size, (n + 1) * CHUNK)).arrayBuffer());
+        sums.push(await pieceSum(data));
         part.push(await seal(key, data, chunkLabel(n, n === count - 1)));
         if ((n + 1) % PART_CHUNKS === 0 || n === count - 1) { await post(); heard({ bytes: Math.min(size, (n + 1) * CHUNK) }); }
       }
+      return prints(sums);
     }
     /** Put a file into a folder (replacing one of the same name). Returns its node id. */
     async upload(file, parent, heard, signal, name) {
@@ -354,10 +369,12 @@
       const old = [...this.nodes.values()].find((n) => n.parent === parent && n.name === name);
       if (old && old.dir) throw new Error(`“${name}” is a folder here`);
       const raw = crypto.getRandomValues(new Uint8Array(32)), obj = newId();
-      await this._store(obj, await fileKey(raw), file, heard, signal);
+      const print = await this._store(obj, await fileKey(raw), file, heard, signal);
       const id = old ? old.id : newId();
+      // (the fingerprints name the object they are of: a device that replaces the content without
+      // knowing about them leaves them behind, and then they count for nothing)
       await this._send({ op: "put", id, parent, name, dir: false, size: file.size, mtime: (file.lastModified || Date.now()) / 1000,
-                         obj, key: b64(raw) });
+                         obj, key: b64(raw), print: { obj, ...print } });
       if (old && old.obj) call("/api/vault/delete", { method: "POST", json: { ids: [old.obj] } }).catch(() => null);
       return id;
     }
@@ -399,7 +416,7 @@
   }
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
-                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64,
+                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64, pieceSum, prints,
                  /** Do what follows as this account (a session the server handed out), next to who the page is signed in as. */
                  as: (session) => { also = String(session || ""); },
                  /** Seal a file and send it as an object to an address that takes them (a file request's). */

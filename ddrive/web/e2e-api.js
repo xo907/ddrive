@@ -135,7 +135,7 @@
     const old = byPath.get(path);
     if (old && old.dir) throw new Fail(400, `${path} is a folder`);
     const raw = crypto.getRandomValues(new Uint8Array(32)), obj = DDV.newId();
-    await v._store(obj, await DDV.fileKey(raw), blob, heard, signal);
+    const print = await v._store(obj, await DDV.fileKey(raw), blob, heard, signal);
     let n = { id: DDV.newId(), parent: up.id, name, dir: false, at: now(), by: ME }, dropped = [];
     if (old) {
       n = { ...old };
@@ -145,7 +145,7 @@
       dropped.push(...versions.slice(10).map((x) => x.obj));
       n.versions = versions.slice(0, 10);
     }
-    Object.assign(n, { size: blob.size, mtime: mtime || now(), obj, key: DDV.b64(raw) });
+    Object.assign(n, { size: blob.size, mtime: mtime || now(), obj, key: DDV.b64(raw), print: { obj, ...print } });
     await v._send({ op: "put", ...n });
     await drop(dropped);
     return n;
@@ -206,6 +206,93 @@
   };
   const starred = () => live().filter(([, n]) => n.star).sort((a, b) => b[1].star - a[1].star).map(([p, n]) => entry(p, n));
   const recent = (limit) => liveFiles().filter(([p]) => !p.startsWith("/Bookmarks/")).sort((a, b) => b[1].mtime - a[1].mtime).slice(0, limit).map(([p, n]) => entry(p, n));
+
+  // ------------------------------------------------------------ identical files
+  // Two copies of a file are sealed with different keys, so nobody but this page can tell that they are
+  // the same, and both are stored in full. Each file carries fingerprints of its content in the sealed
+  // list (vaultcore.js, prints): files uploaded since 2.26.0 from the day they came, the others once
+  // somebody has them looked at (findCopies). Only files of the same size can be the same; of those,
+  // only the ones whose first piece is the same ("head") are read whole.
+  const hexOf = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  /** A file's fingerprints, if they are of the content it has now (a device that doesn't know about them
+   *  leaves the old ones behind when it replaces the content: those say nothing). */
+  const printOf = (n) => (n.print && n.print.obj === n.obj ? n.print : null);
+  /** {found: groups of files with the same content, open: files that may have a copy and weren't compared yet}. */
+  function copies() {
+    index();
+    const bySize = new Map(), found = [], open = [];
+    for (const [p, n] of byPath) {
+      if (n.dir || !n.obj || !(n.size > 0)) continue;
+      if (!bySize.has(n.size)) bySize.set(n.size, []);
+      bySize.get(n.size).push([p, n]);
+    }
+    for (const [size, same] of bySize) {
+      if (same.length < 2) continue;
+      const byHead = new Map();
+      for (const e of same) {
+        const pr = printOf(e[1]);
+        if (!pr || !pr.head) { open.push(e); continue; }
+        if (!byHead.has(pr.head)) byHead.set(pr.head, []);
+        byHead.get(pr.head).push(e);
+      }
+      for (const alike of byHead.values()) {
+        if (alike.length < 2) continue;
+        const bySum = new Map();
+        for (const e of alike) {
+          const pr = printOf(e[1]);
+          if (!pr.sum) { open.push(e); continue; }
+          if (!bySum.has(pr.sum)) bySum.set(pr.sum, []);
+          bySum.get(pr.sum).push(e);
+        }
+        for (const g of bySum.values()) {
+          if (g.length > 1) found.push({ size, extra: size * (g.length - 1),
+                                         files: g.map(([p, n]) => ({ path: p, name: n.name, mtime: n.mtime || 0 })).sort((a, b) => a.mtime - b.mtime) });
+        }
+      }
+    }
+    return { found: found.sort((a, b) => b.extra - a.extra), open };
+  }
+  /** Look at the files that may have a copy and weren't compared yet: the first piece of each, and the
+   *  whole of those whose first piece is another's. What is found out is kept with the file, so it is
+   *  done once. heard({done, total, name}) tells how it is going; `signal` stops it. */
+  E.findCopies = async function (heard = () => {}, signal) {
+    const stopped = () => { if (signal && signal.aborted) throw new DOMException("Stopped", "AbortError"); };
+    let looked = 0;
+    for (let pass = 0; pass < 4; pass++) {
+      await v.sync();
+      const { open } = copies();
+      if (!open.length) break;
+      let done = 0, waiting = [], progress = false;
+      const flush = async () => { if (waiting.length) { const ops = waiting; waiting = []; await v._send(...ops); } };
+      for (const [path, n] of open) {
+        stopped();
+        heard({ done, total: open.length, name: path });
+        try {
+          const had = printOf(n), key = await DDV.fileKey(DDV.unb64(n.key)), count = DDV.chunksOf(n.size);
+          let print;
+          if (!had || !had.head) {                // its first piece (the whole of it, when that is all there is)
+            const raw = await v._range(n.obj, DDV.HEAD, Math.min(n.size, DDV.CHUNK) + DDV.OVERHEAD);
+            const first = await DDV.pieceSum(await DDV.unseal(key, raw, DDV.chunkLabel(0, count === 1)));
+            print = count === 1 ? { obj: n.obj, ...(await DDV.prints([first])) } : { obj: n.obj, head: "h1:" + hexOf(first) };
+          } else {                                // its first piece is another file's: all of it
+            const sums = [];
+            for await (const piece of v.read(n, signal)) sums.push(await DDV.pieceSum(piece));
+            print = { obj: n.obj, ...(await DDV.prints(sums)) };
+          }
+          waiting.push({ op: "set", id: n.id, fields: { print } });
+          progress = true;
+          if (waiting.length >= 40) await flush();
+        } catch (e) {
+          if (e.name === "AbortError" || e instanceof DDV.Gone) { await flush().catch(() => null); throw e; }
+        }                                         // (one that can't be read is left as it is: not compared)
+        done++; looked++;
+      }
+      await flush();
+      heard({ done, total: open.length, name: "" });
+      if (!progress) break;
+    }
+    return { looked, ...copies() };
+  };
 
   let statusMark = "", statusText = "", devicesAsked = 0;
   const GET = {
@@ -301,9 +388,12 @@
         const told = statusText ? JSON.parse(statusText) : await (await realFetch("/api/status", cred)).json();
         spare = (told.stats || {}).spare_bytes || 0;
       } catch (e) { spare = 0; }
+      const same = copies();
       return { total: { files: files.length, bytes: files.reduce((t, f) => t + f.size, 0) },
                kinds: [...kinds.entries()].map(([kind, k]) => ({ kind, files: k[0], bytes: k[1] })).sort((a, b) => b.bytes - a.bytes),
-               largest: files.slice(0, 40), folders, duplicates: [], duplicate_bytes: 0, duplicates_checked: false,      // (not looked for here yet: the page says so)
+               largest: files.slice(0, 40), folders, duplicates: same.found, duplicate_bytes: same.found.reduce((t, g) => t + g.extra, 0),
+               duplicates_open: same.open.length,          // files that may have a copy and weren't compared yet (E.findCopies)
+               copies_whole: true,                         // (here every copy is stored in full)
                versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: spare, saved: {},
                deleted: { count: [...v.nodes.values()].filter((n) => n.trash).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
