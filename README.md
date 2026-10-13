@@ -695,6 +695,18 @@ Settings) decides who may make one:
   taken in. Share links of the account that moved out stop working. `ddrive/transfer.py` describes it
   exactly.
 
+### Don't trust, verify
+
+The account button's menu has a page of that name. It says in plain words what happens to a file and
+then shows it, with the person's own files, in their own browser, using the code that really does the
+locking (`vaultcore.js`): a file of theirs being locked step by step (not uploaded), with buttons to
+try opening it with the right key, another key, and after one bit is changed; for an end-to-end
+encrypted account, a file that is really stored, fetched as the server has it and opened in the page;
+the list of files and the account as the server knows them; what becomes of 24 words; and the page
+itself, with the rule that keeps it from talking to other sites and the SHA-256 fingerprints of the
+scripts that are running, to compare with this repository. It tells the owner that the computer
+running the drive can read the drive, and ends with what it can't promise.
+
 ### Admin accounts
 
 An admin account is an **end-to-end encrypted account that may also manage the drive**. Like any

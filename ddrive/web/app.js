@@ -501,7 +501,8 @@ function render() {
                   snapshot: renderSnapshot, health: renderHealth, notes: renderNotes, shared: renderShared,
                   settings: isAccount() ? renderAccount : renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
-                  history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources };
+                  history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources,
+                  verify: () => window.renderVerify() };       // (verify.js)
   const loaded = () => { if (mine === nav) main.classList.remove("loading"); };
   viewNav = mine;
   try { Promise.resolve((views[route.name] || renderFiles)()).then(loaded, loaded); }
@@ -3733,7 +3734,7 @@ function openPalette() {
   const pages = [["Home", "#/home"], ["Files", "#/files/"], ["Gallery", "#/gallery/"], ["Starred", "#/starred"], ["Recent", "#/recent"],
                  ["Activity", "#/history"], ["Storage", "#/storage"], ["Resources", "#/resources"], ["Notes", "#/notes"], ["Bookmarks", "#/bookmarks"], ["Messages", "#/messages"], ["Contacts", "#/contacts"], ["Shared links", "#/shared"],
                  ["Folder sync", "#/sync"], ["Deleted files", "#/deleted"], ["Snapshots", "#/snapshots"], ["Log", "#/log"], ["Health", "#/health"],
-                 [isAccount() ? "Your account" : "Settings", "#/settings"]]
+                 [isAccount() ? "Your account" : "Settings", "#/settings"], ["Don't trust, verify", "#/verify"]]
     .filter(([, href]) => !notHere(href.slice(2)))
     .map(([label, href]) => ({ label, hint: "Go to", icon: "enter", run: () => go(href) }));
   const actions = [
@@ -4304,6 +4305,7 @@ $("#account").addEventListener("click", (e) => {
     "-",
     isAccount() && status.admin && { label: "Manage the drive", icon: "shield", run: () => { location.href = SERVER_URL; } },
     SERVER && { label: "Back to my files", icon: "folder", run: () => { location.href = "/"; } },
+    !SERVER && { label: "Don't trust, verify", icon: "shield", current: route.name === "verify", run: () => go("#/verify") },
     !SERVER && { label: "Find anything", icon: "open", run: openPalette },
     { label: "What's new", icon: "info", run: whatsNew },
     { label: "Sign out", icon: "signout", run: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } },

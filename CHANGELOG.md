@@ -3,6 +3,30 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.22.0 (2026-10-12)
+
+- **"Don't trust, verify": a page that shows how your files are kept private, with your own files.**
+  In the account button's menu. It explains in plain words what happens to a file, and then lets you
+  watch and check each part yourself. Every value on it is made in your browser by the same code
+  that locks an end-to-end encrypted account's files:
+  - **Watch a file being locked.** Choose any file (it is not uploaded or stored): its first bytes,
+    the key made for it, the pieces, each piece locked with AES-256-GCM, and exactly what a server
+    would be given. Then try to get in: with the right key, with another key, and after one bit is
+    changed.
+  - **Check a file that is really stored** (end-to-end encrypted accounts). Pick a file in your
+    account: the page fetches the server's copy and shows it as the server has it, under the random
+    name it is stored by, then opens it here, and shows that a changed copy is refused.
+  - **Look at what the server knows**: your list of files as the server stores it, and everything it
+    knows about the account, asked for on the spot.
+  - **From 24 words to keys**, with words made for the demonstration: what a server gets, and the
+    browser refusing to hand out the key of the list.
+  - **Check the page itself**: the rule that keeps the page from talking to any other site, as the
+    browser received it, and the fingerprints of the code that is running, to compare with GitHub.
+- It says what is true of who is looking: an end-to-end encrypted account, the owner's drive (which
+  the computer that runs it can read), or an account of the earlier kind. And it ends with what it
+  can't promise: the page comes from the server, what the server still sees, and that a lost key
+  can't be rescued.
+
 ## 2.21.0 (2026-10-12)
 
 - **Going from page to page is immediate and can't get stuck.**

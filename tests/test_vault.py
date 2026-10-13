@@ -230,7 +230,7 @@ class VaultTest(helpers.DriveTest):
         page = get("/signup")[1]
         self.assertIn(b"e2e-make", page)                               # the words are made in the browser...
         self.assertNotIn(b'name="phrase"', page)                       # ...and the page has nowhere to put them for sending
-        for name in ("/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js"):
+        for name in ("/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/verify.js"):
             self.assertEqual(get(name)[0], 200, name)
         self.device.client.status()
         mine = get("/", self.device.client.cookie)[1]                  # the same dashboard as everybody, with what answers it in the browser
