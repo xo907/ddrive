@@ -1779,6 +1779,14 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             # this one waits for them and keeps what it has, it isn't given up. (When none of them
             # gets on, nothing arrives any more, and then it is said that there is no room.)
             why = f"other uploads have to finish first ({full})"
+        if full and not why and self._query().get("patient") and fs.could_hold(size):
+            # No room right now, and nothing of this drive's is on its way out. But room on a disk
+            # comes and goes (other accounts' uploads, the cache, other programs), and what has
+            # arrived of a big file is worth more than an answer at once: for a sender that says it
+            # will wait (?patient=1: somebody at a dashboard, who sees why and can stop it; not a
+            # folder sync, which has other files to get on with) it waits and keeps what it has.
+            # Only a file the disk could never hold is refused.
+            why = f"there is no room for it right now ({full})"
         if why:
             skip()
             return self._json({"ok": False, "offset": min(have, offset), "wait": why})

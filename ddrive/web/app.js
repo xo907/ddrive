@@ -1305,21 +1305,24 @@ const UPLOAD_PART = 4 * 1024 * 1024;
  *  page: the same file sent again goes on where it stopped. */
 function partsXhr() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const stop = new AbortController(), gone = () => { if (stop.signal.aborted) throw new DOMException("Stopped", "AbortError"); };
   const x = { upload: {}, status: 0, responseText: "", setRequestHeader() {}, open(method, url) { x.url = new URL(url, location.href); },
+    abort() { stop.abort(); },                   // (what has arrived stays on the server: the same file sent again goes on from it)
     send(file) {
       const path = x.url.searchParams.get("path"), size = file.size, mtime = (file.lastModified || Date.now()) / 1000;
-      const at = (offset) => "/api/upload/part" + q(offset === undefined ? { path, size, mtime } : { path, size, offset, mtime });
+      // (patient: somebody is looking at this, so a file waits for room on the server instead of being refused)
+      const at = (offset) => "/api/upload/part" + q(offset === undefined ? { path, size, mtime } : { path, size, offset, mtime, patient: 1 });
       const note = (text) => { if (x.upload.onnote) x.upload.onnote(text); };
       const far = (bytes) => { if (x.upload.onprogress) x.upload.onprogress({ lengthComputable: true, loaded: bytes, total: size || 1 }); };
       (async () => {
         // where an earlier try got to
-        let offset = (await DDV.patient(() => DDV.steady((s) => DDV.call(at(), { signal: s })), null, note)).offset || 0;
+        let offset = (await DDV.patient(() => DDV.steady((s) => DDV.call(at(), { signal: s }), stop.signal), stop.signal, note)).offset || 0;
         if (offset > size) offset = 0;
         far(offset);
         for (;;) {
           const body = file.slice(offset, Math.min(size, offset + UPLOAD_PART));
-          const got = await DDV.patient(() => DDV.steady((s) => DDV.call(at(offset), { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal: s })), null, note);
-          if (got.wait) { note("Waiting for the drive: " + got.wait); await sleep(15000); continue; }
+          const got = await DDV.patient(() => DDV.steady((s) => DDV.call(at(offset), { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal: s }), stop.signal), stop.signal, note);
+          if (got.wait) { note("Waiting for the drive: " + got.wait); for (let i = 0; i < 15; i++) { await sleep(1000); gone(); } continue; }
           if (!got.ok) { offset = Number(got.offset) || 0; far(offset); continue; }      // it has another amount of it: on from there
           offset = got.offset;
           far(offset);
@@ -1328,7 +1331,8 @@ function partsXhr() {
       })().then(() => { x.status = 200; x.responseText = '{"ok":true}'; if (x.onload) x.onload(); },
                 (e) => {
                   if (e instanceof DDV.Gone) return location.reload();
-                  x.status = e.status || 500; x.responseText = JSON.stringify({ error: e.message || "Upload failed" }); if (x.onload) x.onload();
+                  x.status = stop.signal.aborted ? 499 : e.status || 500;
+                  x.responseText = JSON.stringify({ error: stop.signal.aborted ? "Stopped" : e.message || "Upload failed" }); if (x.onload) x.onload();
                 });
     } };
   return x;
@@ -1338,8 +1342,24 @@ function uploadFile(file, dir, t) {
     t = t || track({ dir: "up", name: file.name, path: join(dir, file.name), size: file.size, done: 0 });
     t.state = "going";
     t.started = Date.now();
-    queueTouched();
-    const over = (ok, why) => { t.state = ok ? "done" : "failed"; t.note = ok ? "" : why || "Not uploaded"; t.ended = Date.now(); if (ok) t.done = t.size; queueTouched(); };
+    t.ended = 0;
+    t.note = "";
+    t.markAt = undefined;
+    t.speed = 0;
+    // What trying again needs (the Queue's "Try again", after it failed or was stopped): the file, where it
+    // goes, and for an end-to-end account what the first try sealed it with (e2e-api.js, `again`). With
+    // those a later try goes on from what the server has of it. All of it is let go of when it is there.
+    t.file = file;
+    t.into = dir;
+    t.again = t.again || {};
+    const over = (ok, why) => {
+      t.state = ok ? "done" : t.stopped ? "stopped" : "failed";
+      t.note = ok ? "" : why || "Not uploaded";
+      t.ended = Date.now();
+      t.stop = null;
+      if (ok) { t.done = t.size; t.file = t.again = null; }
+      queueTouched();
+    };
     // (How it goes is on the Queue page, and the number next to "Queue" in the menu says that something is.)
     // An end-to-end account: sealed here, then sent. The drive itself: sent in parts. Either way a part
     // that doesn't arrive (the connection dropped, the network changed) is sent again from where the
@@ -1347,6 +1367,9 @@ function uploadFile(file, dir, t) {
     const xhr = window.E2E && E2E.active ? E2E.xhr() : partsXhr();
     xhr.open("POST", "/api/upload" + q({ path: join(dir, file.name) }));
     xhr.setRequestHeader("X-DD", "1");
+    xhr.again = t.again;
+    t.stopped = false;
+    t.stop = () => { t.stopped = true; xhr.abort(); };
     xhr.upload.onnote = (text) => { t.note = text || ""; queueTouched(); };
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
@@ -1358,7 +1381,7 @@ function uploadFile(file, dir, t) {
       pageCache.clear();                       // (the lists that were kept don't have it)
       const ok = xhr.status >= 200 && xhr.status < 300;
       let why = "Upload failed";
-      if (!ok) { try { why = JSON.parse(xhr.responseText).error || why; } catch { /* no reason came with it */ } toast(`${file.name}: ${why}`); }
+      if (!ok) { try { why = JSON.parse(xhr.responseText).error || why; } catch { /* no reason came with it */ } if (!t.stopped) toast(`${file.name}: ${why}`); }
       over(ok, why);
       const up = { name: file.name, path: join(dir, file.name), dir: false, size: file.size, mtime: (file.lastModified || Date.now()) / 1000 };
       if (ok && isMedia(up) && file.size < 2 ** 31) {
@@ -1583,13 +1606,16 @@ function queueRows(a) {
       const what = !up ? (mine ? "Opening in this browser and saving" : "Saving to this device")
         : pct >= 100 ? "Saving on the drive" : mine ? "Sealing in this browser and sending" : "Sending to the drive";
       const going = pct != null && pct < 100;
-      now.push({ ...r, pct, busy: pct == null, held: !!t.note,
+      now.push({ ...r, pct, busy: pct == null, held: !!t.note, act: up && t.stop ? ["Stop", t.stop] : null,
                  sub: t.note ? `Waiting · ${t.note}`
                    : [what, t.size ? `${size(t.done)} of ${size(t.size)}` : "", going && speed(t.speed), going && t.speed ? eta((t.size - t.done) / t.speed) : ""].filter(Boolean).join(" · ") });
     } else {
+      const far = t.size && t.done ? ` · it got to ${Math.floor((t.done / t.size) * 100)}%` : "";
       done.push({ ...r, when: t.ended || 0, bad: t.state === "failed",
-                  tag: t.state === "failed" ? "Failed" : t.state === "cancelled" ? "Taken out" : t.state === "browser" ? "" : up ? "Sent" : "Saved",
-                  sub: t.state === "failed" ? t.note || (up ? "Not uploaded" : "Not downloaded")
+                  act: up && t.file && (t.state === "failed" || t.state === "stopped") ? ["Try again", () => { uploadFile(t.file, t.into, t).then((ok) => { if (ok && route.name === "files") render(); }); }] : null,
+                  tag: t.state === "failed" ? "Failed" : t.state === "stopped" ? "Stopped" : t.state === "cancelled" ? "Taken out" : t.state === "browser" ? "" : up ? "Sent" : "Saved",
+                  sub: t.state === "failed" ? (t.note || (up ? "Not uploaded" : "Not downloaded")) + (up && t.file ? far : "")
+                    : t.state === "stopped" ? `Stopped${far}. “Try again” goes on from what the server has of it.`
                     : t.state === "cancelled" ? "Taken out of the queue before it was sent"
                     : t.state === "browser" ? "Handed to your browser, which saves it: its own list of downloads shows how far it is"
                     : `${up ? "Sent from this browser" : "Saved to this device"} · ${size(t.size)} · ${fmtTime.format(new Date(t.ended))}` });

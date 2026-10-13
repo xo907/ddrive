@@ -3,6 +3,24 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.33.0 (2026-10-13)
+
+- **A file there is no room for right now waits; it is not failed.** Uploading from the dashboard, a
+  file the computer that runs the drive had no room for at that moment was refused ("There is no room
+  for this file…") and what had arrived of it was deleted, although room on a disk comes and goes.
+  Now it waits, keeps what has arrived, and says why in the Queue ("Waiting for the server: there is
+  no room for it right now (7.1 GiB are free and 5.0 GiB of that are always kept free)"). It goes on
+  by itself when there is room. Only a file the disk could never hold (bigger than the whole disk
+  less what is always kept free) is refused. A folder sync from another computer or a phone is still
+  told at once, so that it gets on with its other files and comes back to this one.
+- **Stop, and Try again, in the Queue.** A file that is being sent has "Stop". One that failed or was
+  stopped has "Try again", and that goes on from what the server still has of it instead of from the
+  start: for the drive's own files as before, and now for an end-to-end encrypted account too, whose
+  browser keeps what the first try sealed the file with (in the page's memory only) and asks the
+  server how much of it is there. What is there already is only read once more here, for the file's
+  fingerprint; it is not sealed or sent again. This holds while the page stays open: after a reload
+  the same file is a new upload.
+
 ## 2.32.1 (2026-10-13)
 
 - **A long name no longer runs over the size next to it.** In lists that show a name with the place

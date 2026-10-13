@@ -156,7 +156,7 @@
     const timer = setTimeout(cut, STALLED);
     window.addEventListener("offline", cut);
     if (net && net.addEventListener) net.addEventListener("change", moved);
-    if (signal) signal.addEventListener("abort", cut);
+    if (signal) { signal.addEventListener("abort", cut); if (signal.aborted) cut(); }
     try { return await send(mine.signal); }
     finally {
       clearTimeout(timer);
@@ -391,10 +391,23 @@
     /** Seal a Blob piece by piece and send it as object `id`. heard({bytes, note}) tells how it is going.
      *  Returns the content's fingerprints (prints), worked out on the way from the pieces as they are
      *  before sealing: they go into the sealed list with the file, to find identical files by. */
-    async _store(id, key, blob, heard = () => {}, signal, where = "/api/vault/object") {
+    async _store(id, key, blob, heard = () => {}, signal, where = "/api/vault/object", resume = false) {
       const size = blob.size, count = chunksOf(size), total = sealedSize(size), sums = [];
       const head = () => new Uint8Array([...MAGIC, CHUNK_LOG]);
-      let offset = 0, part = [head()], back = 0;
+      let offset = 0, part = [head()], back = 0, skip = 0;
+      // (`patient`: this is somebody's page, which says why it waits and can be stopped; the server
+      // then lets a file wait for room instead of refusing it)
+      const to = (at) => `${where}?id=${id}&size=${total}&offset=${at}&patient=1`;
+      // An upload that is taken up again (`resume`: the same object and key as the try before, in
+      // this page) goes on after the last whole piece the server still has of it. Asked for with a
+      // part that starts at the end, which no server takes: it answers with how much it has.
+      if (resume && count > 1) {
+        const got = await patient(() => steady((s) => call(to(total), { method: "POST", body: new Uint8Array(0), headers: { "Content-Type": "application/octet-stream" }, signal: s }), signal),
+                                  signal, (note) => heard({ note })).catch((e) => { if (signal && signal.aborted) throw e; return null; });
+        const have = got && !got.ok ? Number(got.offset) || 0 : 0;
+        skip = have < HEAD ? 0 : Math.min(count - 1, Math.floor((have - HEAD) / (CHUNK + OVERHEAD)));
+        if (skip) { offset = HEAD + skip * (CHUNK + OVERHEAD); part = []; }
+      }
       // A part that doesn't arrive (the connection dropped, the network was changed, the server was
       // restarted) is sent again, from where the server says it has the file up to, for as long as it
       // takes: an upload waits for the connection, it doesn't give up or hang. The very bytes that were
@@ -413,7 +426,7 @@
         for (;;) {
           let got;
           try {
-            got = await steady((s) => call(`${where}?id=${id}&size=${total}&offset=${offset}`,
+            got = await steady((s) => call(to(offset),
                                            { method: "POST", body, headers: { "Content-Type": "application/octet-stream" }, signal: s }), signal);
           } catch (e) {
             // (507: the server has no room for the file, and says so. Trying again would only hide that.)
@@ -423,7 +436,11 @@
             await reconnect(Math.min(30000, 1500 * 2 ** Math.min(tries, 5)), signal);
             continue;
           }
-          if (got.wait) { heard({ note: "Waiting for the server: " + got.wait }); await sleep(15000); continue; }
+          if (got.wait) {
+            heard({ note: "Waiting for the server: " + got.wait });
+            for (let i = 0; i < 15; i++) { await sleep(1000); if (signal && signal.aborted) throw new DOMException("Stopped", "AbortError"); }
+            continue;
+          }
           if (!got.ok) {                         // the server has another amount of the file than this part starts at
             const have = Number(got.offset) || 0;
             if (have >= offset && have <= offset + body.length) {      // some or all of this part arrived before it was cut off
@@ -449,6 +466,10 @@
         if (signal && signal.aborted) throw new DOMException("Stopped", "AbortError");
         const data = new Uint8Array(await blob.slice(n * CHUNK, Math.min(size, (n + 1) * CHUNK)).arrayBuffer());
         sums.push(await pieceSum(data));
+        if (n < skip) {                          // the server has this piece from the try before: only its fingerprint is needed
+          if (n % 32 === 31 || n === skip - 1) heard({ bytes: (n + 1) * CHUNK, note: n === skip - 1 ? "" : "Going on where it stopped: looking at what is there already…" });
+          continue;
+        }
         part.push(await seal(key, data, chunkLabel(n, n === count - 1)));
         if ((n + 1) % PART_CHUNKS === 0 || n === count - 1) {
           const have = await post();
@@ -457,6 +478,7 @@
             offset = from ? HEAD + from * (CHUNK + OVERHEAD) : 0;
             part = from ? [] : [head()];
             sums.length = from;
+            skip = 0;
             n = from - 1;
             heard({ bytes: from * CHUNK, note: "The server had less of this file than was sent. Going on from where it is…" });
             continue;

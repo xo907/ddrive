@@ -272,12 +272,30 @@ class LiteSyncTest(helpers.DriveTest):
         other = os.path.join(folder, "0" * 32 + ".part")
         with open(other, "wb") as f:
             f.write(b"x")
-        room, self.host.fs.room_for = self.host.fs.room_for, lambda n: "the disk has 1.0 GiB free"
+        tight = [True]
+        room, self.host.fs.room_for = self.host.fs.room_for, lambda n: "the disk has 1.0 GiB free" if tight[0] else None
         try:
             got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={2 * part}", data[2 * part:3 * part]))
             self.assertEqual((got["ok"], got["offset"]), (False, 2 * part))
             self.assertIn("other uploads have to finish first", got["wait"])
             os.remove(other)
+            # somebody at a dashboard, who sees why and can stop it, waits for room as well (the disk could hold the file)
+            got = json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={2 * part}&patient=1", data[2 * part:3 * part]))
+            self.assertEqual((got["ok"], got["offset"]), (False, 2 * part))
+            self.assertIn("no room for it right now", got["wait"])
+            self.assertEqual(json.loads(self.page.request("GET", f"/api/upload/part?{q}"))["offset"], 2 * part)       # and keeps what it has
+            hold, self.host.fs.could_hold = self.host.fs.could_hold, lambda n: False                                    # ...unless it never could
+            try:
+                with self.assertRaises(lite.HostError) as e:
+                    self.page.request("POST", f"/api/upload/part?{q}&offset={2 * part}&patient=1", data[2 * part:3 * part])
+                self.assertEqual(e.exception.status, 507)
+            finally:
+                self.host.fs.could_hold = hold
+            tight[0] = False
+            for off in (0, part):
+                json.loads(self.page.request("POST", f"/api/upload/part?{q}&offset={off}", data[off:off + part]))
+            tight[0] = True
+            # a folder sync has other files to get on with: it is told at once
             with self.assertRaises(lite.HostError) as e:
                 self.page.request("POST", f"/api/upload/part?{q}&offset={2 * part}", data[2 * part:3 * part])
             self.assertEqual(e.exception.status, 507)

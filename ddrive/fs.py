@@ -225,6 +225,15 @@ class DDriveFS(Operations):
         return (f"{free / 2**30:.1f} GiB are free and {reserve / 2**30:.1f} GiB of that are always kept free "
                 "(min_free_disk_bytes)")
 
+    def could_hold(self, nbytes):
+        """False when a file of `nbytes` can't be on this computer's disk whatever else goes from it:
+        the whole disk, less what is always kept free, is smaller than that."""
+        reserve = int(getattr(self.cfg, "min_free_disk_bytes", 0) or 0)
+        try:
+            return shutil.disk_usage(self.staging_dir).total - reserve >= nbytes
+        except OSError:
+            return True
+
     def adopt_file(self, path, src, mtime=None):
         """Make the local file `src` the content of drive file `path` by moving it there (no second
         copy on this disk); it then uploads like any other. Returns its size. `src` is gone afterwards."""

@@ -127,15 +127,20 @@
     return all.subarray(start - first * C, Math.min(all.length, end - first * C + 1));
   }
   /** Store a Blob at a path. A file that is replaced keeps what it was as an earlier version. */
-  async function putFile(path, blob, mtime, heard, signal) {
+  async function putFile(path, blob, mtime, heard, signal, again) {
     index();
     path = clean(path);
     const cut = path.lastIndexOf("/"), up = at(path.slice(0, cut) || "/", "dir"), name = path.slice(cut + 1);
     if (!name) throw new Fail(400, "missing file name");
     const old = byPath.get(path);
     if (old && old.dir) throw new Fail(400, `${path} is a folder`);
-    const raw = crypto.getRandomValues(new Uint8Array(32)), obj = DDV.newId();
-    const print = await v._store(obj, await DDV.fileKey(raw), blob, heard, signal);
+    // `again` is kept by whoever may try this upload once more (the Queue's "Try again"): the object
+    // and the key of the first try are in it, and with them a later try goes on where that one
+    // stopped instead of sealing and sending the whole file anew. It never leaves this page.
+    const first = !(again && again.obj);
+    const raw = first ? crypto.getRandomValues(new Uint8Array(32)) : again.raw, obj = first ? DDV.newId() : again.obj;
+    if (again) { again.raw = raw; again.obj = obj; }
+    const print = await v._store(obj, await DDV.fileKey(raw), blob, heard, signal, undefined, !first);
     let n = { id: DDV.newId(), parent: up.id, name, dir: false, at: now(), by: ME }, dropped = [];
     if (old) {
       n = { ...old };
@@ -1185,15 +1190,17 @@
   // ------------------------------------------------------------ what app.js uses directly
   /** Stands in for the request app.js uploads a file with (it reports how far it is as the real one does). */
   E.xhr = function () {
+    const stop = new AbortController();
     const x = { upload: {}, status: 0, responseText: "", setRequestHeader() {}, open(method, url) { x.url = new URL(url, location.href); },
+      abort() { stop.abort(); },                 // (what has arrived stays on the server: x.again goes on from it)
       send(file) {
         putFile(x.url.searchParams.get("path"), file, (file.lastModified || Date.now()) / 1000,
                 (p) => {
                   if (p.bytes !== undefined && x.upload.onprogress) x.upload.onprogress({ lengthComputable: true, loaded: p.bytes, total: file.size || 1 });
                   if (p.note !== undefined && x.upload.onnote) x.upload.onnote(p.note);      // (waiting for the server, or for the connection)
-                })
+                }, stop.signal, x.again)
           .then(() => { x.status = 200; x.responseText = '{"ok":true}'; if (x.onload) x.onload(); },
-                (e) => { x.status = e.status || 500; x.responseText = JSON.stringify({ error: e.message }); if (x.onload) x.onload(); });
+                (e) => { x.status = stop.signal.aborted ? 499 : e.status || 500; x.responseText = JSON.stringify({ error: stop.signal.aborted ? "Stopped" : e.message }); if (x.onload) x.onload(); });
       } };
     return x;
   };
