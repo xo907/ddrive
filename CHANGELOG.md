@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.32.1 (2026-10-13)
+
+- **A long name no longer runs over the size next to it.** In lists that show a name with the place
+  it is in on a line below (Activity on Home and its own page, what a search finds, Deleted, Health,
+  a check's findings, the biggest folders under Storage), a long name was not cut short and was
+  drawn across the size, most of all on a phone. It is cut with "…" now. In Activity the name gives
+  way first, so that what was done with the file ("added", "moved from …") stays readable, and the
+  whole of it shows on hovering.
+
 ## 2.32.0 (2026-10-13)
 
 - **The progress cards in the bottom right corner are gone: the Queue page is where progress is.**

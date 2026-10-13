@@ -197,6 +197,14 @@ a.row:hover, .row.click:hover { background: var(--hover); }
 .row:hover .more, .row .more:focus-visible { opacity: 1; }
 .name { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .name .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A name with a line under it (where it is) sits in a box of its own next to the icon. There the name
+   has to be a block to be cut short with "…": as running text it ran on over the size next to it. */
+.name > span { min-width: 0; }
+.name > span > .label { display: block; }
+/* Activity: the name gives way first, what was done with it ("added", "moved from …") stays readable. */
+.row.act .label { display: flex; gap: 4px; }
+.row.act .label .an { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row.act .label .verb { flex: 0 2 auto; min-width: 3.5em; overflow: hidden; text-overflow: ellipsis; }
 .name .where { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ico { color: var(--muted); }
 .ico.folder { fill: var(--folder); color: var(--muted); }

@@ -4159,7 +4159,7 @@ function activityRow(a) {
   const target = a.is_dir ? a.path : parent(a.path);
   return h(a.exists ? "a" : "div", a.exists ? { class: "row act", href: "#/files" + enc(target) } : { class: "row act gone" },
     h("span", { class: "name" }, icon(ico), h("span", { style: "min-width:0" },
-      h("span", { class: "label" }, name, h("span", { class: "verb" }, " " + where)),
+      h("span", { class: "label", title: `${name} ${where}` }, h("span", { class: "an" }, name), h("span", { class: "verb" }, where)),
       h("div", { class: "where" }, `${parent(a.path)} · ${a.me ? "this device" : a.device_name}`))),
     h("span", { class: "size" }, a.is_dir || a.kind === "delete" ? "" : size(a.size)),
     h("span", { class: "date", title: fmtFull.format(new Date(a.at * 1000)) }, ago(a.at)), h("span"));
