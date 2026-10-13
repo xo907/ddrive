@@ -496,7 +496,7 @@ class Agent(sync.SyncManager):
                     self._greeted = False
                     continue
                 self._greeted = False
-                if e.status in (401, 429):
+                if e.status in (401, 410, 429):
                     wait = RETRY_REFUSED
                 if str(e) != told:
                     told = str(e)

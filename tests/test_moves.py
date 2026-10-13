@@ -109,8 +109,15 @@ class MoveTest(helpers.DriveTest):
         self.assertEqual(self.moves.status(opened["id"], None)["state"], "done")
         self.assertIsNone(told(self.dst))                   # done: nothing to follow any more
         self.assertIsNone(self.acc._recs.get(self.sid))
-        with self.assertRaises(lite.HostError):
-            self.device(self.skey)
+        # a device that still has the words of the account that is gone is told so, however often it
+        # asks, and that isn't counted as wrong tries: the account it moved into still signs in
+        for _ in range(8):
+            with self.assertRaises(lite.HostError) as e:
+                self.device(self.skey)
+            self.assertEqual(e.exception.status, 410)
+        self.assertIn("moved into another account", str(e.exception))
+        self.assertEqual(self.web.locked_for("127.0.0.1"), 0)
+        self.device(self.tkey)
         # another device of the target sees it all, and taking it in again changes nothing
         other = self.device(self.tkey)
         self.assertEqual(other.read(f"/{name}/Photos/a.jpg"), big)

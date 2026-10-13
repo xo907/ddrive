@@ -42,8 +42,13 @@
           location.replace("/");
           return;
         }
-        if (r.status === 429) say(note, "Too many failed tries from here. Wait a few minutes and try again.");
-        else old.hidden = false;
+        if (r.status === 410) say(note, "This account was moved into another account and is gone. Sign in with that account's 24 words.");
+        else {
+          // (wrong tries from this address are being slowed down; the right words still get in, and
+          // these may be the owner's or an earlier account's, which are sent the earlier way)
+          if (r.status === 429) say(note, "Too many failed tries from this address, so wrong ones are refused for a while. If these words are right, they still sign in:");
+          old.hidden = false;
+        }
       } catch (err) {
         say(note, `That phrase isn't right: ${err.message}.`);
       }

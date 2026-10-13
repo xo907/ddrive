@@ -201,9 +201,17 @@ class WebTest(helpers.DriveTest):
     def test_lockout(self):
         for _ in range(5):
             self.assertEqual(self.login(STRANGER)[0], 401)
-        status, body = self.login()                                     # even the right phrase waits now
+        status, body = self.login(STRANGER)                             # more wrong ones aren't even looked at now
         self.assertEqual(status, 429)
         self.assertIn(b"Too many", body)
+        auth = self.form(auth="ab" * 32)
+        self.assertEqual(self.req("POST", "/login", auth, auth=False)[0], 429)
+        self.assertEqual(self.req("POST", "/login", self.form(phrase="not words"), auth=False)[0], 429)
+        # the right phrase still gets in: somebody else's wrong tries from the same address (or a device
+        # that still has the words of an account that is gone) keep nobody out
+        self.assertEqual(self.login()[0], 303)
+        self.assertEqual(self.req("GET", "/api/status")[0], 200)
+        self.assertEqual(self.login(STRANGER)[0], 401)                  # and with it the count starts again
 
     def test_logout(self):
         self.login()

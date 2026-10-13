@@ -137,6 +137,9 @@ class HostClient:
                 return
             if resp.status == 429:
                 raise HostError(429, "Too many wrong tries from this computer. Wait a few minutes and try again.")
+            if resp.status == 410:
+                raise HostError(410, "This account was moved into another account and no longer exists. Connect again "
+                                     "with that account's 24 words.")
             if resp.status == 401:
                 raise HostError(401, "The host doesn't know those 24 words. Use the drive's recovery phrase, or the "
                                      "phrase of your account on that dashboard.")

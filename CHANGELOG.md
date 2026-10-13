@@ -3,6 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.20.3 (2026-10-12)
+
+- **The right 24 words always sign in.** After five wrong sign-ins from an address, every sign-in
+  from it was refused for a while ("Too many failed tries"), the right words too. One device that
+  kept asking with words that no longer work was enough to keep everybody behind the same address
+  out for good: DDrive Lite and the phone app ask again every few minutes, and each try started the
+  wait anew. That happened to anyone who moved an account into another while a device was still
+  signed in to the one that moved. Now only wrong tries are refused during the wait; the right words
+  get in and clear it. (They are 256 bits: letting them through helps nobody who is guessing.)
+- **The words of an account that was moved into another say so.** Signing in with them answers "This
+  account was moved into account … and is gone" instead of counting as a wrong try, in the browser
+  and in DDrive Lite.
+- The sign-in page, while wrong tries are being refused, still offers "Send the words and sign in"
+  for the owner's and an earlier account's words. A sign-in key that belongs to no account is now in
+  the Log, as a wrong phrase already was.
+
 ## 2.20.2 (2026-10-12)
 
 - **Saved previews can be deleted where Messages shows no conversations.** After an account is moved

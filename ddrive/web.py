@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import __version__
 from .actions import default_restore_folder, intact_copy, older_copies, repair_op, snapshot_restore_ops, undelete_ops, version_put_op
 from .config import Config, config_path, launcher as _launcher
-from .accounts import MODES, AccountError, Accounts, AccountShares
+from .accounts import MODES, AccountError, Accounts, AccountShares, account_id
 from .crypto import hash_password
 from .index import ROOT_ID, new_uid
 from . import legal, passkeys, resources, words
@@ -937,27 +937,42 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         addr = self._addr()
         wait = app.locked_for(addr)
         form = self._form()
-        if wait:
-            return self._signin(f"Too many failed tries. Try again in {int(wait) + 1} seconds.", 429)
+
+        # Wrong tries from an address are slowed down: after a few, more of them are refused unlooked-at
+        # for a while. The right words are let in all the same. They are 256 bits, so letting them
+        # through gives somebody guessing nothing, and the wrong tries are often not the person's at all:
+        # another device behind the same address, or one of their own that still has the words of an
+        # account that is gone and asks again and again. That used to keep everybody there out for good.
+        def refused(message, status=401):
+            if wait:
+                return self._signin(f"Too many failed tries. Try again in {int(wait) + 1} seconds.", 429)
+            app.note_login(addr, False)
+            return self._signin(message, status)
+
         if form.get("auth"):
             # An end-to-end encrypted account (an admin account is one): its words stayed on the device,
             # this is what it made from them.
             try:
-                rec = app.accounts.find(bytes.fromhex(form["auth"]))
+                auth = bytes.fromhex(form["auth"])
             except ValueError:
-                rec = None
-            ok = rec is not None and bool(rec.get("e2e"))
-            app.note_login(addr, ok)
-            if not ok:
-                return self._signin("Nobody here has an end-to-end encrypted account with those 24 words.", 401)
+                auth = b""
+            rec = app.accounts.find(auth)
+            if rec is None or not rec.get("e2e"):
+                moved = app.moves.moved_into(account_id(auth)) if len(auth) == 32 else ""
+                if moved:                            # not a guess: the words of an account that was moved into another
+                    return self._signin(f"This account was moved into account {moved} and is gone. Sign in with that "
+                                        "account's 24 words.", 410)
+                if len(auth) == 32:
+                    log.warning("Web dashboard: a sign-in key that belongs to no account here, from %s", addr)
+                return refused("Nobody here has an end-to-end encrypted account with those 24 words.")
+            app.note_login(addr, True)
             if rec.get("admin"):
                 log.info("Web dashboard: admin account %s signed in from %s", rec["id"], addr)
             return self._redirect("/", self._cookie_for(app.new_session(rec["id"])))
         try:
             key = words.phrase_to_key(form.get("phrase") or "")
         except ValueError as e:
-            app.note_login(addr, False)
-            return self._signin(f"That phrase isn't right: {e}.", 401)
+            return refused(f"That phrase isn't right: {e}.")
         owner = app.owner_key()
         if owner and hmac.compare_digest(key.hex(), owner):
             who = ""
@@ -973,10 +988,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 html = _admin_upgrade_page(rec["id"], self._upgrade_ticket(rec["id"]))
                 return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", _PAGE_HEADERS)
             who = rec["id"] if rec is not None else None
-        app.note_login(addr, who is not None)
         if who is None:
-            log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
-            return self._signin("Those are 24 valid words, but nobody here has that phrase.", 401)
+            if not wait:
+                log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
+            return refused("Those are 24 valid words, but nobody here has that phrase.")
+        app.note_login(addr, True)
         self._redirect("/", self._cookie_for(app.new_session(who)))
 
     UPGRADE_MINUTES = 30                 # how long an admin from before has to write its new words down

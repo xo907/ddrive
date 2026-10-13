@@ -150,6 +150,15 @@ class Moves:
                     return m["id"]
         return None
 
+    def moved_into(self, aid):
+        """The account that `aid` was moved into, when it was (and is gone for that reason), else ''.
+        Its devices still ask to be signed in: that is told what happened, and isn't a wrong guess."""
+        with self._lock:
+            for m in self._moves.values():
+                if m.get("from") == aid and m["state"] in ("finishing", "done") and self.accounts._recs.get(aid) is None:
+                    return m["to"]
+        return ""
+
     def current(self, aid):
         """The move account `aid` takes part in right now, as status() tells it, with which side it is on
         ("to": it receives, "from": it moves out), or None. Its page shows this wherever it is, so the
