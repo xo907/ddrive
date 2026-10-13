@@ -3,6 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.23.0 (2026-10-12)
+
+- **Files and the Gallery keep themselves up to date.** What another device, a synced folder, the
+  drive letter or somebody's upload adds, changes or removes now shows up in the folder or gallery
+  that is open, a few seconds later, without reloading. It stays where you scrolled to.
+- **It costs nothing while nothing happens.** No list is fetched on a timer: the status the page asks
+  for every few seconds anyway now carries a number that goes up when files change, and only then is
+  the open folder or gallery asked for again (at most every four seconds), and drawn again only if it
+  really is different.
+- **Nothing moves under your hands.** While a menu, a dialog or the picture viewer is open, something
+  is being dragged or a name is being typed, the page waits and catches up afterwards.
+- **It can be turned off**: Settings → This browser (for an account: Your account) → "Refresh Files and
+  Gallery by themselves". The choice is kept in the browser it was made in.
+- For an end-to-end encrypted account, changes made on its other devices arrive when the browser next
+  reads the account's list, which it does every 15 seconds.
+
 ## 2.22.0 (2026-10-12)
 
 - **"Don't trust, verify": a page that shows how your files are kept private, with your own files.**

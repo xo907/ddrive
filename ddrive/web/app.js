@@ -393,6 +393,42 @@ function download(url, name) {
 }
 
 // ------------------------------------------------------------------ status
+// ------------------------------------------------------------------ Files and Gallery keep themselves up to date
+// What another device, a folder sync, the drive letter or an upload adds, changes or removes shows up
+// in the folder or gallery that is open, without reloading. It costs nothing while nothing happens:
+// the status that is asked for every few seconds anyway carries a number that goes up when files change
+// (`rev`), and only when it did is the list that is shown asked for again, at most every few seconds,
+// and drawn again only if it really is different. Nothing is redrawn under somebody's hands: not while
+// a menu, a dialog or the viewer is open, something is being dragged, or a name is being typed.
+// It can be turned off (Settings, or Your account): kept in this browser.
+const LIVE_EVERY = 4000;
+let liveSeen = null, liveDue = false, liveAt = 0, liveBusy = false;
+const liveOn = () => { try { return localStorage.getItem("dd-live") !== "off"; } catch { return true; } };
+function liveSet(on) {
+  try { localStorage.setItem("dd-live", on ? "on" : "off"); } catch { /* private mode: until the page is closed */ }
+  liveDue = false;
+}
+const liveRow = () => h("div", { class: "set-row" },
+  h("div", { class: "set-text" }, h("div", { class: "t" }, "Refresh Files and Gallery by themselves"),
+    h("div", { class: "s" }, "What is added, changed or removed elsewhere (another device, a synced folder, the drive itself) shows up in the folder or gallery you have open, without reloading. "
+      + "Nothing is fetched while nothing changes. This is kept in this browser.")),
+  h("div", { class: "set-ctl" }, switchEl(liveOn(), (on) => { liveSet(on); toast(on ? "Files and Gallery refresh by themselves" : "Files and Gallery stay as they are until you reload"); }, "Refresh Files and Gallery by themselves")));
+const liveHeld = () => !!(dragging || document.querySelector(".ctx, dialog[open], .lightbox, #sheet.open")
+  || (document.activeElement && main.contains(document.activeElement) && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)));
+function liveCheck() {
+  if (!status) return;
+  const st = status.stats || {};
+  const now = `${status.rev}|${st.files}|${st.dirs}|${st.bytes}|${st.unsynced}`;
+  if (liveSeen !== null && now !== liveSeen) liveDue = true;
+  liveSeen = now;
+  if (!liveDue || liveBusy || !liveOn() || (route.name !== "files" && route.name !== "gallery")) { if (route.name !== "files" && route.name !== "gallery") liveDue = false; return; }
+  if (liveHeld() || Date.now() - liveAt < LIVE_EVERY) return;         // (still due: looked at again with the next status)
+  liveDue = false;
+  liveAt = Date.now();
+  liveBusy = true;
+  (route.name === "files" ? renderFiles(true) : renderGallery(true)).catch(() => null).finally(() => { liveBusy = false; });
+}
+
 let statusSeen = "";                 // the last answer, as text: an unchanged one changes nothing on the page
 async function refreshStatus() {
   let first = null;
@@ -403,6 +439,7 @@ async function refreshStatus() {
   }
   try { status = first || await api("/api/status"); }
   catch { status = null; }
+  liveCheck();
   const seen = status ? JSON.stringify(status) : "";
   if (seen && seen === statusSeen && route.name !== "health" && route.name !== "resources") return;
   statusSeen = seen || "-";
@@ -617,14 +654,29 @@ function listHead() {
            h("span", { class: "date" }, "Modified"), h("span"));
 }
 
-async function renderFiles() {
+let filesShown = "";                 // the folder that is drawn, as the server listed it: a listing that is the same changes nothing
+/** `quiet`: the folder that is open, looked at again because files changed (liveCheck). It is drawn again
+ *  only if it is different, where it was scrolled to, and all of it at once so that nothing jumps. */
+async function renderFiles(quiet) {
   const path = route.path;
   currentDir = path;
+  if (quiet === true) {
+    const fresh = await api("/api/list" + q({ path })).catch(() => null);
+    if (!fresh || route.name !== "files" || route.path !== path || liveHeld() || JSON.stringify(fresh.items) === filesShown) return;
+    keepScroll = true;
+    try { drawFiles(path, fresh, true); } finally { keepScroll = false; }
+    return;
+  }
   const data = await attempt(() => api("/api/list" + q({ path })));
   if (!data) {
     page(h("div", { class: "empty" }, h("b", {}, "This folder isn't there any more"), h("a", { href: "#/files/" }, "Back to the drive")));
     return;
   }
+  drawFiles(path, data, false);
+}
+
+function drawFiles(path, data, whole) {
+  filesShown = JSON.stringify(data.items);
   const bar = h("div", { class: "bar" },
     crumbs(path, "Drive", (p) => "#/files" + enc(p)),
     h("div", { class: "actions" },
@@ -638,7 +690,7 @@ async function renderFiles() {
   listed = data.items;
   // A big folder is drawn in parts: what fits on the screen at once, the rest right after, so the page
   // shows without waiting for thousands of rows.
-  const grid = gridView(), mine = ++filesDrawn, FIRST = 150, MORE = 400;
+  const grid = gridView(), mine = ++filesDrawn, FIRST = whole ? data.items.length : 150, MORE = 400;
   const rows = data.items.slice(0, FIRST).map((it) => itemRow(it, { grid }));
   const list = h("div", { class: "list" + (grid ? " grid" : "") }, listHead(), rows);
   const body = data.items.length ? list
@@ -1747,6 +1799,7 @@ async function renderSettings() {
   page(h("h1", {}, SERVER ? "The drive's settings" : "Settings"),
        h("p", { class: "lede" }, SERVER ? "You manage this drive as an admin. Changes are saved as you make them, for the computer that runs it. “My files” in the menu leads back to your own files."
                                         : "Changes are saved as you make them, for this computer's drive."),
+       !SERVER && [h("h2", {}, "This browser"), h("div", { class: "settings" }, liveRow())],
        SETTING_ROWS.map(([title, rows]) => [h("h2", {}, title), h("div", { class: "settings" }, rows.map(([key, label, hint, type]) =>
          h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hint),
            data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
@@ -2585,19 +2638,34 @@ function thumbBox(it) {
 const fmtMonth = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
 let gal = null;
 
-async function renderGallery() {
+const GALLERY_LIVE_MAX = 1500;       // as many pictures as are shown are asked for again in one go, up to this many
+/** `quiet`: the gallery that is open, looked at again because files changed (liveCheck): drawn again only
+ *  if it is different, where it was scrolled to, with as many pictures as were shown. */
+async function renderGallery(quiet) {
   const path = route.path;
+  let fresh = null;
+  if (quiet === true) {
+    const was = gal;
+    if (!was || was.path !== path || was.loading) return;
+    const shown = Math.min(GALLERY_LIVE_MAX, Math.max(300, was.items.length));
+    fresh = await api("/api/media" + q({ path, offset: 0, limit: shown })).catch(() => null);
+    const same = (a, b) => a.path === b.path && a.size === b.size && a.mtime === b.mtime;
+    if (!fresh || gal !== was || route.name !== "gallery" || route.path !== path || liveHeld()) return;
+    if (fresh.total === was.total && fresh.items.length <= was.items.length && fresh.items.every((it, i) => same(it, was.items[i]))) return;
+  }
   const g = gal = { path, items: [], total: null, loading: false, month: "", grid: null };
   const body = h("div", { class: "gallery" });
   const more = h("div", { class: "g-more" });
   const info = h("span", { class: "muted g-count" });
   const prog = h("div", { class: "g-progress", hidden: true });
   const all = h("button", { class: "btn ghost", onclick: () => thumbsForAll(path, prog) }, "Create all thumbnails");
-  page(h("div", { class: "bar" },
+  const bar = h("div", { class: "bar" },
          path === "/" ? h("h1", { style: "margin:0" }, "Gallery") : crumbs(path, "Gallery", (p) => "#/gallery" + enc(p)),
          info,
-         h("div", { class: "actions" }, path !== "/" && h("a", { class: "btn ghost", href: "#/files" + enc(path) }, "Open folder"), all)),
-       prog, body, more);
+         h("div", { class: "actions" }, path !== "/" && h("a", { class: "btn ghost", href: "#/files" + enc(path) }, "Open folder"), all));
+  if (fresh) add(fresh);                       // (all of it is there before it is shown: nothing jumps)
+  keepScroll = !!fresh;
+  try { page(bar, prog, body, more); } finally { keepScroll = false; }
   if (thumbBatch) thumbBatch.show(prog);
 
   async function load() {
@@ -2606,6 +2674,10 @@ async function renderGallery() {
     const data = await api("/api/media" + q({ path, offset: g.items.length, limit: 300 })).catch((e) => { toast(e.message); return null; });
     g.loading = false;
     if (!data || gal !== g) return;
+    add(data);
+    if (g.items.length < g.total) requestAnimationFrame(() => { if (more.getBoundingClientRect().top < innerHeight + 600) load(); });
+  }
+  function add(data) {
     g.total = data.total;
     info.textContent = data.total ? plural(data.total, "photo and video", "photos and videos") : "";
     if (!data.total) {
@@ -2624,11 +2696,10 @@ async function renderGallery() {
       bindMenu(tile, () => itemMenu(it), it.name, `${size(it.size)} · ${when(it.mtime)}`);
       g.grid.append(tile);
     }
-    if (g.items.length < g.total) requestAnimationFrame(() => { if (more.getBoundingClientRect().top < innerHeight + 600) load(); });
   }
   g.load = load;
   new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) load(); }, { root: main, rootMargin: "600px" }).observe(more);
-  await load();
+  if (!fresh) await load();
 }
 
 async function thumbsForAll(path, prog) {
@@ -3428,6 +3499,7 @@ async function renderAccount() {
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
          a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         liveRow(),
          !(status && status.retired) && row("Previews of Discord attachments", "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself. Remove all of those copies, everywhere in this account; the attachments stay.",
              h("button", { class: "btn ghost small", onclick: async () => { if (await deletePreviews()) render(); } }, "Delete previews…")),
          status && status.move && window.accountMove && row(status.move.side === "to" ? "Another account is moving into this one" : "This account is moving into another one",

@@ -1114,6 +1114,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if self._acct is not None:               # an account sees its own storage, nothing of the computer
             return self._json({
                 "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True, "e2e": self._e2e,
+                "rev": d.index.rev(),
                 "admin": self.server.app.accounts.admin_ok(d.id),     # it may also manage the drive (ADMIN_GET)
                 "retired": self._retired,                              # of the earlier kind: read and move out only
                 "move": self.server.app.moves.current(d.id) if self._e2e else None,       # moving into or out of another account
@@ -1132,6 +1133,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({
             "version": __version__,
             "role": "owner",
+            "rev": 0 if self._admin else d.index.rev(),      # goes up when files change: pages that list them look again
             "admin": self._admin,                    # an admin account asks: its page shows what manages the drive
             "user": "" if self._admin else self.app.user_name(),
             "signup": self.app.accounts.mode(),

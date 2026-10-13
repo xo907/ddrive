@@ -212,6 +212,7 @@
       s.stats = { ...s.stats, ...stats() };
       s.uploads = (s.uploads || []).map((u) => ({ ...u, path: "/" + (names.get(String(u.path || "").split("/").pop()) || "a sealed file") }));
       s.e2e = true;
+      s.rev = v.seq;                             // (goes up with every change to the list, from any device of the account)
       s.fetches = E.fetches || [];
       devices().then((ds) => { E.fetches = ds.flatMap((d) => d.fetches); }, () => null);
       return json(s);

@@ -198,6 +198,21 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("GET", "/api/status")[0], 401)
         self.assertEqual(self.login()[0], 303)
 
+    def test_the_status_says_when_files_changed(self):
+        """Pages that list files look again when `rev` went up, instead of fetching their lists on a timer."""
+        self.login()
+        rev = lambda: json.loads(self.req("GET", "/api/status")[2])["rev"]
+        first = rev()
+        self.assertEqual(rev(), first)                                  # nothing happened: the same
+        self.assertEqual(self.req("POST", "/api/mkdir", {"path": "/New"})[0], 200)
+        second = rev()
+        self.assertGreater(second, first)
+        self.assertEqual(self.req("POST", "/api/move", {"from": "/New", "to": "/Renamed"})[0], 200)
+        third = rev()
+        self.assertGreater(third, second)                               # a rename changes no count and no size: this does
+        self.assertEqual(self.req("POST", "/api/delete", {"path": "/Renamed"})[0], 200)
+        self.assertGreater(rev(), third)
+
     def test_lockout(self):
         for _ in range(5):
             self.assertEqual(self.login(STRANGER)[0], 401)

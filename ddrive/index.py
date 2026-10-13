@@ -797,6 +797,14 @@ class Index:
         if cur.lastrowid % 200 == 0:
             db.execute("DELETE FROM activity WHERE id <= ?", (cur.lastrowid - 5000,))
 
+    def rev(self):
+        """A number that goes up whenever something is added, changed, moved or deleted, here or on
+        another device: a page that shows files asks for this (it costs next to nothing) to know when
+        to look again, instead of fetching the lists over and over."""
+        with self.lock:
+            r = self.db.execute("SELECT seq FROM sqlite_sequence WHERE name='activity'").fetchone()
+        return int(r[0]) if r else 0
+
     def activity(self, limit=100, before=None):
         """The newest entries first: [{id, at, device, kind, path, src, size, is_dir, uid}]."""
         return [dict(r) for r in self._all("SELECT * FROM activity WHERE id < ? ORDER BY id DESC LIMIT ?",
