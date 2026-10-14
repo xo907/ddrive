@@ -99,6 +99,17 @@ class _AccountConfig(Config):
     It is never written anywhere (the file on disk is the owner's)."""
 
     owner = None
+    # How pieces are protected is the drive's, as it is now: a change in the owner's settings applies to an
+    # account that is already open too (its copy of the settings was made when it was opened).
+    FROM_OWNER = frozenset({"parity_enabled", "parity_group", "parity_pieces", "scrub_enabled", "scrub_days",
+                            "protect_existing", "verify_uploads", "delete_after_days", "spare_channels"})
+
+    def __getattribute__(self, name):
+        if name in _AccountConfig.FROM_OWNER:
+            owner = object.__getattribute__(self, "owner")
+            if owner is not None:
+                return getattr(owner, name)
+        return object.__getattribute__(self, name)
 
     @property
     def quota_bytes(self):
@@ -142,10 +153,20 @@ class AccountBackend:
     def upload_slots(self):
         return getattr(self.base, "upload_slots", 1)
 
+    @property
+    def channels(self):
+        """The drive's channels: an account's pieces are spread over its spare channels too."""
+        return getattr(self.base, "channels", None) or [None]
+
+    def route(self, mid):
+        return self.base.route(mid) if hasattr(self.base, "route") else (self.base, mid)
+
     # ------------------------------------------------------------ pieces: the channel
-    def upload(self, filename, data, content=""):
+    def upload(self, filename, data, content="", channel=None):
         if (content or "").startswith(OP_PREFIX):      # a journal entry too long for one message
             return self.local.upload(filename, data, content)
+        if channel is not None:
+            return self.base.upload(filename, data, content, channel=channel)
         return self.base.upload(filename, data, content)
 
     def download(self, message_id, url):

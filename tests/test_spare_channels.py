@@ -102,6 +102,28 @@ class SpareChannelsTest(helpers.DriveTest):
         self.assertEqual(d.healer._lost(), {})
         self.assertEqual(d.healer.stats["repaired"], 0)
 
+    def test_an_accounts_pieces_are_spread_too(self):
+        from ddrive.accounts import AccountBackend
+        from ddrive.channels import channels_of
+        d = self.drive(spare_channels=[SPARE])
+        acct = AccountBackend(d.backend, os.path.join(self.tmp, "acct-journal"), d.crypto)
+        self.assertEqual(channels_of(acct), [None, SPARE])
+        stored = acct.upload("chk_1.bin", b"sealed piece", channel=SPARE)
+        self.assertEqual(channel_of(stored.message_id), SPARE)
+        self.assertEqual(acct.download(stored.message_id, None)[0], b"sealed piece")
+        self.assertIsNone(channel_of(acct.upload("chk_2.bin", b"main").message_id))
+
+    def test_an_open_account_follows_the_owners_protection_settings(self):
+        from dataclasses import asdict
+        from ddrive.accounts import _AccountConfig
+        owner = Config(parity_pieces=2, channel_id="1")
+        cfg = _AccountConfig(**dict(asdict(owner), data_dir=self.tmp))
+        cfg.owner = owner
+        self.assertEqual(cfg.parity_pieces, 2)
+        owner.parity_pieces = 50                       # changed on the dashboard while the account is open
+        self.assertEqual(cfg.parity_pieces, 50)
+        self.assertEqual(cfg.data_dir, self.tmp)       # its own settings stay its own
+
     def test_a_repair_goes_elsewhere_when_its_channel_is_gone(self):
         d = self.drive(spare_channels=[SPARE])
         real = d.backend.upload

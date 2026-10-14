@@ -611,7 +611,7 @@ spare remove <n> [--force]           Remove one (refused while pieces are stored
   copy in the spare channel, and rebuilds every piece the old channel held from the others: on the
   fly when a file is read, and in the background check.
 - A repair goes back into the channel the piece was in, or into another one if that channel is gone.
-- Account storage (other people's accounts on your dashboard) stays in the main channel.
+- Accounts on your dashboard (end-to-end ones included) are spread the same way as your own files.
 
 ## Web dashboard
 

@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.40.1 (2026-10-14)
+
+- **Accounts use the spare channels and the spare-piece setting too.** An account's files (also
+  end-to-end ones, and a drive moved into an account) always went to the main channel only, so spare
+  channels didn't protect them. They are now spread like the owner's files. An account that was
+  already open also kept the spare-piece setting it was opened with; the protection settings now
+  follow the owner's settings at once.
+
 ## 2.40.0 (2026-10-14)
 
 - **Up to 5 spare pieces for every piece.** The "Spare pieces" setting went up to 8 per group of 10.
