@@ -1170,6 +1170,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "lost": self._lost(),
                 "recheck": d.healer.recheck if d.healer else None,
                 "leader": d.maintenance.leader() if d.maintenance else False,
+                "refused": d.backend.bot_problems() if hasattr(d.backend, "bot_problems") else [],
             },
             "devices": devices,
             "lan": [f"http://{ip}:{self.app.port}/" for ip in lan_addresses()] if d.cfg.web_lan else [],
@@ -2680,21 +2681,29 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _post_api_check_remove(self):
         """Delete unreadable files for good (no earlier version is kept of something that can't be read)."""
+        from .heal import confirm_unreadable
         uids = set(map(str, self._body_json().get("uids") or []))
         idx = self.drive.index
-        removed = 0
+        removed, kept = 0, []
         for uid in uids:
             node = idx.get_by_uid(uid)
             if node is not None and not node["is_dir"]:
+                # Removing frees its pieces for deletion: only when Discord confirms, right now, that it is broken
+                if not confirm_unreadable(idx, self.drive.backend, self.drive.crypto, node["id"]):
+                    kept.append(uid)
+                    log.warning("Did not remove %s: it can be read now (or Discord could not be asked).",
+                                idx.path_of(node["id"]))
+                    continue
                 with self.drive.fs.lock:
                     idx.purge_node(node["id"])
                     self.drive.fs._chunk_maps.pop(node["id"], None)
                 removed += 1
+        gone = uids - set(kept)
         st = self.drive.checker.state
         if st.get("bad"):
-            st["bad"] = [b for b in st["bad"] if b["uid"] not in uids]
+            st["bad"] = [b for b in st["bad"] if b["uid"] not in gone]
         self.drive.journal.wake()
-        self._json({"ok": True, "removed": removed})
+        self._json({"ok": True, "removed": removed, "kept": len(kept)})
 
     # ------------------------------------------------------------ password-locked folders
     def _lock_attempt(self, check):

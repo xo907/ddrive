@@ -3,6 +3,38 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.37.0 (2026-10-14)
+
+- **A refused bot no longer makes files look broken.** When Discord refused a bot access to the
+  channel (403), its pieces were counted as gone, the same as deleted ones. Lookups take turns over
+  the bots, so one extra bot that can't see the channel made about one read in N look missing, and
+  listed intact files under "Parts that can't be repaired". Now only "unknown message" (404) means
+  gone. A refused bot's lookups go to the main bot and the others instead, that bot is left out for
+  10 minutes, and the Health page names it. A wrong channel id ("unknown channel") also no longer
+  counts as every piece being gone.
+- **"Remove unreadable" asks Discord again first.** Removing a file frees its pieces for deletion, so
+  the dashboard's button and `verify --remove` now check each file's pieces again and keep any file
+  that isn't proven broken right now.
+- **Repeated content no longer weakens a group.** De-duplication could point several places of one
+  group at the same stored message (runs of zeros in a disk image, for example). Losing that one
+  message then cost more places than the group has spare pieces. Every repeat in a group now gets a
+  message of its own.
+- **Spare pieces always match what was uploaded.** A resumed upload whose file changed in between
+  kept the old spare pieces of a group it partly uploaded again, so they could never rebuild it. Such
+  groups now get new spare pieces, and spare pieces are only computed from content whose checksum
+  matches the uploaded pieces.
+- **Deletions wait a week and are written down.** Pieces nothing uses any more stay on Discord for
+  `delete_after_days` (7, was 10 minutes) before they are deleted. Every deletion is noted in
+  `deletions.log` in the data folder. `health --why <piece>` shows what a piece belongs to, whether
+  this device deleted it, and what each bot gets from Discord for it. `health` says how many lost
+  parts this device deleted itself.
+- **Uploads are checked.** An upload whose size on Discord differs from what was sent is deleted
+  and sent again. `config verify_uploads true` also reads every piece back once.
+- **Faster background check.** One full pass now takes 2 days (`scrub_days`, was 7; existing
+  configs keep their value). When a piece is missing, the rest of its group is checked straight
+  away. Files whose spare pieces couldn't be made are tried again after a week instead of never.
+- **The last 5 index checkpoints are kept** in the channel instead of only the newest.
+
 ## 2.36.0 (2026-10-13)
 
 - **Uploads from the dashboard go in the order that fits the server's disk.** Several files chosen

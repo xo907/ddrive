@@ -23,9 +23,11 @@ import time
 from .logbuf import tname
 from . import codec, rs
 from .crypto import AuthenticationError
-from .discord_api import DiscordError
+from .discord_api import DiscordError, is_gone
 
 log = logging.getLogger("ddrive.heal")
+
+UNPROTECTABLE_RETRY = 7 * 86400     # files whose spare pieces couldn't be made are tried again after this
 
 
 class Healer:
@@ -57,9 +59,9 @@ class Healer:
             payload, _ = self.backend.download(mid, None)
             data = codec.decode(payload, self.crypto, sha)
         except DiscordError as e:
-            if e.status in (403, 404):
+            if is_gone(e):
                 return None
-            raise
+            raise          # refused (403), wrong channel, Discord busy: not proof the piece is gone
         except AuthenticationError:
             return None
         if sha and hashlib.sha256(data).hexdigest() != sha:
@@ -189,7 +191,7 @@ class Healer:
             payload, _ = self.backend.download(mid, None)
             data = codec.decode(payload, self.crypto, sha)
         except DiscordError as e:
-            if e.status in (403, 404):
+            if is_gone(e):
                 return None
             raise
         except AuthenticationError:
@@ -499,6 +501,27 @@ class Healer:
         return True
 
 
+def confirm_unreadable(index, backend, crypto, nid):
+    """Ask Discord again, piece by piece, before a file is removed as unreadable: True only when a
+    piece is proven gone (404) or can't be decrypted or doesn't match its checksum. A refused bot,
+    a busy Discord or a network error proves nothing, and then the file is kept."""
+    for chunk in index.get_chunks(nid):
+        try:
+            payload, _ = backend.download(chunk["message_id"], None)
+            data = codec.decode(payload, crypto, chunk.get("sha256"))
+        except AuthenticationError:
+            return True
+        except DiscordError as e:
+            if is_gone(e):
+                return True
+            return False
+        except Exception:
+            return False
+        if chunk.get("sha256") and hashlib.sha256(data).hexdigest() != chunk["sha256"]:
+            return True
+    return False
+
+
 class Checker:
     """Reads every file under a folder once (like `verify`), in the background, for the dashboard:
     which files can't be read and why. Pieces that can be rebuilt from spare pieces are repaired."""
@@ -542,7 +565,7 @@ class Checker:
         except AuthenticationError:
             problem = "key"
         except DiscordError as e:
-            if e.status != 404:
+            if not is_gone(e):
                 raise
             problem = "missing"
         if self.healer is not None and self.healer.recover(chunk["message_id"]) is not None:
@@ -622,6 +645,8 @@ class Maintenance:
             self._unreadable = set(json.loads(index.kv_get("unprotectable") or "[]"))
         except ValueError:
             self._unreadable = set()
+        if self._unreadable and not index.kv_get("unprotectable_since"):
+            index.kv_set("unprotectable_since", str(time.time()))
 
     def start(self):
         self._thread = threading.Thread(target=self._loop, name=tname("Maintenance"), daemon=True)
@@ -693,7 +718,7 @@ class Maintenance:
             if not self._scrub_list:
                 self._next_scrub = now + 600
                 return
-        days = max(0.01, float(getattr(self.cfg, "scrub_days", 7.0) or 7.0))
+        days = max(0.01, float(getattr(self.cfg, "scrub_days", 2.0) or 2.0))
         self._next_scrub = now + max(1.0, days * 86400 / len(self._scrub_list))
         mid = self._scrub_list[self._scrub_pos]
         self._scrub_pos += 1
@@ -703,12 +728,28 @@ class Maintenance:
         st["total"] = len(self._scrub_list)
         st["done"] = self._scrub_pos
         if info is None and self.index.is_referenced(mid):
-            st["missing"] = st.get("missing", 0) + 1
-            if self.healer.recover(mid) is not None:
-                st["repaired"] = st.get("repaired", 0) + 1
-            else:
-                st["lost"] = st.get("lost", 0) + 1
+            self._scrub_missing(mid, st)
+            self._scrub_group_of(mid, st)
         self._save_scrub(st)
+
+    def _scrub_missing(self, mid, st):
+        st["missing"] = st.get("missing", 0) + 1
+        if self.healer.recover(mid) is not None:
+            st["repaired"] = st.get("repaired", 0) + 1
+        else:
+            st["lost"] = st.get("lost", 0) + 1
+
+    def _scrub_group_of(self, mid, st):
+        """One piece of a group is gone: check the rest of its group now rather than days later, while
+        its spare pieces can still rebuild everything (losses often come together)."""
+        seen = {mid}
+        for group in self.index.parity_groups_for(mid):
+            for other in [x[0] for x in group["members"]] + [x[0] for x in group["shards"]]:
+                if other in seen or self._stop.is_set():
+                    continue
+                seen.add(other)
+                if self.backend.message_info(other) is None and self.index.is_referenced(other):
+                    self._scrub_missing(other, st)
 
     # ------------------------------------------------------------ protecting
     def protect_step(self):
@@ -721,6 +762,12 @@ class Maintenance:
             return
         if not self.leader() or self._uploads_busy():
             return
+        if self._unreadable and now - float(self.index.kv_get("unprotectable_since") or now) > UNPROTECTABLE_RETRY:
+            # pieces that couldn't be read may be readable now (Discord was refused or busy): try again
+            log.info("Trying again to add spare pieces to %d file(s) that could not be read before", len(self._unreadable))
+            self._unreadable.clear()
+            self.index.kv_set("unprotectable", "[]")
+            self.index.kv_set("unprotectable_since", "")
         k, _ = parity_shape(self.cfg, 10)
         if not k:
             return
@@ -735,9 +782,11 @@ class Maintenance:
             _, m = parity_shape(self.cfg, len(members))
             if not self.healer.protect(members, m):
                 log.warning("Could not add spare pieces to %s: part of it can't be read. 'verify' shows what is "
-                            "wrong with it; it isn't tried again.", self.index.path_of(nid))
+                            "wrong with it; it is tried again in a week.", self.index.path_of(nid))
                 self._unreadable.add(nid)
                 self.index.kv_set("unprotectable", json.dumps(sorted(self._unreadable)))
+                if not self.index.kv_get("unprotectable_since"):
+                    self.index.kv_set("unprotectable_since", str(time.time()))
                 return
         log.info("Added spare pieces to %s", self.index.path_of(nid))
         self._next_protect = time.time()

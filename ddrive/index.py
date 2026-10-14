@@ -544,11 +544,12 @@ class Index:
         with self.lock:
             self.db.executemany("INSERT OR IGNORE INTO trash(message_id, added) VALUES(?, ?)", [(m, now) for m in mids])
 
-    def trash_batch(self, n=10, grace=None):
-        """Trashed pieces that have waited out the grace period (oldest first)."""
+    def trash_batch(self, n=10, grace=None, with_time=False):
+        """Trashed pieces that have waited out the grace period (oldest first); with `with_time`,
+        (message id, when it was released) pairs."""
         cutoff = time.time() - (TRASH_GRACE if grace is None else grace)
-        return [r["message_id"] for r in
-                self._all("SELECT message_id FROM trash WHERE added <= ? ORDER BY added LIMIT ?", (cutoff, n))]
+        rows = self._all("SELECT message_id, added FROM trash WHERE added <= ? ORDER BY added LIMIT ?", (cutoff, n))
+        return [(r["message_id"], r["added"]) if with_time else r["message_id"] for r in rows]
 
     def trash_remove(self, mid):
         with self.lock:

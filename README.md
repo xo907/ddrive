@@ -328,7 +328,7 @@ other devices**:
 - **Self-healing.** Every group of 10 pieces is stored with 2 spare pieces (Reed-Solomon, the same
   idea as RAID 6), so any 2 lost pieces of a group can be rebuilt. If Discord deletes a piece, the
   file still opens: the piece is rebuilt on the fly, uploaded again, and every device learns where
-  it now lives. A background check confirms every piece is still there (one full pass a week) and
+  it now lives. A background check confirms every piece is still there (one full pass every 2 days) and
   repairs what isn't, before losses can pile up. Spare pieces are ordinary encrypted attachments in
   your channel and cost about 20% extra space on big files.
 - **Compression and de-duplication.** Pieces that shrink (documents, text, logs, many app files)
@@ -436,7 +436,9 @@ Useful limits:
 | `staging_max_bytes` | `10G` | Pause writing while this much is waiting to upload |
 | `cache_mode` | `disk` | `memory` keeps files you open in RAM only |
 | `parity_enabled` | `true` | Spare pieces (self-healing). `parity_group` (10) data pieces get `parity_pieces` (2) spare pieces |
-| `scrub_days` | `7` | One full check that every piece is still on Discord takes this long (`scrub_enabled` turns it off) |
+| `scrub_days` | `2` | One full check that every piece is still on Discord takes this long (`scrub_enabled` turns it off) |
+| `delete_after_days` | `7` | A piece nothing uses any more (a file deleted for good, an expired version) stays on Discord this long before it is deleted |
+| `verify_uploads` | `false` | Download every piece once right after uploading it and compare (twice the traffic; the size Discord reports is always checked) |
 | `protect_existing` | `true` | Add spare pieces to files uploaded before self-healing (downloads each such file once) |
 | `compression` / `dedup` | `true` | Compress pieces that shrink; store identical pieces once |
 | `snapshot_interval_hours` | `24` | Automatic snapshot of the whole drive (`0` = off), kept `snapshot_keep_days` (14) |
@@ -486,6 +488,7 @@ context-menu install|uninstall       "Make available offline" / "Free up space" 
 web [--open]                         Show (and open) the address of the web dashboard
 webdav-password                      Set the user name and password other apps use over WebDAV
 health [--check] [--protect]         Self-healing status; check every piece now; protect old files now
+health --why <piece>                 Why one piece is missing: what uses it, whether DDrive deleted it, what each bot sees
 snapshots [create [label]|delete <n>] List snapshots, take one now, or delete one
 snapshot-restore <n> [path] [--to p] [--in-place]
                                      Bring back a folder (or everything) from snapshot n
@@ -546,12 +549,21 @@ Discord can delete messages or attachments at any time. DDrive plans for that:
   its group and the read simply succeeds. The rebuilt piece is uploaded again, and every device
   is told where it lives now.
 - **Background check.** One device (the one with the smallest device ID among those active in
-  the last 3 days) asks Discord about every piece, spread over `scrub_days` (a week), and repairs
-  anything missing, including lost spare pieces. `health` shows the progress; `health --check`
+  the last 3 days) asks Discord about every piece, spread over `scrub_days` (2 days), and repairs
+  anything missing, including lost spare pieces. When one piece of a group is missing, the rest of
+  its group is checked straight away, while its spare pieces can still rebuild all of it. `health` shows the progress; `health --check`
   checks everything right now.
 - **Older files.** Files uploaded before 0.2 have no spare pieces yet. That same device adds them
   in the background, one file at a time, while nothing else is uploading (it downloads each file
-  once). `health --protect` does it all now; `config protect_existing false` turns it off.
+  once). `health --protect` does it all now; `config protect_existing false` turns it off. A file
+  that couldn't be read for this is tried again a week later.
+- **Nothing lost on DDrive's side.** A piece only counts as gone when Discord says it is ("unknown
+  message"). A bot that is refused access is left out for a while and the others are asked; the
+  Health page names it. "Remove unreadable" asks Discord again first and keeps any file it can't
+  prove is broken. Repeated content never puts two places of one group on the same message. Pieces
+  nothing uses any more stay on Discord for `delete_after_days` (7) before they are deleted, and
+  every deletion is written to `deletions.log` in the data folder, so `health --why <piece>` can
+  tell a piece DDrive deleted from one Discord lost. The last 5 index checkpoints are kept.
 
 Space: about 20% extra for big files, one extra piece for small ones. `config parity_pieces 3`
 survives 3 losses per group; `config parity_enabled false` turns spare pieces off for new uploads.
@@ -643,7 +655,7 @@ devices).
   names (or `config web_hosts drive.example.com`); share links then use that domain. Settings is in
   the account menu (top right) and in the DDrive menu.
 - **Deleted** files can be selected (or all at once) and restored, or deleted forever, which
-  removes them from Discord on every device straight away (`purge <path>` on the command line).
+  removes them from Discord on every device after `delete_after_days` (7 days; `purge <path>` on the command line).
 - **Phone.** `config web_lan true` (menu 6 → Web dashboard on your network), restart the drive,
   then open the "On your phone" link from `web` on a phone on the same Wi-Fi. The connection
   inside your home network is not encrypted (plain HTTP), so only do this on a network you trust.
@@ -1395,7 +1407,8 @@ on Linux (background starts also write `mount.log` next to it).
 - **The log says a piece "was missing from Discord; rebuilt it from its spare pieces".** Self-healing
   at work: nothing to do. "Can't be rebuilt" means a file without spare pieces (uploaded before 0.2
   and not protected yet) or a group that lost more pieces than it has spare ones; `verify` lists the
-  affected files.
+  affected files. `health --why <piece>` (the number in the log) says whether DDrive deleted that
+  piece itself, and what each bot gets from Discord for it.
 - **A deleted folder keeps coming back.** One of your devices runs an older version, which still
   re-uploads it. Update every device (menu option 4); deletes are final from then on.
 - **A "Recovered files" folder appeared.** A change arrived for a file whose folder had been

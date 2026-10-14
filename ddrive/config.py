@@ -111,6 +111,8 @@ class Config:
     min_free_disk_bytes: int = 2 * 1024 * MiB  # also pause while the local disk has less free space than this
     max_file_size: int = 0             # refuse files larger than this (0 = no limit)
     delete_remote: bool = True         # delete Discord messages when files are deleted/overwritten
+    delete_after_days: float = 7.0     # a piece nothing uses any more stays on Discord this long before it is deleted
+    verify_uploads: bool = False       # download every uploaded piece once and compare it (twice the traffic)
     index_backup_interval: float = 600.0  # seconds between index checkpoints (when something changed)
     poll_interval: float = 2.0         # seconds between checks for changes made on other devices
     keep_versions: bool = True         # keep replaced/deleted file contents as restorable versions
@@ -133,7 +135,7 @@ class Config:
     parity_group: int = 10             # data pieces per group...
     parity_pieces: int = 2             # ...and spare pieces per group (groups under 4 pieces get 1)
     scrub_enabled: bool = True         # check in the background that every piece is still on Discord
-    scrub_days: float = 7.0            # how long one full check of every piece takes
+    scrub_days: float = 2.0            # how long one full check of every piece takes
     protect_existing: bool = True      # add spare pieces to files uploaded before self-healing existed
     snapshot_interval_hours: float = 24.0  # automatic snapshot of the whole drive (0 = off)
     snapshot_keep_days: float = 14.0   # how long snapshots are kept

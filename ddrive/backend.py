@@ -17,12 +17,14 @@ import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .discord_api import DiscordAPI, DiscordError
+from .discord_api import DiscordAPI, DiscordError, is_gone
 
 log = logging.getLogger("ddrive.backend")
 
 INDEX_MARKER = "DISCORDDRIVE_INDEX"
 INDEX_FILENAME = "discorddrive-index.db.gz"
+KEEP_CHECKPOINTS = 5         # index checkpoints kept in the channel (newest pinned): one bad one is not the end
+NO_ACCESS_PAUSE = 600.0      # a bot refused access to the channel is left out of the rotation this long
 _CURSOR_RE = re.compile(r"\bc=(\d+)")
 
 
@@ -94,6 +96,7 @@ class DiscordBackend:
         self.apis = [api, *extra_apis]
         self._next = 0
         self._rr_lock = threading.Lock()
+        self.no_access = {}           # index in self.apis -> (time, error) of a bot the channel refused
 
     @property
     def upload_slots(self) -> int:
@@ -101,13 +104,66 @@ class DiscordBackend:
 
     def _pick(self) -> DiscordAPI:
         with self._rr_lock:
-            api = self.apis[self._next % len(self.apis)]
-            self._next += 1
-        return api
+            now = time.time()
+            for _ in range(len(self.apis)):
+                i = self._next % len(self.apis)
+                self._next += 1
+                denied = self.no_access.get(i)
+                if denied is None or now - denied[0] > NO_ACCESS_PAUSE:
+                    return self.apis[i]
+            return self.api           # every bot was refused lately: the main one asks again
+
+    def _refused(self, api, e):
+        i = self.apis.index(api)
+        with self._rr_lock:
+            first = i not in self.no_access
+            self.no_access[i] = (time.time(), str(e))
+        if first:
+            log.warning("Bot %d of %d may not read the channel (%s). It is left out for now; pieces are read "
+                        "with the other bots. Check that it is in the server and can see the channel.",
+                        i + 1, len(self.apis), e)
+
+    def bot_problems(self):
+        """Bots the channel refused lately: [{"bot": 1-based number, "since", "error"}]."""
+        with self._rr_lock:
+            return [{"bot": i + 1, "since": t, "error": err} for i, (t, err) in sorted(self.no_access.items())]
+
+    def _get_message(self, message_id):
+        """The message holding a piece. A bot that is refused (403) is not the last word: the main bot and
+        then every other bot are asked before the refusal is passed on. Only a 404 means it is gone."""
+        first = self._pick()
+        order = [first] + [a for a in [self.api, *self.apis] if a is not first]
+        tried, last = set(), None
+        for api in order:
+            if id(api) in tried:
+                continue
+            tried.add(id(api))
+            try:
+                msg = api.get_message(self.channel_id, message_id)
+            except DiscordError as e:
+                if e.status not in (401, 403):
+                    raise
+                self._refused(api, e)
+                last = e
+                continue
+            i = self.apis.index(api)
+            if i in self.no_access:
+                with self._rr_lock:
+                    self.no_access.pop(i, None)
+            return msg
+        raise last
 
     def upload(self, filename: str, data: bytes, content: str = "") -> StoredChunk:
         msg = self._pick().send_file(self.channel_id, filename, data, content)
         att = msg["attachments"][0]
+        size = att.get("size")
+        if size is not None and int(size) != len(data):
+            # Discord stored something else than was sent: don't let anything rely on it
+            try:
+                self.delete(msg["id"])
+            except DiscordError:
+                pass
+            raise DiscordError(500, f"upload of {filename} arrived with {size} of {len(data)} bytes")
         return StoredChunk(msg["id"], att["id"], att["url"])
 
     def download(self, message_id: str, url: str):
@@ -119,7 +175,7 @@ class DiscordBackend:
                 if e.status not in (401, 403, 404, 410):
                     raise
                 log.debug("CDN link for %s rejected (%s); refreshing", message_id, e.status)
-        msg = self._pick().get_message(self.channel_id, message_id)
+        msg = self._get_message(message_id)
         atts = msg.get("attachments") or []
         if not atts:
             raise DiscordError(404, f"message {message_id} has no attachment")
@@ -129,9 +185,9 @@ class DiscordBackend:
     def message_info(self, message_id: str):
         """{'filename', 'url', 'attachment_id'} of a stored piece, or None if it is gone from Discord."""
         try:
-            msg = self._pick().get_message(self.channel_id, message_id)
+            msg = self._get_message(message_id)
         except DiscordError as e:
-            if e.status == 404:
+            if is_gone(e):
                 return None
             raise
         atts = msg.get("attachments") or []
@@ -189,12 +245,20 @@ class DiscordBackend:
         except DiscordError as e:
             log.warning("Could not pin index checkpoint: %s", e)
         if previous_message_id and previous_message_id != msg["id"]:
+            try:
+                self.api.unpin(self.channel_id, previous_message_id)
+            except DiscordError:
+                pass
+        return msg["id"]
+
+    def drop_checkpoints(self, mids):
+        """Delete index checkpoints that are no longer among the newest KEEP_CHECKPOINTS."""
+        for mid in mids:
             for fn_act in (self.api.unpin, self.api.delete_message):
                 try:
-                    fn_act(self.channel_id, previous_message_id)
+                    fn_act(self.channel_id, mid)
                 except DiscordError:
                     pass
-        return msg["id"]
 
     def find_latest_index(self, scan_pages: int = 10):
         """Returns the newest index checkpoint message (dict with a 'cursor' key), or None."""
@@ -372,9 +436,14 @@ class LocalBackend:
         pins = [p for p in self._pins() if p != previous_message_id] + [chunk.message_id]
         with open(os.path.join(self.root, "pins.json"), "w") as f:
             json.dump(pins, f)
-        if previous_message_id and previous_message_id != chunk.message_id:
-            self.delete(previous_message_id)
         return chunk.message_id
+
+    def drop_checkpoints(self, mids):
+        pins = [p for p in self._pins() if p not in mids]
+        with open(os.path.join(self.root, "pins.json"), "w") as f:
+            json.dump(pins, f)
+        for mid in mids:
+            self.delete(mid)
 
     def _pinned_msgs(self):
         msgs = []

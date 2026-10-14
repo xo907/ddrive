@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import codec
 from .crypto import AuthenticationError
-from .discord_api import DiscordError
+from .discord_api import DiscordError, is_gone
 
 log = logging.getLogger("ddrive.cache")
 
@@ -176,8 +176,8 @@ class ChunkCache:
                 try:
                     data, new_url = self.backend.download(mid, chunk.get("url"))
                 except DiscordError as e:
-                    if e.status not in (403, 404):
-                        raise
+                    if not is_gone(e):
+                        raise           # refused or busy: the piece may well be there, don't rebuild it
                     last_err = e        # gone from Discord: rebuild it from its spare pieces
                     break
                 if new_url:

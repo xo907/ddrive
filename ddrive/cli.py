@@ -13,7 +13,7 @@ from .cache import ChunkCache
 from .config import Config, config_path, default_data_dir, format_size, launcher, normalize_mount_point, parse_size
 from . import codec
 from .crypto import AuthenticationError, KeyRing, generate_key, key_fingerprint, parse_key
-from .discord_api import DiscordAPI, DiscordError
+from .discord_api import DiscordAPI, DiscordError, is_gone
 from .drive import DDrive
 from .fuse_loader import find_winfsp_dll, find_linux_fuse_lib, unmount, FUSE_ERROR
 from .index import Index
@@ -520,7 +520,7 @@ def cmd_verify(args):
             except AuthenticationError:
                 problem = "cannot decrypt: encrypted with a different key, or damaged"
             except DiscordError as e:
-                if e.status != 404:
+                if not is_gone(e):
                     return f"download failed ({e})"
                 problem = "missing from Discord"
             except Exception as e:
@@ -555,9 +555,15 @@ def cmd_verify(args):
             print(f"\n{bad} of {len(files)} file(s) cannot be read. Older versions may still work: "
                   f"{launcher()} versions <path>")
             if unreadable and getattr(args, "remove", False):
+                from .heal import confirm_unreadable
+                removed = 0
                 for nid, path in unreadable:
+                    if not confirm_unreadable(idx, j.backend, crypto, nid):
+                        print(f"  [KEPT] {path}: it can be read now, or Discord could not be asked. Not removed.")
+                        continue
                     idx.purge_node(nid)
-                print(f"[OK] Removed {len(unreadable)} unreadable file(s) from the drive (on every device).")
+                    removed += 1
+                print(f"[OK] Removed {removed} unreadable file(s) from the drive (on every device).")
                 print("     Copy them onto the drive again from their originals if you still have them.")
                 return 0
             if unreadable:
@@ -1589,6 +1595,64 @@ def cmd_snapshot_restore(args):
 
 
 # --------------------------------------------------------------------- health
+def _deleted_here(cfg, mids):
+    """Which of `mids` this device's deletion log names."""
+    from .uploader import DELETIONS_LOG
+    mids, found = set(mids), set()
+    try:
+        with open(os.path.join(cfg.resolved_data_dir, DELETIONS_LOG), encoding="utf-8") as f:
+            for line in f:
+                parts = line.split("\t")
+                if len(parts) > 2 and parts[2] in mids:
+                    found.add(parts[2])
+    except OSError:
+        pass
+    return found
+
+
+def _health_why(cfg, idx, backend, mid):
+    """Everything known about one piece: who uses it, whether it was listed as lost, whether this device
+    deleted it, and what Discord says about it now (asked with every bot separately)."""
+    from .uploader import find_deletion
+    print(f"--- Piece {mid} ---")
+    try:
+        print(f"{'Uploaded:':20}{_fmt_time(backend.time_of(mid))}")
+    except Exception:
+        pass
+    use = idx.piece_users(mid)
+    names = {"files": "file", "versions": "earlier version", "snapshots": "snapshot copy", "protects": "spare piece of"}
+    used = False
+    for key, label in names.items():
+        for e in use.get(key) or []:
+            path = e if isinstance(e, str) else e.get("path")
+            print(f"{'Used by:':20}{label} {path}")
+            used = True
+    if not used:
+        print(f"{'Used by:':20}nothing on this drive any more")
+    try:
+        lost = json.loads(idx.kv_get("lost_pieces") or "{}")
+    except ValueError:
+        lost = {}
+    if mid in lost:
+        print(f"{'Listed as lost:':20}since {_fmt_time(lost[mid])}")
+    line = find_deletion(cfg, mid)
+    print(f"{'Deleted by DDrive:':20}" + ("YES, by this device: " + "  ".join(line.split("\t")[:1] + line.split("\t")[3:])
+                                          if line else "not by this device"))
+    apis = getattr(backend, "apis", None)
+    if apis:
+        for n, api in enumerate(apis, 1):
+            try:
+                msg = api.get_message(backend.channel_id, mid)
+                answer = "there" + ("" if msg.get("attachments") else ", but without its attachment")
+            except DiscordError as e:
+                answer = ("GONE (Discord: unknown message)" if is_gone(e) else
+                          f"can't tell: this bot is refused ({e})" if e.status in (401, 403) else f"can't tell ({e})")
+            print(f"{f'Discord, bot {n}:':20}{answer}")
+    else:
+        print(f"{'Discord:':20}{'there' if backend.message_info(mid) else 'GONE'}")
+    return 0
+
+
 def cmd_health(args):
     """How well the drive is protected; optionally check (and repair) every piece now."""
     setup_logging(args.verbose, log_to_file=bool(args.check or args.protect))
@@ -1596,6 +1660,8 @@ def cmd_health(args):
     idx, j, crypto = _open_journal(cfg)
     try:
         from .heal import Healer
+        if getattr(args, "why", None):
+            return _health_why(cfg, idx, j.backend, args.why)
         st = idx.stats(max_age=0)
         pct = 100.0 * st["protected_chunks"] / st["chunks"] if st["chunks"] else 100.0
         print("--- Self-healing ---")
@@ -1632,6 +1698,10 @@ def cmd_health(args):
             if len(damaged) > 200:
                 print(f"  ... and {len(damaged) - 200} more")
             print("Bring a damaged file back from an earlier version or a snapshot, or put it on the drive again.")
+            ours = _deleted_here(cfg, healer._lost())
+            if ours:
+                print(f"[!] {len(ours)} of these part(s) were deleted from Discord by this device "
+                      f"(see {launcher()} health --why <piece>).")
         if args.protect:
             from .uploader import parity_shape
             k, _ = parity_shape(cfg, 10)
@@ -2384,6 +2454,7 @@ def main():
     p_health = subparsers.add_parser("health", help="Self-healing status; --check every piece now, --protect old files")
     p_health.add_argument("--check", action="store_true", help="Check every piece is on Discord and repair what isn't")
     p_health.add_argument("--protect", action="store_true", help="Add spare pieces to files uploaded without them")
+    p_health.add_argument("--why", metavar="PIECE", help="Why one piece (message id) is missing: who deleted it, who uses it")
     p_web = subparsers.add_parser("web", help="Show the address of the web dashboard")
     p_web.add_argument("--open", action="store_true", help="Also open it in the browser")
     subparsers.add_parser("webdav-password", aliases=["web-password"],

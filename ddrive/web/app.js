@@ -2171,6 +2171,9 @@ function renderHealth(quiet) {
            sc.last_pass ? "last full check" : (hl.leader ? "pieces, first check running" : "another device checks"), checkPct),
       stat("Repaired", Number((sc.repaired || 0) + (hl.healer.repaired || 0)).toLocaleString(),
            (sc.lost || hl.healer.lost) ? `${sc.lost || hl.healer.lost} could not be rebuilt` : "nothing lost")),
+    (hl.refused || []).length ? h("p", { class: "warn-text", style: "max-width:680px" },
+      `Discord refuses ${hl.refused.length === 1 ? `bot ${hl.refused[0].bot}` : `bots ${hl.refused.map((b) => b.bot).join(", ")}`} access to the channel. ` +
+      "Pieces are read with the other bots meanwhile, and nothing is counted as lost because of it. Check that the bot is still in the server and can see the channel.") : null,
     (hl.lost || []).length ? [
       h("h2", { class: "warn-text" }, "Parts that can't be repaired"),
       h("p", { class: "muted", style: "margin:0 0 12px;max-width:680px" }, "A part of these is gone from Discord (or unreadable) and there were not enough spare pieces to rebuild it. A damaged file can be replaced by an earlier version or a snapshot copy if one is intact, or by putting it on the drive again from another copy."),
@@ -2969,7 +2972,12 @@ async function renderCheck() {
                            text: "They are removed on every device, and no earlier version is kept (they can't be read anyway)." });
     if (!ok) return;
     const r = await attempt(() => api("/api/check/remove", { uids: list.map((b) => b.uid) }));
-    if (r) { toast(`${plural(r.removed, "file")} deleted`); list.forEach((b) => unreadable.delete(b.uid)); tick(); }
+    if (r) {
+      toast(`${plural(r.removed, "file")} deleted` +
+        (r.kept ? ` · ${plural(r.kept, "file")} kept: readable now, or Discord could not be asked` : ""));
+      list.forEach((b) => unreadable.delete(b.uid));
+      tick();
+    }
   }
 
   async function tick() {

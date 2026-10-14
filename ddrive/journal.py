@@ -234,11 +234,30 @@ class Journal:
         prev = self.index.kv_get("last_backup_mid")
         mid = self.backend.save_index(data, previous_message_id=prev, cursor=cursor)
         self.index.kv_set("last_backup_mid", mid)
+        self._keep_checkpoints(prev, mid)
         self._last_checkpoint_counter = counter
         self._last_checkpoint_time = time.time()
         log.info("Saved index checkpoint to Discord (message %s, %d bytes, journal position %s)",
                  mid, len(data), cursor)
         return True
+
+    def _keep_checkpoints(self, prev, mid):
+        """Earlier checkpoints stay in the channel (unpinned) until KEEP_CHECKPOINTS newer ones exist,
+        so one that can't be read is not the only copy of the index."""
+        from .backend import KEEP_CHECKPOINTS
+        try:
+            older = json.loads(self.index.kv_get("older_backup_mids") or "[]")
+        except ValueError:
+            older = []
+        if prev and prev != mid and prev not in older:
+            older.insert(0, prev)
+        keep, drop = older[:KEEP_CHECKPOINTS - 1], older[KEEP_CHECKPOINTS - 1:]
+        self.index.kv_set("older_backup_mids", json.dumps(keep))
+        if drop and hasattr(self.backend, "drop_checkpoints"):
+            try:
+                self.backend.drop_checkpoints(drop)
+            except Exception as e:
+                log.debug("Could not delete old index checkpoints: %s", e)
 
     def _index_empty(self):
         st = self.index.stats(max_age=0)

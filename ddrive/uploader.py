@@ -303,6 +303,8 @@ class Uploader:
                 if todo:
                     self._upload_pieces(job, staging_path, todo, k)
                 gkey = str(start // group)
+                if k:
+                    self._one_message_per_position(job, staging_path, idxs, k)
                 if k and gkey not in job.parity:
                     self._check(nid)
                     existing = None
@@ -310,7 +312,8 @@ class Uploader:
                         existing = self.index.find_group([job.done[i]["message_id"] for i in idxs])
                     if not existing:
                         self._report(job, "spare pieces")
-                    job.parity[gkey] = existing or self._upload_parity(staging_path, idxs, chunk_size)
+                    job.parity[gkey] = existing or self._upload_parity(
+                        staging_path, idxs, chunk_size, [job.done[i]["sha256"] for i in idxs])
                     self._report(job, "uploading")
                     self._save_progress(nid, version, file_size, chunk_size, job.done, k, job.parity)
             chunks = [job.done[i] for i in range(total)]
@@ -450,6 +453,9 @@ class Uploader:
                 job.reserved.append(reused["message_id"])
                 self.stats["reused_bytes"] += len(data)
             return {"idx": i, "size": len(data), "sha256": sha256, "reused": time.time(), **reused}
+        return self._store_piece(job, i, data, sha256)
+
+    def _store_piece(self, job, i, data, sha256):
         if self.crypto:
             payload, packed = codec.encode(data, self.crypto, self._compress())
             # Discord sees neither the original name nor the extension
@@ -463,6 +469,7 @@ class Uploader:
                 f"Size: {len(data)} bytes | Hash: {sha256[:16]}"
             )
         stored = self.backend.upload(filename, payload, content=content)
+        self._verify_upload(stored.message_id, data)
         with self._lock:
             self.stats["uploaded_bytes"] += len(payload)
             if packed:
@@ -475,6 +482,39 @@ class Uploader:
                 log.debug("Could not cache chunk of pinned node %s: %s", job.nid, ce)
         return {"idx": i, "message_id": stored.message_id, "attachment_id": stored.attachment_id,
                 "url": stored.url, "size": len(data), "sha256": sha256}
+
+    def _verify_upload(self, mid, data):
+        """With `verify_uploads`: read a piece back right after uploading it, and compare."""
+        if not getattr(self.cfg, "verify_uploads", False):
+            return
+        try:
+            payload, _ = self.backend.download(mid, None)
+            ok = codec.decode(payload, self.crypto, None) == data
+        except Exception as e:
+            ok, why = False, e
+        else:
+            why = "it reads back differently"
+        if not ok:
+            try:
+                self.backend.delete(mid)
+            except Exception:
+                pass
+            raise RuntimeError(f"an uploaded piece could not be read back ({why})")
+
+    def _one_message_per_position(self, job, path, idxs, k):
+        """A group survives the loss of any m messages only if no message fills two of its positions.
+        De-duplication can reuse one stored piece for repeated content (runs of zeros in a disk image):
+        each repeat after the first gets its own message."""
+        seen = set()
+        for i in idxs:
+            c = job.done[i]
+            if c["message_id"] in seen:
+                data = self._read_piece(path, i, job.chunk_size)
+                if hashlib.sha256(data).hexdigest() != c["sha256"]:
+                    raise _Interrupted("file changed during upload")
+                job.done[i] = self._store_piece(job, i, data, c["sha256"])
+                self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, k, job.parity)
+            seen.add(job.done[i]["message_id"])
 
     def _compress(self):
         return bool(getattr(self.cfg, "compression", True))
@@ -512,14 +552,19 @@ class Uploader:
             c.update(fresh)
 
     # -------------------------------------------------------- spare pieces
-    def _upload_parity(self, path, idxs, chunk_size):
-        """Compute and upload the spare pieces of one group. Returns [gid, [[mid, size, sha], ...]]."""
+    def _upload_parity(self, path, idxs, chunk_size, shas=None):
+        """Compute and upload the spare pieces of one group. Returns [gid, [[mid, size, sha], ...]].
+        `shas`: the checksums of the pieces as uploaded; spare pieces computed from anything else
+        could never rebuild them."""
         _, m = parity_shape(self.cfg, len(idxs))
         enc = rs.Encoder(len(idxs), m)
         with open(path, "rb") as f:
             for pos, i in enumerate(idxs):
                 f.seek(i * chunk_size)
-                enc.add(pos, f.read(chunk_size))
+                data = f.read(chunk_size)
+                if shas and hashlib.sha256(data).hexdigest() != shas[pos]:
+                    raise _Interrupted("file changed during upload")
+                enc.add(pos, data)
         shards = enc.parity()
         del enc
         futures = [self._pool.submit(self.upload_blob, s) for s in shards]
@@ -529,6 +574,7 @@ class Uploader:
         """Upload a spare (or repaired) piece. Returns [message_id, size, sha256]."""
         payload, _ = codec.encode(data, self.crypto, self._compress())
         stored = self.backend.upload(f"chk_{secrets.token_hex(8)}.bin", payload, content="")
+        self._verify_upload(stored.message_id, data)
         with self._lock:
             self.stats["uploaded_bytes"] += len(payload)
             self.stats["spare_bytes"] += len(payload)
@@ -555,6 +601,12 @@ class Uploader:
             for _, shards in parity.values():
                 stale += [s[0] for s in shards]
             parity = {}
+        elif k:
+            # a group with a piece that has to be uploaded again: its spare pieces were computed from
+            # the old content and could never rebuild the new one
+            redo = {str(c["idx"] // k) for c in rec.get("chunks") or [] if c["idx"] not in good}
+            for gkey in redo & set(parity):
+                stale += [s[0] for s in parity.pop(gkey)[1]]
         if stale:
             self.index.release(stale)
         return good, parity
@@ -571,11 +623,13 @@ class Uploader:
                 log.error("Error during trash cleanup: %s", e)
 
     def clean_trash(self, grace=None, limit=10):
-        """Delete released pieces from Discord (after a grace period, and only if nothing uses them now)."""
+        """Delete released pieces from Discord (after `delete_after_days`, and only if nothing uses them now)."""
         if not self.cfg.delete_remote:
             return 0
+        if grace is None:
+            grace = max(0.0, float(getattr(self.cfg, "delete_after_days", 7.0) or 0)) * 86400
         deleted = 0
-        for mid in self.index.trash_batch(limit, grace=grace):
+        for mid, released in self.index.trash_batch(limit, grace=grace, with_time=True):
             if not self._running:
                 break
             if self.index.is_referenced(mid) or self.is_reserved(mid):
@@ -588,7 +642,36 @@ class Uploader:
             except Exception as e:
                 log.debug("Failed deleting trashed message %s: %s", mid, e)
                 break  # back off until next round
+            log_deletion(self.cfg, mid, released)
         return deleted
+
+
+DELETIONS_LOG = "deletions.log"
+
+
+def log_deletion(cfg, mid, released):
+    """Note a piece this device deleted from Discord, for good (the file is never trimmed: a line is
+    about 80 bytes). A piece found missing later is then known to be ours, or Discord's (`health --why`)."""
+    try:
+        path = os.path.join(cfg.resolved_data_dir, DELETIONS_LOG)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(released)) if released else "-"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\t".join([stamp, "deleted", str(mid), f"released {when}", f"device {cfg.device_id or '-'}"]) + "\n")
+    except Exception as e:
+        log.debug("Could not note the deletion of %s: %s", mid, e)
+
+
+def find_deletion(cfg, mid):
+    """The deletion log's line about piece `mid`, or None if this device never deleted it."""
+    try:
+        with open(os.path.join(cfg.resolved_data_dir, DELETIONS_LOG), encoding="utf-8") as f:
+            for line in f:
+                if line.split("\t")[2:3] == [str(mid)]:
+                    return line.rstrip("\n")
+    except OSError:
+        pass
+    return None
 
 
 class _Job:

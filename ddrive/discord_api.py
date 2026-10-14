@@ -76,10 +76,27 @@ class Pacer:
             self._slow_until = now + 300
 
 
+UNKNOWN_CHANNEL = 10003     # Discord's error code: the channel doesn't exist (or this bot can't see it)
+
+
 class DiscordError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(f"Discord HTTP {status}: {message}")
         self.status = status
+        self.code = None          # Discord's own error code (10008 Unknown Message, 50001 Missing Access, ...)
+        try:
+            body = json.loads(message)
+            if isinstance(body, dict) and isinstance(body.get("code"), int):
+                self.code = body["code"]
+        except (TypeError, ValueError):
+            pass
+
+
+def is_gone(e) -> bool:
+    """Does this error prove a message is gone? Only a 404 does, and not "Unknown Channel" (a wrong
+    channel id or a bot that left the server: every piece would look gone). A 403 means the bot may
+    not read it, which says nothing about whether it is still there."""
+    return isinstance(e, DiscordError) and e.status == 404 and e.code != UNKNOWN_CHANNEL
 
 
 def _encode_multipart(fields, files):
