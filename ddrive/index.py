@@ -648,6 +648,37 @@ class Index:
                 out.append({"gid": gid, "members": members, "shards": shards})
             return out
 
+    def all_groups(self):
+        """Every spare-piece group: {gid: ([(mid, size, sha)] data pieces, [(mid, size, sha)] spare pieces)}."""
+        out = {}
+        with self.lock:
+            for gid, mid, size, sha in self.db.execute(
+                    "SELECT gid, message_id, size, sha256 FROM parity_members ORDER BY gid, pos"):
+                out.setdefault(gid, ([], []))[0].append((mid, size, sha))
+            for gid, mid, size, sha in self.db.execute(
+                    "SELECT gid, message_id, size, sha256 FROM parity_shards ORDER BY gid, j"):
+                out.setdefault(gid, ([], []))[1].append((mid, size, sha))
+        return out
+
+    def pieces_in_channel(self, chan):
+        """How many stored pieces the drive keeps in spare channel `chan`."""
+        like = f"{chan}-%"
+        with self.lock:
+            return self.db.execute(
+                "SELECT COUNT(*) FROM (SELECT message_id FROM chunks WHERE message_id LIKE ? UNION "
+                "SELECT message_id FROM version_chunks WHERE message_id LIKE ? UNION "
+                "SELECT message_id FROM snapshot_chunks WHERE message_id LIKE ? UNION "
+                "SELECT message_id FROM parity_shards WHERE message_id LIKE ?)", (like,) * 4).fetchone()[0]
+
+    def parity_group(self, gid):
+        """One group as parity_groups_for gives them, or None."""
+        with self.lock:
+            members = [tuple(r) for r in self.db.execute(
+                "SELECT message_id, size, sha256 FROM parity_members WHERE gid=? ORDER BY pos", (gid,))]
+            shards = [tuple(r) for r in self.db.execute(
+                "SELECT message_id, size, sha256 FROM parity_shards WHERE gid=? ORDER BY j", (gid,))]
+        return {"gid": gid, "members": members, "shards": shards} if members else None
+
     def piece_info(self, mid):
         """(kind, size, sha256) of a stored piece: kind is 'data' or 'parity'; None if unknown."""
         with self.lock:

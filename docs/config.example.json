@@ -18,6 +18,7 @@
   "delete_remote": true,
   "delete_after_days": 7.0,
   "verify_uploads": false,
+  "spare_channels": [],
   "index_backup_interval": 600.0,
   "poll_interval": 2.0,
   "keep_versions": true,

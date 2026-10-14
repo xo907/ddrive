@@ -2171,6 +2171,10 @@ function renderHealth(quiet) {
            sc.last_pass ? "last full check" : (hl.leader ? "pieces, first check running" : "another device checks"), checkPct),
       stat("Repaired", Number((sc.repaired || 0) + (hl.healer.repaired || 0)).toLocaleString(),
            (sc.lost || hl.healer.lost) ? `${sc.lost || hl.healer.lost} could not be rebuilt` : "nothing lost")),
+    hl.channels > 1 ? h("p", { class: "muted", style: "max-width:680px" },
+      `Pieces are spread over ${hl.channels} channels (the main one and ${hl.channels - 1} spare), so losing any one of them loses no file. ` +
+      (hl.spread && hl.spread.left ? `${Number(hl.spread.left).toLocaleString()} group(s) stored earlier are still being spread.` :
+       hl.spread && hl.spread.checked ? "Every group is spread." : "Checking what is stored earlier still has to be spread.")) : null,
     (hl.refused || []).length ? h("p", { class: "warn-text", style: "max-width:680px" },
       `Discord refuses ${hl.refused.length === 1 ? `bot ${hl.refused[0].bot}` : `bots ${hl.refused.map((b) => b.bot).join(", ")}`} access to the channel. ` +
       "Pieces are read with the other bots meanwhile, and nothing is counted as lost because of it. Check that the bot is still in the server and can see the channel.") : null,

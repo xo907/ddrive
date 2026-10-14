@@ -1171,6 +1171,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "recheck": d.healer.recheck if d.healer else None,
                 "leader": d.maintenance.leader() if d.maintenance else False,
                 "refused": d.backend.bot_problems() if hasattr(d.backend, "bot_problems") else [],
+                "channels": len(getattr(d.backend, "channels", None) or [None]),
+                "spread": d.maintenance.spread_state if d.maintenance else {},
             },
             "devices": devices,
             "lan": [f"http://{ip}:{self.app.port}/" for ip in lan_addresses()] if d.cfg.web_lan else [],

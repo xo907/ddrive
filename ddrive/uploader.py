@@ -18,6 +18,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .logbuf import tname
 from . import codec, rs
+from .channels import channel_of, channels_of, counts, fill, spread_pieces
 
 log = logging.getLogger("ddrive.uploader")
 
@@ -29,8 +30,9 @@ class _Interrupted(Exception):
     pass
 
 
-def parity_shape(cfg, n):
-    """(group size, spare pieces for a group of n) under the current settings; (0, 0) when off."""
+def parity_shape(cfg, n, channels=1):
+    """(group size, spare pieces for a group of n) under the current settings; (0, 0) when off.
+    Spread over `channels` channels, a group gets enough spare pieces to lose any one of them."""
     if not getattr(cfg, "parity_enabled", False):
         return 0, 0
     k = max(1, int(getattr(cfg, "parity_group", 10) or 10))
@@ -39,6 +41,7 @@ def parity_shape(cfg, n):
         return 0, 0
     if n < 4:
         m = 1
+    m = max(m, spread_pieces(min(k, n), channels))
     return k, min(m, rs.MAX_PIECES - min(k, n))
 
 
@@ -279,9 +282,10 @@ class Uploader:
         # 4. Upload the pieces group by group, each group followed by its spare pieces
         chunk_size = self.cfg.chunk_size
         total = (file_size + chunk_size - 1) // chunk_size
-        k, _ = parity_shape(self.cfg, total)
+        k, _ = parity_shape(self.cfg, total, len(self._chans()))
         group = k or total
         job = _Job(nid, path, node["name"], version, file_size, chunk_size, self.index.is_pinned(nid))
+        job.k = k
         try:
             with open(staging_path, "rb") as f:
                 job.done, job.parity = self._resume_point(nid, f, version, file_size, chunk_size, k)
@@ -313,7 +317,8 @@ class Uploader:
                     if not existing:
                         self._report(job, "spare pieces")
                     job.parity[gkey] = existing or self._upload_parity(
-                        staging_path, idxs, chunk_size, [job.done[i]["sha256"] for i in idxs])
+                        staging_path, idxs, chunk_size, [job.done[i]["sha256"] for i in idxs],
+                        [job.done[i]["message_id"] for i in idxs])
                     self._report(job, "uploading")
                     self._save_progress(nid, version, file_size, chunk_size, job.done, k, job.parity)
             chunks = [job.done[i] for i in range(total)]
@@ -453,9 +458,22 @@ class Uploader:
                 job.reserved.append(reused["message_id"])
                 self.stats["reused_bytes"] += len(data)
             return {"idx": i, "size": len(data), "sha256": sha256, "reused": time.time(), **reused}
-        return self._store_piece(job, i, data, sha256)
+        return self._store_piece(job, i, data, sha256, self._channel_for(i, getattr(job, "k", 0)))
 
-    def _store_piece(self, job, i, data, sha256):
+    def _chans(self):
+        return channels_of(self.backend)
+
+    def _put(self, filename, payload, content, channel):
+        if channel is None:
+            return self.backend.upload(filename, payload, content=content)
+        return self.backend.upload(filename, payload, content=content, channel=channel)
+
+    def _channel_for(self, i, k):
+        """Where data piece i goes: the places of a group take turns over the channels."""
+        chans = self._chans()
+        return chans[(i % k if k else i) % len(chans)] if len(chans) > 1 else None
+
+    def _store_piece(self, job, i, data, sha256, channel=None):
         if self.crypto:
             payload, packed = codec.encode(data, self.crypto, self._compress())
             # Discord sees neither the original name nor the extension
@@ -468,7 +486,7 @@ class Uploader:
                 f"DDrive chunk #{i} for `{job.name}`\n"
                 f"Size: {len(data)} bytes | Hash: {sha256[:16]}"
             )
-        stored = self.backend.upload(filename, payload, content=content)
+        stored = self._put(filename, payload, content, channel)
         self._verify_upload(stored.message_id, data)
         with self._lock:
             self.stats["uploaded_bytes"] += len(payload)
@@ -505,16 +523,24 @@ class Uploader:
         """A group survives the loss of any m messages only if no message fills two of its positions.
         De-duplication can reuse one stored piece for repeated content (runs of zeros in a disk image):
         each repeat after the first gets its own message."""
-        seen = set()
+        chans = self._chans()
+        _, m = parity_shape(self.cfg, len(idxs), len(chans))
+        seen, held = set(), {}
         for i in idxs:
             c = job.done[i]
-            if c["message_id"] in seen:
+            chan = channel_of(c["message_id"])
+            # With spare channels, a reused piece can also put more of the group in one channel than the
+            # group can lose: it is uploaded again into the channel holding fewest.
+            crowded = len(chans) > 1 and held.get(chan, 0) >= m
+            if c["message_id"] in seen or crowded:
                 data = self._read_piece(path, i, job.chunk_size)
                 if hashlib.sha256(data).hexdigest() != c["sha256"]:
                     raise _Interrupted("file changed during upload")
-                job.done[i] = self._store_piece(job, i, data, c["sha256"])
+                chan = min(chans, key=lambda x: held.get(x, 0)) if len(chans) > 1 else None
+                job.done[i] = self._store_piece(job, i, data, c["sha256"], chan)
                 self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, k, job.parity)
             seen.add(job.done[i]["message_id"])
+            held[chan] = held.get(chan, 0) + 1
 
     def _compress(self):
         return bool(getattr(self.cfg, "compression", True))
@@ -552,11 +578,13 @@ class Uploader:
             c.update(fresh)
 
     # -------------------------------------------------------- spare pieces
-    def _upload_parity(self, path, idxs, chunk_size, shas=None):
+    def _upload_parity(self, path, idxs, chunk_size, shas=None, mids=()):
         """Compute and upload the spare pieces of one group. Returns [gid, [[mid, size, sha], ...]].
         `shas`: the checksums of the pieces as uploaded; spare pieces computed from anything else
-        could never rebuild them."""
-        _, m = parity_shape(self.cfg, len(idxs))
+        could never rebuild them. `mids`: where the data pieces are (the spare pieces fill up the
+        channels holding fewest)."""
+        chans = self._chans()
+        _, m = parity_shape(self.cfg, len(idxs), len(chans))
         enc = rs.Encoder(len(idxs), m)
         with open(path, "rb") as f:
             for pos, i in enumerate(idxs):
@@ -567,13 +595,14 @@ class Uploader:
                 enc.add(pos, data)
         shards = enc.parity()
         del enc
-        futures = [self._pool.submit(self.upload_blob, s) for s in shards]
+        where = fill(counts(mids), len(shards), chans) if len(chans) > 1 else [None] * len(shards)
+        futures = [self._pool.submit(self.upload_blob, s, c) for s, c in zip(shards, where)]
         return [secrets.token_hex(8), [fut.result() for fut in futures]]
 
-    def upload_blob(self, data):
+    def upload_blob(self, data, channel=None):
         """Upload a spare (or repaired) piece. Returns [message_id, size, sha256]."""
         payload, _ = codec.encode(data, self.crypto, self._compress())
-        stored = self.backend.upload(f"chk_{secrets.token_hex(8)}.bin", payload, content="")
+        stored = self._put(f"chk_{secrets.token_hex(8)}.bin", payload, "", channel)
         self._verify_upload(stored.message_id, data)
         with self._lock:
             self.stats["uploaded_bytes"] += len(payload)
@@ -680,6 +709,7 @@ class _Job:
     def __init__(self, nid, path, name, version, size, chunk_size, pinned):
         self.nid, self.path, self.name, self.version = nid, path, name, version
         self.size, self.chunk_size, self.pinned = size, chunk_size, pinned
+        self.k = 0             # data pieces per group (0: no spare pieces)
         self.done = {}         # idx -> chunk dict
         self.parity = {}       # group number (str) -> [gid, [[mid, size, sha], ...]]
         self.reserved = []

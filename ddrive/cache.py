@@ -177,6 +177,12 @@ class ChunkCache:
                     data, new_url = self.backend.download(mid, chunk.get("url"))
                 except DiscordError as e:
                     if not is_gone(e):
+                        if e.status in (401, 403, 404) and self.healer is not None:
+                            # its channel refuses access (or is gone): read it rebuilt from the other
+                            # channels, without counting it lost or uploading it again
+                            data = self.healer.rebuild_for_read(mid)
+                            if data is not None:
+                                return self.put(mid, data, persist=persist)
                         raise           # refused or busy: the piece may well be there, don't rebuild it
                     last_err = e        # gone from Discord: rebuild it from its spare pieces
                     break

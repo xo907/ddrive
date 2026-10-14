@@ -22,6 +22,7 @@ import time
 
 from .logbuf import tname
 from . import codec, rs
+from .channels import channel_of, channels_of, counts, fill, worst
 from .crypto import AuthenticationError
 from .discord_api import DiscordError, is_gone
 
@@ -69,9 +70,18 @@ class Healer:
         return data
 
     # ------------------------------------------------------------ rebuilding
-    def rebuild_members(self, group, missing):
+    def _fetch_soft(self, mid, sha):
+        """_fetch, with a piece that can't be asked about (its channel refuses access) counted as missing."""
+        try:
+            return self._fetch(mid, sha)
+        except DiscordError:
+            return None
+
+    def rebuild_members(self, group, missing, soft=False):
         """Rebuild the missing data pieces of `group`. `missing`: message ids known to be gone.
-        Returns {message_id: bytes}, or None when too many pieces are gone."""
+        Returns {message_id: bytes}, or None when too many pieces are gone. `soft`: pieces that can't
+        be asked about are left out instead of stopping (only for reading, see rebuild_for_read)."""
+        fetch = self._fetch_soft if soft else self._fetch
         members, shards = group["members"], group["shards"]
         k, m = len(members), len(shards)
         missing = set(missing)
@@ -81,7 +91,7 @@ class Healer:
                 continue
             if sum(1 for x in members if x[0] in missing) > m:
                 return None
-            data = self._fetch(mid, sha)
+            data = fetch(mid, sha)
             if data is None:
                 missing.add(mid)
                 continue
@@ -97,7 +107,7 @@ class Healer:
         for j, (pmid, _, psha) in enumerate(shards):
             if len(avail) >= k:
                 break
-            data = self._fetch(pmid, psha)
+            data = fetch(pmid, psha)
             if data is not None:
                 avail[k + j] = data
         if len(avail) < k:
@@ -178,6 +188,21 @@ class Healer:
         with self._lock:
             self.stats["lost"] += 1
         self._note_lost(mid)
+        return None
+
+    def rebuild_for_read(self, mid):
+        """Piece `mid` rebuilt from the rest of its group, only to be read: nothing is uploaded and nothing
+        is counted lost (its channel refused access; the piece itself may well still be there)."""
+        for group in self.index.parity_groups_for(mid):
+            if mid not in [x[0] for x in group["members"]]:
+                continue
+            try:
+                rebuilt = self.rebuild_members(group, {mid}, soft=True)
+            except DiscordError:
+                continue
+            if rebuilt and mid in rebuilt:
+                self._remember(mid, rebuilt[mid])
+                return rebuilt[mid]
         return None
 
     def _sha(self, mid):
@@ -441,7 +466,7 @@ class Healer:
             if not self.index.is_referenced(mid):
                 return        # already repaired by another device, or no longer needed
             payload, _ = codec.encode(data, self.crypto, bool(getattr(self.cfg, "compression", True)))
-            stored = self.backend.upload(f"chk_{secrets.token_hex(8)}.bin", payload, content="")
+            stored = self._upload_near(mid, payload)
             self.index.queue_op({"t": "fix", "o": mid, "n": stored.message_id})
             if self.cache is not None:
                 try:
@@ -460,6 +485,27 @@ class Healer:
             return
         with self._lock:
             self._queued.discard(mid)
+
+    def _put(self, payload, channel):
+        name = f"chk_{secrets.token_hex(8)}.bin"
+        if channel is None:
+            return self.backend.upload(name, payload, content="")
+        return self.backend.upload(name, payload, content="", channel=channel)
+
+    def _upload_near(self, mid, payload):
+        """Upload a rebuilt piece into the channel it was in. If that channel can't take it (deleted, or
+        the bot is refused there), into the others in turn, so a lost channel doesn't stop repairs."""
+        chans = channels_of(self.backend)
+        first = channel_of(mid) if channel_of(mid) in chans else None
+        order = [first] + [c for c in chans if c != first]
+        for n, chan in enumerate(order):
+            try:
+                return self._put(payload, chan)
+            except DiscordError as e:
+                if e.status not in (403, 404) or n == len(order) - 1:
+                    raise
+                log.warning("Could not put piece %s back into %s (%s); trying another channel", mid,
+                            f"spare channel {chan}" if chan else "the main channel", e)
 
     def start(self):
         if self._running:
@@ -491,11 +537,61 @@ class Healer:
                 return False
             datas.append(data)
         shards = rs.encode(datas, m)
+        chans = channels_of(self.backend)
+        where = fill(counts([x[0] for x in members]), len(shards), chans) if len(chans) > 1 else [None] * len(shards)
         out = []
-        for s in shards:
+        for s, chan in zip(shards, where):
             payload, _ = codec.encode(s, self.crypto, bool(getattr(self.cfg, "compression", True)))
-            stored = self.backend.upload(f"chk_{secrets.token_hex(8)}.bin", payload, content="")
+            stored = self._put(payload, chan)
             out.append([stored.message_id, len(s), hashlib.sha256(s).hexdigest()])
+        self.index.add_parity_group(secrets.token_hex(8), [list(x) for x in members], out)
+        self.wake()
+        return True
+
+    @staticmethod
+    def spread_shape(mids, k, m, chans):
+        """(spare pieces the group needs in all, channels of the ones to add) so that no channel holds more
+        of it than it has spare pieces, i.e. any one channel can be lost. None if that can't be done."""
+        have = counts(mids)
+        for m2 in range(m, rs.MAX_PIECES - k + 1):
+            extra = fill(have, m2 - m, chans)
+            n = dict(have)
+            for c in extra:
+                n[c] = n.get(c, 0) + 1
+            if max(n.get(c, 0) for c in chans) <= m2:
+                return m2, extra
+        return None
+
+    def spread(self, group, chans):
+        """Give a group stored before the spare channels (or before one was added) more spare pieces, in the
+        channels holding fewest of it, until it survives losing any one channel. Its spare pieces so far are
+        kept: a spare piece's content depends only on its place, so they are the first ones of the larger
+        group. Recorded as a new group over the same pieces. False if a piece can't be read now."""
+        members, shards = group["members"], group["shards"]
+        k, m = len(members), len(shards)
+        shape = self.spread_shape([x[0] for x in members] + [x[0] for x in shards], k, m, chans)
+        if shape is None:
+            return False
+        m2, where = shape
+        if m2 == m:
+            return True
+        enc = rs.Encoder(k, m2)
+        for pos, (mid, _, sha) in enumerate(members):
+            data = self._fetch(mid, sha)
+            if data is None:
+                return False
+            enc.add(pos, data)
+        par = enc.parity()
+        del enc
+        for j, (_, _, sha) in enumerate(shards):
+            if sha and hashlib.sha256(par[j]).hexdigest() != sha:
+                log.warning("The spare pieces of group %s don't match its pieces; not spreading it", group.get("gid"))
+                return False
+        out = [list(s) for s in shards]
+        for j, chan in zip(range(m, m2), where):
+            payload, _ = codec.encode(par[j], self.crypto, bool(getattr(self.cfg, "compression", True)))
+            stored = self._put(payload, chan)
+            out.append([stored.message_id, len(par[j]), hashlib.sha256(par[j]).hexdigest()])
         self.index.add_parity_group(secrets.token_hex(8), [list(x) for x in members], out)
         self.wake()
         return True
@@ -640,6 +736,9 @@ class Maintenance:
         self._next_protect = time.time() + 60
         self._next_snapshot = time.time() + 120
         self._next_offline = time.time() + 30
+        self._next_spread = time.time() + 90
+        self._spread_todo = []
+        self.spread_state = {}
         self._leader = (0.0, False)
         try:                          # files protect_step gave up on (kept across restarts)
             self._unreadable = set(json.loads(index.kv_get("unprotectable") or "[]"))
@@ -667,6 +766,7 @@ class Maintenance:
     def _loop(self):
         while not self._stop.wait(self.TICK):
             for name, fn in (("check", self.scrub_step), ("protect", self.protect_step),
+                             ("spread", self.spread_step),
                              ("snapshot", self.snapshot_step), ("offline", self.offline_step),
                              ("recheck", self.recheck_step)):
                 if self._stop.is_set():
@@ -768,7 +868,8 @@ class Maintenance:
             self._unreadable.clear()
             self.index.kv_set("unprotectable", "[]")
             self.index.kv_set("unprotectable_since", "")
-        k, _ = parity_shape(self.cfg, 10)
+        chans = len(channels_of(self.backend))
+        k, _ = parity_shape(self.cfg, 10, chans)
         if not k:
             return
         work = self.index.unprotected_slices(k, limit=1, skip=self._unreadable)
@@ -779,7 +880,7 @@ class Maintenance:
         for members in slices:
             if self._stop.is_set() or self._uploads_busy():
                 return
-            _, m = parity_shape(self.cfg, len(members))
+            _, m = parity_shape(self.cfg, len(members), chans)
             if not self.healer.protect(members, m):
                 log.warning("Could not add spare pieces to %s: part of it can't be read. 'verify' shows what is "
                             "wrong with it; it is tried again in a week.", self.index.path_of(nid))
@@ -790,6 +891,56 @@ class Maintenance:
                 return
         log.info("Added spare pieces to %s", self.index.path_of(nid))
         self._next_protect = time.time()
+
+    # ------------------------------------------------------------ spare channels
+    def groups_to_spread(self, chans):
+        """Groups that losing one channel would break and that no other group over the same pieces covers."""
+        groups = self.index.all_groups()
+        safe = {gid for gid, (mem, sh) in groups.items()
+                if worst([x[0] for x in mem] + [x[0] for x in sh], chans) <= len(sh)}
+        by_member = {}
+        for gid in safe:
+            for x in groups[gid][0]:
+                by_member.setdefault(x[0], set()).add(gid)
+        todo = []
+        for gid, (mem, sh) in groups.items():
+            if gid in safe or not mem:
+                continue
+            need = {x[0] for x in mem}
+            if any(need <= {x[0] for x in groups[h][0]} for h in by_member.get(mem[0][0], ())):
+                continue
+            todo.append(gid)
+        self.spread_state = {"groups": len(groups), "left": len(todo), "checked": time.time()}
+        return todo
+
+    def spread_step(self):
+        """With spare channels: one group at a time (on the leader, while nothing uploads), give the groups
+        stored before them the extra spare pieces that let them lose any one channel (Healer.spread)."""
+        chans = channels_of(self.backend)
+        now = time.time()
+        if len(chans) < 2 or now < self._next_spread:
+            return
+        self._next_spread = now + 5
+        if not getattr(self.cfg, "parity_enabled", True) or not self.leader() or self._uploads_busy():
+            return
+        if not self._spread_todo:
+            self._spread_todo = self.groups_to_spread(chans)
+            if not self._spread_todo:
+                self._next_spread = now + 600
+                return
+            log.info("Spreading %d group(s) of pieces over the spare channels", len(self._spread_todo))
+        gid = self._spread_todo.pop()
+        group = self.index.parity_group(gid)
+        if group is None:
+            return
+        if self.healer.spread(group, chans):
+            self.spread_state["left"] = len(self._spread_todo)
+            self._next_spread = time.time()
+        else:
+            log.info("Could not spread a group of %s yet (a piece can't be read now); trying again later",
+                     ", ".join(self.index.piece_users(group["members"][0][0])["files"][:3]) or "a file")
+        if not self._spread_todo:
+            log.info("Every group of pieces can now lose any one channel")
 
     # ------------------------------------------------------------ snapshots
     def snapshot_step(self):

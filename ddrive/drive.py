@@ -11,6 +11,7 @@ import threading
 import time
 
 from .backend import DiscordBackend, LocalBackend, is_encrypted_index
+from .channels import with_spares
 from .cache import ChunkCache
 from .config import Config, launcher
 from .crypto import KeyRing, generate_key
@@ -58,7 +59,7 @@ class DDrive:
 
         if self.local_test_dir:
             log.info("Running in mock mode using local directory: %s", self.local_test_dir)
-            self.backend = LocalBackend(self.local_test_dir)
+            self.backend = with_spares(self.cfg, LocalBackend(self.local_test_dir), local_root=self.local_test_dir)
         else:
             if getattr(self.cfg, "protect_error", None):
                 raise ValueError(self.cfg.protect_error)
@@ -69,7 +70,8 @@ class DDrive:
             self.api = DiscordAPI(self.cfg.bot_token).configure(self.cfg)
             extra = [DiscordAPI(t).configure(self.cfg) for t in (self.cfg.extra_bot_tokens or [])
                      if t and t != self.cfg.bot_token]
-            self.backend = DiscordBackend(self.api, self.cfg.channel_id, extra_apis=extra)
+            self.backend = with_spares(self.cfg, DiscordBackend(self.api, self.cfg.channel_id, extra_apis=extra),
+                                       api_for=lambda t: DiscordAPI(t).configure(self.cfg))
             if extra:
                 log.info("Uploading with %d bots.", 1 + len(extra))
 

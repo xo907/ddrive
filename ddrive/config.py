@@ -76,7 +76,7 @@ def config_path() -> str:
     return legacy.env("CONFIG") or DEFAULT_CONFIG_PATH
 
 MiB = 1024 * 1024
-SECRET_FIELDS = ("bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens",
+SECRET_FIELDS = ("bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens", "spare_bot_tokens",
                  "web_token", "web_password", "discord_user_token")
 _warned = set()
 
@@ -125,6 +125,8 @@ class Config:
     old_encryption_keys: list = field(default_factory=list)  # earlier keys, kept to read older data
     allow_other: bool = False          # Allow other users/services to access mount on Linux
     extra_bot_tokens: list = field(default_factory=list)  # more bots in the same channel = faster uploads
+    spare_channels: list = field(default_factory=list)    # more channels: pieces are spread so any one can be lost
+    spare_bot_tokens: list = field(default_factory=list)  # a spare channel's own bot (same order; "" = the main bots)
     discord_pace: str = "gentle"       # how fast to talk to Discord: gentle | balanced | fast | off
     uploads_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 30)
     deletes_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 15)

@@ -437,6 +437,7 @@ Useful limits:
 | `cache_mode` | `disk` | `memory` keeps files you open in RAM only |
 | `parity_enabled` | `true` | Spare pieces (self-healing). `parity_group` (10) data pieces get `parity_pieces` (2) spare pieces |
 | `scrub_days` | `2` | One full check that every piece is still on Discord takes this long (`scrub_enabled` turns it off) |
+| `spare_channels` | `[]` | More channels to spread pieces over so any one channel can be lost; use `spare add` (see [Spare channels](#spare-channels)) |
 | `delete_after_days` | `7` | A piece nothing uses any more (a file deleted for good, an expired version) stays on Discord this long before it is deleted |
 | `verify_uploads` | `false` | Download every piece once right after uploading it and compare (twice the traffic; the size Discord reports is always checked) |
 | `protect_existing` | `true` | Add spare pieces to files uploaded before self-healing (downloads each such file once) |
@@ -489,6 +490,7 @@ web [--open]                         Show (and open) the address of the web dash
 webdav-password                      Set the user name and password other apps use over WebDAV
 health [--check] [--protect]         Self-healing status; check every piece now; protect old files now
 health --why <piece>                 Why one piece is missing: what uses it, whether DDrive deleted it, what each bot sees
+spare [add <channel id> [token] | remove <n>]  Spare channels, so losing any one channel loses no file
 snapshots [create [label]|delete <n>] List snapshots, take one now, or delete one
 snapshot-restore <n> [path] [--to p] [--in-place]
                                      Bring back a folder (or everything) from snapshot n
@@ -567,6 +569,35 @@ Discord can delete messages or attachments at any time. DDrive plans for that:
 
 Space: about 20% extra for big files, one extra piece for small ones. `config parity_pieces 3`
 survives 3 losses per group; `config parity_enabled false` turns spare pieces off for new uploads.
+
+### Spare channels
+
+Spare pieces protect against Discord losing *some* pieces. A whole channel can go too: deleted,
+purged, or its bot banned along with its messages. Spare channels cover that. Pieces are spread over
+the main channel and the spare ones, with enough spare pieces that **any one channel can be lost
+without losing a file**.
+
+```text
+spare                                List the spare channels and what they cost
+spare add <channel id> [bot token]   Add one (checked first); its own bot is optional but safest
+spare remove <n> [--force]           Remove one (refused while pieces are stored there)
+```
+
+- **Safest:** a channel in another server, with a bot of its own (a separate application). Then
+  neither a server, a channel nor a bot is a single point of failure.
+- **Space:** with C channels in all, every group of 10 pieces gets at least 10 / (C - 1) spare pieces.
+  One spare channel costs as much space again as the files (like a second copy); two cost half that,
+  four a quarter. `spare` shows the figure.
+- **Files already on the drive** get the extra spare pieces in the background, one group at a time,
+  while nothing uploads (each group is downloaded once). Their spare pieces so far are kept. `health`
+  and the dashboard's Health page show how many groups are left.
+- **Index checkpoints** are copied to the first spare channel too.
+- **If the main channel is lost:** make a new channel, put its id in the config (`channel_id`; the
+  bot needs access), and start the drive. It finds no checkpoint in the new channel, starts from the
+  copy in the spare channel, and rebuilds every piece the old channel held from the others: on the
+  fly when a file is read, and in the background check.
+- A repair goes back into the channel the piece was in, or into another one if that channel is gone.
+- Account storage (other people's accounts on your dashboard) stays in the main channel.
 
 ## Web dashboard
 

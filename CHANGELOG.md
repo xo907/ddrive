@@ -3,6 +3,23 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.38.0 (2026-10-14)
+
+- **Spare channels: a whole channel can be lost without losing a file.** Spare pieces covered Discord
+  losing some pieces, but every piece, spare ones included, was in one channel: a deleted or purged
+  channel, or its bot banned along with its messages, took every file. Now `spare add <channel id>
+  [bot token]` adds a channel (best in another server, with a bot of its own), and pieces are spread
+  over all the channels with enough spare pieces that any one of them can go. With one spare channel
+  that costs as much space again as the files; with two, half; with four, a quarter.
+- Files already on the drive are spread in the background, one group at a time, while nothing
+  uploads. Their existing spare pieces are kept and more are added in the spare channels. `health` and
+  the Health page show how many groups are left.
+- Index checkpoints are copied to the first spare channel. A drive whose main channel is gone starts
+  again from a new, empty main channel: it takes the checkpoint from the spare channel and rebuilds the
+  lost channel's pieces from the others.
+- Repairs go back into the channel the piece was in, or into another channel if that one is gone.
+- `spare remove` refuses while pieces are stored in that channel (`--force` removes it anyway).
+
 ## 2.37.0 (2026-10-14)
 
 - **A refused bot no longer makes files look broken.** When Discord refused a bot access to the
