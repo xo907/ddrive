@@ -3,6 +3,19 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.40.0 (2026-10-14)
+
+- **Up to 5 spare pieces for every piece.** The "Spare pieces" setting went up to 8 per group of 10.
+  It now goes up to 50: at 10 every piece has a spare (any half of a group can go, twice the space),
+  at 20 two (any two thirds can go, three times the space).
+- **Small files get their share.** A file of 1 to 3 pieces always got 1 spare piece. It now gets its
+  share of the setting (2 pieces at 10 per 10 get 2), and still 1 with the default.
+- **Raising the setting strengthens what is stored.** Groups stored with fewer spare pieces than the
+  settings now ask for get the rest in the background, one group at a time while nothing uploads,
+  keeping the spare pieces they have. `health` shows how many are left.
+- **The setting says what it does.** Settings → Protection explains the number with examples and what
+  each costs in space.
+
 ## 2.39.0 (2026-10-14)
 
 - **Every bot gets access to a spare channel in one go.** A spare channel without a bot of its own is

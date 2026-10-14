@@ -3108,7 +3108,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         "web_lan": (bool, True, None),
         "web_port": (int, True, lambda v: 1 <= v <= 65535),
         "parity_enabled": (bool, False, None),
-        "parity_pieces": (int, False, lambda v: 1 <= v <= 8),
+        "parity_pieces": (int, False, lambda v: 1 <= v <= 50),
         "scrub_enabled": (bool, False, None),
         "protect_existing": (bool, False, None),
         "compression": (bool, False, None),

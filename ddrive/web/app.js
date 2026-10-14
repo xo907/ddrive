@@ -2173,8 +2173,9 @@ function renderHealth(quiet) {
            (sc.lost || hl.healer.lost) ? `${sc.lost || hl.healer.lost} could not be rebuilt` : "nothing lost")),
     hl.channels > 1 ? h("p", { class: "muted", style: "max-width:680px" },
       `Pieces are spread over ${hl.channels} channels (the main one and ${hl.channels - 1} spare), so losing any one of them loses no file. ` +
-      (hl.spread && hl.spread.left ? `${Number(hl.spread.left).toLocaleString()} group(s) stored earlier are still being spread.` :
-       hl.spread && hl.spread.checked ? "Every group is spread." : "Checking what is stored earlier still has to be spread.")) : null,
+      (hl.spread && hl.spread.checked && !hl.spread.left ? "Every group is spread." : "")) : null,
+    hl.spread && hl.spread.left ? h("p", { class: "muted", style: "max-width:680px" },
+      `${Number(hl.spread.left).toLocaleString()} group(s) stored earlier are getting the extra spare pieces the settings now ask for, in the background while nothing uploads.`) : null,
     (hl.refused || []).length ? h("p", { class: "warn-text", style: "max-width:680px" },
       `Discord refuses ${hl.refused.length === 1 ? `bot ${hl.refused[0].bot}` : `bots ${hl.refused.map((b) => b.bot).join(", ")}`} access to the channel. ` +
       "Pieces are read with the other bots meanwhile, and nothing is counted as lost because of it. Check that the bot is still in the server and can see the channel.") : null,
@@ -2306,7 +2307,11 @@ const SETTING_ROWS = [
   ]],
   ["Protection", [
     ["parity_enabled", "Self-healing", "Spare pieces let lost pieces be rebuilt.", "bool"],
-    ["parity_pieces", "Spare pieces per 10", "How many pieces of a group can be lost (2 is about 20% extra space).", "num"],
+    ["parity_pieces", "Spare pieces (per 10 pieces)", "Files are stored on Discord in pieces, in groups of 10. Each group gets this many extra “spare” pieces, "
+      + "and any that many pieces of the group can go missing and still be rebuilt. "
+      + "2 (the default): any 2 of every 10 can go, 20% more space. 10: one spare for every piece, so half of all pieces can go; twice the space. "
+      + "20: two for every piece; three times the space. Up to 50. Raising it also adds spare pieces to files already stored, in the background. "
+      + "With spare channels, groups get more than this when they need them to survive losing a whole channel.", "num"],
     ["scrub_enabled", "Background check", "Regularly confirm every piece is still on Discord, and repair what isn't.", "bool"],
     ["protect_existing", "Protect older files", "Add spare pieces to files uploaded without them.", "bool"],
   ]],

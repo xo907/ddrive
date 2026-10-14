@@ -40,7 +40,7 @@ def parity_shape(cfg, n, channels=1):
     if m == 0:
         return 0, 0
     if n < 4:
-        m = 1
+        m = max(1, -(-m * n // k))      # their share: 1 with the default 2 per 10, 3 for 3 pieces at 10 per 10
     m = max(m, spread_pieces(min(k, n), channels))
     return k, min(m, rs.MAX_PIECES - min(k, n))
 

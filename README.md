@@ -435,7 +435,7 @@ Useful limits:
 | `min_free_disk_bytes` | `2G` | Never take the local disk below this much free space |
 | `staging_max_bytes` | `10G` | Pause writing while this much is waiting to upload |
 | `cache_mode` | `disk` | `memory` keeps files you open in RAM only |
-| `parity_enabled` | `true` | Spare pieces (self-healing). `parity_group` (10) data pieces get `parity_pieces` (2) spare pieces |
+| `parity_enabled` | `true` | Spare pieces (self-healing). `parity_group` (10) data pieces get `parity_pieces` (2, up to 50) spare pieces: 10 is one spare for every piece, 20 two |
 | `scrub_days` | `2` | One full check that every piece is still on Discord takes this long (`scrub_enabled` turns it off) |
 | `spare_channels` | `[]` | More channels to spread pieces over so any one channel can be lost; use `spare add` (see [Spare channels](#spare-channels)) |
 | `delete_after_days` | `7` | A piece nothing uses any more (a file deleted for good, an expired version) stays on Discord this long before it is deleted |
@@ -569,6 +569,13 @@ Discord can delete messages or attachments at any time. DDrive plans for that:
 
 Space: about 20% extra for big files, one extra piece for small ones. `config parity_pieces 3`
 survives 3 losses per group; `config parity_enabled false` turns spare pieces off for new uploads.
+
+**More than one spare per piece.** `parity_pieces` goes up to 50 per group of 10. At 10 every piece
+has a spare: any half of a group's pieces can go, for twice the space. At 20 every piece has two:
+any two thirds can go, for three times the space. Small files get their share (a file of 2 pieces
+gets 2 spare pieces at 10, 4 at 20). Raising it also adds spare pieces to files already stored, in
+the background while nothing uploads (each group is downloaded once); `health` shows how many are
+left.
 
 ### Spare channels
 

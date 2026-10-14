@@ -549,11 +549,15 @@ class Healer:
         return True
 
     @staticmethod
-    def spread_shape(mids, k, m, chans):
-        """(spare pieces the group needs in all, channels of the ones to add) so that no channel holds more
-        of it than it has spare pieces, i.e. any one channel can be lost. None if that can't be done."""
+    def spread_shape(mids, k, m, chans, want=0):
+        """(spare pieces the group needs in all, channels of the ones to add): at least `want`, and with
+        several channels enough that no channel holds more of it than it has spare pieces, i.e. any one
+        channel can be lost. None if that can't be done."""
+        start = min(max(m, want), rs.MAX_PIECES - k)
+        if len(chans) < 2:
+            return (start, [None] * (start - m)) if start >= m else (m, [])
         have = counts(mids)
-        for m2 in range(m, rs.MAX_PIECES - k + 1):
+        for m2 in range(max(m, start), rs.MAX_PIECES - k + 1):
             extra = fill(have, m2 - m, chans)
             n = dict(have)
             for c in extra:
@@ -562,14 +566,15 @@ class Healer:
                 return m2, extra
         return None
 
-    def spread(self, group, chans):
-        """Give a group stored before the spare channels (or before one was added) more spare pieces, in the
-        channels holding fewest of it, until it survives losing any one channel. Its spare pieces so far are
-        kept: a spare piece's content depends only on its place, so they are the first ones of the larger
-        group. Recorded as a new group over the same pieces. False if a piece can't be read now."""
+    def spread(self, group, chans, want=0):
+        """Give a stored group more spare pieces: at least `want` (the settings were raised since it was
+        stored), and with spare channels enough, in the channels holding fewest of it, to survive losing any
+        one channel. Its spare pieces so far are kept: a spare piece's content depends only on its place, so
+        they are the first ones of the larger group. Recorded as a new group over the same pieces. False if a
+        piece can't be read now."""
         members, shards = group["members"], group["shards"]
         k, m = len(members), len(shards)
-        shape = self.spread_shape([x[0] for x in members] + [x[0] for x in shards], k, m, chans)
+        shape = self.spread_shape([x[0] for x in members] + [x[0] for x in shards], k, m, chans, want)
         if shape is None:
             return False
         m2, where = shape
@@ -893,11 +898,22 @@ class Maintenance:
         self._next_protect = time.time()
 
     # ------------------------------------------------------------ spare channels
+    def wanted(self, n, chans):
+        """Spare pieces the settings ask for a group of n pieces."""
+        from .uploader import parity_shape
+        return parity_shape(self.cfg, n, len(chans))[1]
+
     def groups_to_spread(self, chans):
-        """Groups that losing one channel would break and that no other group over the same pieces covers."""
+        """Groups with fewer spare pieces than the settings ask for, or (with spare channels) that losing one
+        channel would break, and that no other group over the same pieces covers."""
         groups = self.index.all_groups()
-        safe = {gid for gid, (mem, sh) in groups.items()
-                if worst([x[0] for x in mem] + [x[0] for x in sh], chans) <= len(sh)}
+
+        def strong(mem, sh):
+            if len(sh) < self.wanted(len(mem), chans):
+                return False
+            return len(chans) < 2 or worst([x[0] for x in mem] + [x[0] for x in sh], chans) <= len(sh)
+
+        safe = {gid for gid, (mem, sh) in groups.items() if strong(mem, sh)}
         by_member = {}
         for gid in safe:
             for x in groups[gid][0]:
@@ -914,33 +930,36 @@ class Maintenance:
         return todo
 
     def spread_step(self):
-        """With spare channels: one group at a time (on the leader, while nothing uploads), give the groups
-        stored before them the extra spare pieces that let them lose any one channel (Healer.spread)."""
+        """One group at a time (on the leader, while nothing uploads), give groups stored with fewer spare
+        pieces than the settings now ask for, or stored before a spare channel was added, the extra spare
+        pieces they need (Healer.spread)."""
         chans = channels_of(self.backend)
         now = time.time()
-        if len(chans) < 2 or now < self._next_spread:
+        if now < self._next_spread:
             return
         self._next_spread = now + 5
-        if not getattr(self.cfg, "parity_enabled", True) or not self.leader() or self._uploads_busy():
+        if not (getattr(self.cfg, "parity_enabled", True) and getattr(self.cfg, "protect_existing", True)):
+            return
+        if not self.leader() or self._uploads_busy():
             return
         if not self._spread_todo:
             self._spread_todo = self.groups_to_spread(chans)
             if not self._spread_todo:
                 self._next_spread = now + 600
                 return
-            log.info("Spreading %d group(s) of pieces over the spare channels", len(self._spread_todo))
+            log.info("Adding spare pieces to %d group(s) stored with fewer than the settings ask for", len(self._spread_todo))
         gid = self._spread_todo.pop()
         group = self.index.parity_group(gid)
         if group is None:
             return
-        if self.healer.spread(group, chans):
+        if self.healer.spread(group, chans, self.wanted(len(group["members"]), chans)):
             self.spread_state["left"] = len(self._spread_todo)
             self._next_spread = time.time()
         else:
-            log.info("Could not spread a group of %s yet (a piece can't be read now); trying again later",
+            log.info("Could not add spare pieces to a group of %s yet (a piece can't be read now); trying again later",
                      ", ".join(self.index.piece_users(group["members"][0][0])["files"][:3]) or "a file")
         if not self._spread_todo:
-            log.info("Every group of pieces can now lose any one channel")
+            log.info("Every group of pieces has the spare pieces the settings ask for")
 
     # ------------------------------------------------------------ snapshots
     def snapshot_step(self):

@@ -135,7 +135,7 @@ class Config:
     dedup: bool = True                 # store identical pieces once
     parity_enabled: bool = True        # spare pieces, so lost pieces can be rebuilt (self-healing)
     parity_group: int = 10             # data pieces per group...
-    parity_pieces: int = 2             # ...and spare pieces per group (groups under 4 pieces get 1)
+    parity_pieces: int = 2             # ...and spare pieces per group, 1-50 (10 = one per piece; small files get their share)
     scrub_enabled: bool = True         # check in the background that every piece is still on Discord
     scrub_days: float = 2.0            # how long one full check of every piece takes
     protect_existing: bool = True      # add spare pieces to files uploaded before self-healing existed

@@ -1852,7 +1852,8 @@ def cmd_health(args):
         print("--- Self-healing ---")
         if cfg.parity_enabled:
             print(f"{'Spare pieces:':20}ON: {cfg.parity_pieces} per group of {cfg.parity_group} pieces "
-                  f"(any {cfg.parity_pieces} lost pieces of a group can be rebuilt)")
+                  f"(any {cfg.parity_pieces} lost pieces of a group can be rebuilt; about "
+                  f"{100 * cfg.parity_pieces // max(1, cfg.parity_group)}% extra space)")
         else:
             print(f"{'Spare pieces:':20}OFF - pieces Discord loses can't be rebuilt")
         print(f"{'Protected:':20}{pct:.1f}% of pieces ({st['protected_chunks']:,} of {st['chunks']:,})")
@@ -1873,12 +1874,13 @@ def cmd_health(args):
         print(f"{'Snapshots:':20}{st['snapshots']:,}")
         from .channels import channels_of
         chans = channels_of(j.backend)
+        from .heal import Maintenance
+        left = len(Maintenance(cfg, idx, j.backend, None).groups_to_spread(chans)) if cfg.parity_enabled else 0
         if len(chans) > 1:
-            from .heal import Maintenance
-            left = len(Maintenance(cfg, idx, j.backend, None).groups_to_spread(chans))
-            print(f"{'Channels:':20}{len(chans)} (the main one and {len(chans) - 1} spare); "
-                  + ("every group can lose any one of them" if not left else
-                     f"{left:,} group(s) still to spread (done in the background while the drive runs)"))
+            print(f"{'Channels:':20}{len(chans)} (the main one and {len(chans) - 1} spare)")
+        if left:
+            print(f"{'Getting more spare:':20}{left:,} group(s) stored with fewer spare pieces than the settings ask "
+                  f"for (added in the background while the drive runs)")
         healer = Healer(cfg, idx, j.backend, crypto=crypto)
         damaged = healer.lost_files()
         if damaged:
