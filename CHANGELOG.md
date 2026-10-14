@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 2.39.0 (2026-10-14)
+
+- **Every bot gets access to a spare channel in one go.** A spare channel without a bot of its own is
+  posted to by all the drive's bots, and each one needed access to it. `spare add` now gives it to
+  them: the main bot sets each bot's permissions on that channel (it needs "Manage Permissions" there).
+  `spare grant` does it again for every spare channel, and `bots add` does it for a new bot. Bots that
+  aren't in that channel's server get an invite link with the server already chosen, since only a
+  person can add a bot to a server.
+- An upload that a bot isn't allowed to post goes to the next bot instead of failing, and that bot is
+  left out for a while (the Health page names it).
+
 ## 2.38.0 (2026-10-14)
 
 - **Spare channels: a whole channel can be lost without losing a file.** Spare pieces covered Discord

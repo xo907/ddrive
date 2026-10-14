@@ -1496,10 +1496,83 @@ def cmd_bots(args):
         return 1
     cfg.extra_bot_tokens = list(cfg.extra_bot_tokens or []) + [token]
     cfg.save()
+    from .channels import spare_channels
+    own = list(cfg.spare_bot_tokens or [])
+    for i, chan in enumerate(spare_channels(cfg)):
+        if not (i < len(own) and own[i]):
+            print(f"Giving it access to spare channel {chan}...")
+            _grant_bots(cfg, chan, [token])
     print(f"[SUCCESS] Added {me.get('username')}. Uploads now use {1 + len(cfg.extra_bot_tokens)} bots.")
     if is_mounted(cfg.mount_point):
         print("Restart the drive (stop, then start) to use it.")
     return 0
+
+
+BOT_PERMISSIONS = 109568    # see the channel, read its history, post, attach files, manage messages
+
+
+def _grant_bots(cfg, chan, tokens=None):
+    """Make sure every bot of the drive can use spare channel `chan`: the main bot gives the ones in that
+    channel's server access to it (Discord's "Manage Permissions" on the channel lets it). Bots that are not
+    in that server need an invite, which only a person can accept: their links are printed.
+    Returns how many bots can't use the channel yet."""
+    tokens = [t for t in (tokens if tokens is not None else [cfg.bot_token] + list(cfg.extra_bot_tokens or [])) if t]
+    main = DiscordAPI(cfg.bot_token, timeout=30, retries=2)
+    try:
+        guild = main.get_channel(chan).get("guild_id")
+    except DiscordError as e:
+        print(f"  [FAIL] The main bot can't see channel {chan}: {e}")
+        return len(tokens)
+    missing, invites = 0, []
+    for n, token in enumerate(tokens):
+        api = DiscordAPI(token, timeout=30, retries=2)
+        label = "Main bot" if token == cfg.bot_token else f"Extra bot {n}"
+        try:
+            me = api.get_me()
+        except DiscordError as e:
+            print(f"  [FAIL] {label}: token not accepted ({e})")
+            missing += 1
+            continue
+        name = f"{label} ({me.get('username')})"
+
+        def can_use():
+            try:
+                api.get_channel(chan)
+                api.get_messages(chan, limit=1)
+                return True
+            except DiscordError:
+                return False
+
+        if can_use():
+            print(f"  [OK]   {name}")
+            continue
+        try:
+            main.get_member(guild, me["id"])
+        except DiscordError:
+            invites.append((name, f"https://discord.com/oauth2/authorize?client_id={me['id']}&scope=bot"
+                                  f"&permissions={BOT_PERMISSIONS}&guild_id={guild}&disable_guild_select=true"))
+            missing += 1
+            continue
+        try:
+            main.allow_in_channel(chan, me["id"], BOT_PERMISSIONS)
+        except DiscordError as e:
+            print(f"  [FAIL] {name}: the main bot may not give it access ({e}).")
+            print("         Give the main bot \"Manage Permissions\" on that channel (channel settings > Permissions),")
+            print(f"         then run: {launcher()} spare grant")
+            missing += 1
+            continue
+        if can_use():
+            print(f"  [OK]   {name}: given access to the channel")
+        else:
+            print(f"  [FAIL] {name}: still can't read the channel")
+            missing += 1
+    if invites:
+        print("\nThese bots are not in that channel's server. Open each link, then click Authorize")
+        print("(Discord only lets a person add a bot to a server):")
+        for name, url in invites:
+            print(f"  {name}: {url}")
+        print(f"Then run: {launcher()} spare grant")
+    return missing
 
 
 def cmd_spare(args):
@@ -1527,6 +1600,21 @@ def cmd_spare(args):
             m = max(int(cfg.parity_pieces or 0), spread_pieces(k, 1 + len(chans)))
             print(f"\nEvery group of {k} pieces gets {m} spare pieces, spread over {1 + len(chans)} channels: "
                   f"about {100 * m // k}% extra space.")
+        return 0
+    if action == "grant":
+        shared = [c for i, c in enumerate(chans) if not (i < len(tokens) and tokens[i])]
+        if not shared:
+            print("Every spare channel has a bot of its own: nothing to give access to.")
+            return 0
+        left = 0
+        for c in shared:
+            print(f"Spare channel {c}:")
+            left += _grant_bots(cfg, c)
+        if left:
+            return 1
+        print(f"\n[OK] All {1 + len(cfg.extra_bot_tokens or [])} bots can use every spare channel.")
+        if is_mounted(cfg.mount_point):
+            print("Restart the drive (stop, then start) to use them.")
         return 0
     if action == "remove":
         try:
@@ -1574,6 +1662,11 @@ def cmd_spare(args):
         print("         The bot has to be in that channel's server and be able to see, post in and delete")
         print("         messages in it. A channel in another server, with a bot of its own, is safest.")
         return 1
+    if not token and cfg.extra_bot_tokens:
+        print(f"Giving the {len(cfg.extra_bot_tokens)} extra bot(s) access to it (uploads use every bot)...")
+        if _grant_bots(cfg, chan, list(cfg.extra_bot_tokens)):
+            print(f"[!] Some bots can't use it yet. The drive works without them (it posts with the others);")
+            print(f"    fix them and run: {launcher()} spare grant")
     tokens += [""] * (len(chans) - len(tokens))
     cfg.spare_channels = chans + [chan]
     cfg.spare_bot_tokens = tokens[:len(chans)] + [token]
@@ -2541,8 +2634,8 @@ def main():
     # stop
     subparsers.add_parser("stop", help="Stop the background DDrive daemon and unmount")
 
-    p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], remove <n>")
-    p_spare.add_argument("action", nargs="?", choices=["list", "add", "remove"])
+    p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], grant, remove <n>")
+    p_spare.add_argument("action", nargs="?", choices=["list", "add", "grant", "remove"])
     p_spare.add_argument("channel", nargs="?", help="Channel id (add) or number (remove)")
     p_spare.add_argument("token", nargs="?", help="The spare channel's own bot token (optional)")
     p_spare.add_argument("--force", action="store_true", help="Remove even though pieces are stored there")

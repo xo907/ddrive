@@ -380,6 +380,14 @@ class DiscordAPI:
     def get_channel(self, channel_id):
         return self.request("GET", f"/channels/{channel_id}")
 
+    def get_member(self, guild_id, user_id):
+        return self.request("GET", f"/guilds/{guild_id}/members/{user_id}")
+
+    def allow_in_channel(self, channel_id, user_id, allow: int):
+        """Let one member (a bot) do `allow` (permission bits) in a channel. Needs Manage Permissions there."""
+        return self.request("PUT", f"/channels/{channel_id}/permissions/{user_id}",
+                            {"type": 1, "allow": str(allow), "deny": "0"})
+
     def send_file(self, channel_id, filename: str, data: bytes, content: str = ""):
         payload = {
             "content": content[:2000],

@@ -154,7 +154,16 @@ class DiscordBackend:
         raise last
 
     def upload(self, filename: str, data: bytes, content: str = "") -> StoredChunk:
-        msg = self._pick().send_file(self.channel_id, filename, data, content)
+        """Post one piece. A bot the channel refuses is left out and the next one posts it."""
+        for attempt in range(len(self.apis)):
+            api = self._pick()
+            try:
+                msg = api.send_file(self.channel_id, filename, data, content)
+                break
+            except DiscordError as e:
+                if e.status not in (401, 403) or attempt == len(self.apis) - 1:
+                    raise
+                self._refused(api, e)
         att = msg["attachments"][0]
         size = att.get("size")
         if size is not None and int(size) != len(data):

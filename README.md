@@ -580,6 +580,7 @@ without losing a file**.
 ```text
 spare                                List the spare channels and what they cost
 spare add <channel id> [bot token]   Add one (checked first); its own bot is optional but safest
+spare grant                          Give every bot of the drive access to the spare channels, in one go
 spare remove <n> [--force]           Remove one (refused while pieces are stored there)
 ```
 
@@ -591,6 +592,12 @@ spare remove <n> [--force]           Remove one (refused while pieces are stored
 - **Files already on the drive** get the extra spare pieces in the background, one group at a time,
   while nothing uploads (each group is downloaded once). Their spare pieces so far are kept. `health`
   and the dashboard's Health page show how many groups are left.
+- **All your bots at once.** A spare channel without a bot of its own is posted to by every bot of
+  the drive (`bots`). `spare add` gives them all access to it: the main bot sets each one's
+  permissions on that channel, which needs "Manage Permissions" on the channel for the main bot.
+  `spare grant` does it again (after `bots add`, or after fixing permissions). A bot that isn't in
+  that channel's server can't be added by another bot: its invite link is printed, with the server
+  already chosen. Until a bot has access, uploads go to the channel with the bots that do.
 - **Index checkpoints** are copied to the first spare channel too.
 - **If the main channel is lost:** make a new channel, put its id in the config (`channel_id`; the
   bot needs access), and start the drive. It finds no checkpoint in the new channel, starts from the
