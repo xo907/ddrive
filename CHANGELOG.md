@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.0.5 (2026-10-15)
+
+- **Moving an account into another one keeps a copy until the move is safe.** The source account was
+  deleted as soon as the files the target took over were stored on Discord. The target's own list of
+  files could still exist only on the computer that runs the drive at that moment. Now the source goes
+  only once everything the target holds is stored and a checkpoint of it has been saved to Discord.
+
 ## 3.0.4 (2026-10-15)
 
 - **No more downloading for nothing in the background.** When a file is edited in place, its new version

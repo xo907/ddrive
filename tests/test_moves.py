@@ -107,6 +107,7 @@ class MoveTest(helpers.DriveTest):
         self.upload_all(self.tid)
         self.run_copy(opened["id"])
         self.assertEqual(self.moves.status(opened["id"], None)["state"], "done")
+        self.assertTrue((self.acc._recs[self.tid].get("checkpoint") or {}).get("mid"))   # the target is on Discord
         self.assertIsNone(told(self.dst))                   # done: nothing to follow any more
         self.assertIsNone(self.acc._recs.get(self.sid))
         # a device that still has the words of the account that is gone is told so, however often it

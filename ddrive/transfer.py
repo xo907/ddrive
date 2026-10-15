@@ -506,12 +506,20 @@ class Moves:
         """Delete S once the objects T now has are stored on Discord (so they are safe without S)."""
         d = self.accounts.acquire(m["to"])
         try:
-            waiting = set(d.index.unsynced_ids())
-            if waiting:
-                top = d.index.resolve("/o")
-                mine = {c["id"] for sub in (d.index.children(top["id"]) if top else []) for c in d.index.children(sub["id"])}
-                if waiting & mine:
-                    return 10.0
+            # Everything T holds, its list of files included, has to be on Discord, and a checkpoint of T
+            # made after it: until then T exists only on this computer, and S is its only other copy.
+            if d.index.unsynced_ids():
+                return 10.0
+            try:
+                with d.journal._sync_lock:
+                    d.journal.flush()
+                    d.journal.poll()            # a checkpoint needs its own changes read back first
+                    saved = d.journal.checkpoint(force=True)
+            except Exception as e:
+                log.info("Move %s waits for a checkpoint of account %s: %s", m["id"], m["to"], e)
+                return 30.0
+            if not saved:
+                return 10.0
         finally:
             self.accounts.release(d)
         if m.get("from") and self.accounts._recs.get(m["from"]) is not None:
