@@ -741,7 +741,8 @@ devices).
   the image, GIF, video or song is shown without the link (needs the dashboard reachable from the
   internet, e.g. through your reverse proxy, and no password on the link).
 - **Behind a reverse proxy** (e.g. Nginx Proxy Manager): add your domain under Settings → Domain
-  names (or `config web_hosts drive.example.com`); share links then use that domain. Settings is in
+  names (or `config web_hosts drive.example.com`); share links then use that domain. A proxy on this computer, on
+  your network or in another Docker container passes on each visitor's address (`X-Forwarded-For`). Settings is in
   the account menu (top right) and in the DDrive menu.
 - **Deleted** files can be selected (or all at once) and restored, or deleted forever, which
   removes them from Discord on every device after `delete_after_days` (7 days; `purge <path>` on the command line).

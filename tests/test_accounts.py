@@ -180,6 +180,30 @@ class AccountsTest(helpers.DriveTest):
         self.assertEqual(self.req("POST", "/api/signin/phrase", {}, cookie=self.owner,
                                   headers={"Host": f"127.0.0.1:{self.web.port}", "X-Forwarded-For": "203.0.113.9"})[0], 403)
 
+    def test_a_proxy_next_to_this_computer(self):
+        from types import SimpleNamespace as NS
+        from ddrive.web import _trusted_proxy
+        self.assertTrue(_trusted_proxy("127.0.0.1", NS(web_hosts=[])))
+        self.assertTrue(_trusted_proxy("::ffff:127.0.0.1", NS(web_hosts=[])))
+        # a reverse proxy in another Docker container (or on the home network): once there is a domain name
+        self.assertFalse(_trusted_proxy("172.19.0.2", NS(web_hosts=[])))
+        self.assertTrue(_trusted_proxy("172.19.0.2", NS(web_hosts=["drive.example.com"])))
+        self.assertTrue(_trusted_proxy("192.168.1.20", NS(web_hosts=["drive.example.com"])))
+        self.assertFalse(_trusted_proxy("8.8.8.8", NS(web_hosts=["drive.example.com"])))
+        self.assertFalse(_trusted_proxy("nonsense", NS(web_hosts=["drive.example.com"])))
+
+    def test_unknown_sign_in_key_is_logged_once_an_hour(self):
+        key = os.urandom(32).hex()
+        with self.assertLogs("ddrive.web", "WARNING") as got:
+            for _ in range(3):
+                self.assertEqual(self.req("POST", "/login", f"auth={key}", headers={"X-Forwarded-For": "198.51.100.7"})[0], 401)
+            self.web._unknown = {k: (v[0] - 3601, v[1]) for k, v in self.web._unknown.items()}   # an hour later
+            self.req("POST", "/login", f"auth={key}", headers={"X-Forwarded-For": "198.51.100.7"})
+        lines = [r for r in got.output if "belongs to no account" in r]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("198.51.100.7", lines[0])
+        self.assertIn("3 times since it was last in the Log", lines[1])
+
     def test_terms_and_privacy_policy(self):
         for path, title in (("/terms", b"Terms and conditions"), ("/privacy", b"Privacy policy")):
             status, _, page = self.req("GET", path)                    # for anybody, signed in or not

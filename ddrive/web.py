@@ -56,6 +56,7 @@ PIECE = 1024 * 1024
 SESSION_DAYS = 30
 MAX_FAILURES = 5          # wrong phrases (or passwords of a lock) from one address before it has to wait
 LOCKOUT = 60.0            # seconds, doubled for every further wrong one (up to an hour)
+UNKNOWN_LOG_EVERY = 3600.0  # seconds: the same unknown sign-in from the same address goes in the Log once in this
 NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, so they sync and keep versions)
 _BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/queue", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
                       "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report", "/api/upload/part",
@@ -204,6 +205,7 @@ class WebServer:
         self._cfg_mtime = None
         self._fail_lock = threading.Lock()
         self._failures = {}       # address -> (count, locked until)
+        self._unknown = {}        # (sign-in it was, address) -> (last put in the Log, tries since)
         self.shares = Shares(drive.index, getattr(drive.cfg, "device_id", ""))
         self.contacts_lock = threading.Lock()
         self._open_locks = {}             # browser session -> [ids of the locks it has open, last use]
@@ -348,6 +350,22 @@ class WebServer:
             count, until = self._failures.get(addr, (0, 0.0))
         return max(0.0, until - time.time())
 
+    def note_unknown(self, secret, addr):
+        """How often words (or a sign-in key) nobody here has came from an address since they were last
+        put in the Log, or 0 when they were put there less than an hour ago: a device still signed in to
+        an account that was deleted asks again every few minutes, and the Log was full of it."""
+        tag = (hashlib.sha256(secret).hexdigest()[:16], addr)
+        now = time.time()
+        with self._fail_lock:
+            last, tries = self._unknown.get(tag, (0.0, 0))
+            if now - last < UNKNOWN_LOG_EVERY:
+                self._unknown[tag] = (last, tries + 1)
+                return 0
+            if len(self._unknown) > 1000:
+                self._unknown = {k: v for k, v in self._unknown.items() if now - v[0] < UNKNOWN_LOG_EVERY}
+            self._unknown[tag] = (now, 0)
+            return tries + 1
+
     def note_login(self, addr, ok):
         with self._fail_lock:
             if ok:
@@ -443,6 +461,26 @@ class _Counted:
         return getattr(self._raw, name)
 
 
+def _trusted_proxy(peer, cfg):
+    """Whether a request from `peer` that says where it came from (X-Forwarded-For) is believed: from
+    this computer always, and from the home network or a container next to this one (Docker gives
+    those 172.16-31.x addresses) once the dashboard has a domain name (web_hosts), the sign of a
+    reverse proxy in front of it. Otherwise everybody would count as the proxy: one device with old
+    words would make every visitor wait after wrong tries."""
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    if ip.is_loopback:
+        return True
+    return bool(getattr(cfg, "web_hosts", None)) and (ip.is_private or ip.is_link_local)
+
+
+def _times(n):
+    return f" ({n} times since it was last in the Log)" if n > 1 else ""
+
+
 class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHandler):
     server_version = "DDrive"
     protocol_version = "HTTP/1.1"
@@ -532,11 +570,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _addr(self):
         """Where a request comes from, for slowing down wrong guesses and limiting new accounts: behind a
-        reverse proxy on this computer that is the address the proxy saw, so each visitor counts for
-        themselves instead of everybody counting as the proxy."""
+        reverse proxy that is the address the proxy saw, so each visitor counts for themselves instead of
+        everybody counting as the proxy."""
         peer = self.client_address[0]
         seen = (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
-        return seen[:64] if seen and peer in ("127.0.0.1", "::1") else peer
+        return seen[:64] if seen and _trusted_proxy(peer, self.server.app.cfg) else peer
 
     def _form(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -986,8 +1024,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 if moved:                            # not a guess: the words of an account that was moved into another
                     return self._signin(f"This account was moved into account {moved} and is gone. Sign in with that "
                                         "account's 24 words.", 410)
-                if len(auth) == 32:
-                    log.warning("Web dashboard: a sign-in key that belongs to no account here, from %s", addr)
+                tries = app.note_unknown(auth, addr) if len(auth) == 32 and not wait else 0
+                if tries:
+                    log.warning("Web dashboard: a sign-in key that belongs to no account here, from %s%s. A device "
+                                "still signed in to an account that was deleted asks like this.", addr, _times(tries))
                 return refused("Nobody here has an end-to-end encrypted account with those 24 words.")
             app.note_login(addr, True)
             if rec.get("admin"):
@@ -1013,8 +1053,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", _PAGE_HEADERS)
             who = rec["id"] if rec is not None else None
         if who is None:
-            if not wait:
-                log.warning("Web dashboard: a phrase that belongs to nobody here, from %s", addr)
+            tries = app.note_unknown(key, addr) if not wait else 0
+            if tries:
+                log.warning("Web dashboard: a phrase that belongs to nobody here, from %s%s", addr, _times(tries))
             return refused("Those are 24 valid words, but nobody here has that phrase.")
         app.note_login(addr, True)
         self._redirect("/", self._cookie_for(app.new_session(who)))

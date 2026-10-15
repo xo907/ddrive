@@ -3,6 +3,18 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.3.3 (2026-10-15)
+
+- **"A sign-in key that belongs to no account here" no longer fills the Log.** A device still signed in
+  to an account that was deleted (or a drive that was erased) asks again every few minutes, and each try
+  was a warning. Now the same key (or phrase) from the same address is in the Log once an hour, with how
+  many times it asked since; tries refused during the wait after too many wrong ones aren't logged at all.
+- **A reverse proxy in Docker or elsewhere on your network counts as one.** Only a proxy on the same
+  computer was believed about where a visitor came from, so behind Nginx Proxy Manager in another
+  container every visitor was the proxy's address (172.x): one device with old words made everybody wait
+  after wrong tries. With a domain name set (Settings → Domain names), a proxy at a private address is
+  believed too.
+
 ## 3.3.2 (2026-10-15)
 
 - **DDrive Lite stops trying words the host turned down.** When the host no longer knew a device's 24
