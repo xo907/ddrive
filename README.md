@@ -598,6 +598,7 @@ without losing a file**.
 ```text
 spare                                List the spare channels and what they cost
 spare add <channel id> [bot token]   Add one (checked first); its own bot is optional but safest
+spare assign                         Give each spare channel without one a bot of its own, picked at random
 spare grant                          Give every bot of the drive access to the spare channels, in one go
 spare remove <n>                     Remove one; if it holds pieces, they are rebuilt into the others first
 spare lost <n>                       The channel is gone (deleted, server gone): rebuild its pieces elsewhere
@@ -614,6 +615,12 @@ spare lost <n>                       The channel is gone (deleted, server gone):
 - **Files already on the drive** get the extra spare pieces in the background, one group at a time,
   while nothing uploads (each group is downloaded once). Their spare pieces so far are kept. `health`
   and the dashboard's Health page show how many groups are left.
+- **A bot of its own, picked at random.** `spare add <channel id>` without a token picks one of your
+  extra bots (`bots add`) that has no channel yet, at random, gives it access and makes it that
+  channel's own bot; `bots add` gives a new bot to a spare channel that has none; `spare assign` does it
+  for the channels you already have. A bot that is banned then takes at most one channel with it, which
+  the spare pieces cover, instead of touching every channel. The extra bots still post in the main
+  channel too, so uploads stay as fast.
 - **All your bots at once.** A spare channel without a bot of its own is posted to by every bot of
   the drive (`bots`). `spare add` gives them all access to it: the main bot sets each one's
   permissions on that channel, which needs "Manage Permissions" on the channel for the main bot.

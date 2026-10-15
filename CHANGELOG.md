@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.3.0 (2026-10-15)
+
+- **Each spare channel gets a bot of its own, picked at random.** A spare channel without a bot of its
+  own was posted to by every bot of the drive, so one banned bot touched every channel. Now `spare add`
+  picks one of the extra bots that has no channel yet, at random, gives it access and makes it that
+  channel's bot; `bots add` gives a new bot to a spare channel that has none; and `spare assign` does it
+  for the spare channels already there. A banned bot then takes at most one channel with it, which the
+  spare pieces are there for. The extra bots still post in the main channel too, and a bot posting in
+  two channels keeps one pace.
+- Commands that look up a spare channel's own bot no longer mix up channels after one was given up.
+
 ## 3.2.0 (2026-10-15)
 
 - **Erase everything.** A hard reset for starting over, in the dashboard (Settings → Erase everything,

@@ -162,6 +162,23 @@ def spare_channels(cfg):
     return out
 
 
+def own_bot(cfg, chan):
+    """The token of spare channel `chan`'s own bot, or "" (it is posted to by the main channel's bots)."""
+    full = [str(c).strip() for c in getattr(cfg, "spare_channels", None) or []]
+    tokens = list(getattr(cfg, "spare_bot_tokens", None) or [])
+    i = full.index(str(chan)) if str(chan) in full else -1
+    return tokens[i] if 0 <= i < len(tokens) else ""
+
+
+def set_own_bot(cfg, chan, token):
+    """Make `token` spare channel `chan`'s own bot (the lists stay in step with spare_channels)."""
+    full = [str(c).strip() for c in getattr(cfg, "spare_channels", None) or []]
+    tokens = list(getattr(cfg, "spare_bot_tokens", None) or [])
+    tokens += [""] * (len(full) - len(tokens))
+    tokens[full.index(str(chan))] = token
+    cfg.spare_bot_tokens = tokens[:len(full)]
+
+
 def lost_channels(cfg):
     return {str(c).strip() for c in getattr(cfg, "lost_channels", None) or [] if str(c).strip()}
 
@@ -409,17 +426,19 @@ def with_spares(cfg, main, api_for=None, local_root=None):
     lost = lost_channels(cfg)
     if not chans and not lost:
         return main
-    tokens = list(getattr(cfg, "spare_bot_tokens", None) or [])
-    full = [str(c).strip() for c in getattr(cfg, "spare_channels", None) or []]
     spares = {}
+    # One connection per bot: a bot posting in the main channel and in its own spare channel keeps to one
+    # pace (and counts once among the bots that upload).
+    known = {getattr(a, "token", None): a for a in getattr(main, "apis", None) or []}
     for chan in chans:
-        i = full.index(chan) if chan in full else -1
         if local_root is not None:
             spares[chan] = LocalBackend(f"{local_root}{SEP}{chan}", crypto=getattr(main, "crypto", None))
             continue
-        token = tokens[i] if 0 <= i < len(tokens) else ""
+        token = own_bot(cfg, chan)
         if token:
-            spares[chan] = DiscordBackend(api_for(token), chan, crypto=main.crypto)
+            if token not in known:
+                known[token] = api_for(token)
+            spares[chan] = DiscordBackend(known[token], chan, crypto=main.crypto)
         else:
             spares[chan] = DiscordBackend(main.api, chan, crypto=main.crypto, extra_apis=main.apis[1:])
     known = dict(getattr(cfg, "channel_servers", None) or {})

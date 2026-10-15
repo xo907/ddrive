@@ -115,3 +115,32 @@ class UploadAroundRefusedBotTest(helpers.unittest.TestCase):
             self.assertEqual(be.upload("x.bin", b"abc").message_id, "7")
         self.assertEqual(len(posted), 4)
         self.assertEqual([p["bot"] for p in be.bot_problems()], [2])
+
+
+class AssignTest(helpers.unittest.TestCase):
+    def test_each_spare_channel_gets_its_own_bot_at_random(self):
+        bots = [f"b{i}" for i in range(5)]
+        world = FakeDiscord(members=["main", *bots], allowed=["main"])
+        cfg = Config(bot_token="main", channel_id="1", extra_bot_tokens=bots, spare_channels=["11", "12", "13"],
+                     spare_bot_tokens=["", "b4", ""])
+        out = io.StringIO()
+        with mock.patch.object(cli, "DiscordAPI", side_effect=world.api), mock.patch.object(cfg, "save"), redirect_stdout(out):
+            given = cli._assign_bots(cfg)
+        self.assertEqual(given, 2)
+        from ddrive.channels import own_bot
+        owners = [own_bot(cfg, c) for c in ("11", "12", "13")]
+        self.assertEqual(owners[1], "b4")                                   # kept
+        self.assertEqual(len(set(owners)), 3)                               # one bot each, all different
+        self.assertTrue(set(owners) <= set(bots))
+        self.assertEqual(sorted(world.granted), sorted(f"id-{t}" for t in (owners[0], owners[2])))
+
+    def test_a_bot_of_its_own_shares_its_connection(self):
+        from ddrive.channels import with_spares
+        from ddrive.discord_api import DiscordAPI
+        main_bot, extra = DiscordAPI("main"), DiscordAPI("b1")
+        main = DiscordBackend(main_bot, "1", extra_apis=[extra])
+        cfg = Config(bot_token="main", channel_id="1", extra_bot_tokens=["b1"], spare_channels=["11"],
+                     spare_bot_tokens=["b1"])
+        spread = with_spares(cfg, main, api_for=lambda t: self.fail("a second connection for the same bot"))
+        self.assertIs(spread.spares["11"].api, extra)
+        self.assertEqual(spread.upload_slots, 2)

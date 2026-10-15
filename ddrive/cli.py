@@ -1500,12 +1500,9 @@ def cmd_bots(args):
         return 1
     cfg.extra_bot_tokens = list(cfg.extra_bot_tokens or []) + [token]
     cfg.save()
-    from .channels import spare_channels
-    own = list(cfg.spare_bot_tokens or [])
-    for i, chan in enumerate(spare_channels(cfg)):
-        if not (i < len(own) and own[i]):
-            print(f"Giving it access to spare channel {chan}...")
-            _grant_bots(cfg, chan, [token])
+    from .channels import own_bot, spare_channels
+    if any(not own_bot(cfg, c) for c in spare_channels(cfg)):
+        _assign_bots(cfg, only=[token])            # a spare channel without a bot of its own gets this one
     print(f"[SUCCESS] Added {me.get('username')}. Uploads now use {1 + len(cfg.extra_bot_tokens)} bots.")
     if is_mounted(cfg.mount_point):
         print("Restart the drive (stop, then start) to use it.")
@@ -1590,9 +1587,41 @@ def _places(cfg):
     return len(chans), f"{len(chans)} channels (any one channel can be lost)"
 
 
+def _assign_bots(cfg, only=None):
+    """Give each spare channel that has no bot of its own one of the extra bots, picked at random, that has
+    no channel yet (`only`: from these bots). A bot banned then takes one channel with it, which the spare
+    pieces are there for, instead of touching every channel. Returns how many channels got a bot."""
+    import random
+    from .channels import own_bot, set_own_bot, spare_channels
+    chans = [c for c in spare_channels(cfg) if not own_bot(cfg, c)]
+    taken = {own_bot(cfg, c) for c in spare_channels(cfg)}
+    free = [t for t in (only if only is not None else cfg.extra_bot_tokens or [])
+            if t and t != cfg.bot_token and t not in taken]
+    rnd = random.SystemRandom()
+    rnd.shuffle(chans)
+    rnd.shuffle(free)
+    given = 0
+    for chan, token in zip(chans, free):
+        name = _bot_name(token)[0]
+        print(f"Spare channel {chan} gets its own bot: {name}")
+        if _grant_bots(cfg, chan, [token]):
+            print(f"  [!] {name} can't use it yet; the channel keeps the main bots for now ({launcher()} spare assign "
+                  "tries again)")
+            continue
+        set_own_bot(cfg, chan, token)
+        given += 1
+    if given:
+        cfg.save()
+    left = len(chans) - given
+    if left and not free[len(chans):] and len(free) < len(chans):
+        print(f"{left} spare channel(s) have no bot of their own (not enough extra bots: {launcher()} bots add); "
+              "the main bots post there.")
+    return given
+
+
 def cmd_spare(args):
     """Spare channels: pieces are spread over them so that losing any one channel loses no file."""
-    from .channels import spare_channels, spread_pieces
+    from .channels import own_bot, spare_channels, spread_pieces
     cfg = Config.load()
     if not cfg.is_configured():
         print(f"[ERROR] Run '{launcher()} setup' first.")
@@ -1603,7 +1632,7 @@ def cmd_spare(args):
     if action == "list":
         print(f"  Main channel:     {cfg.channel_id}")
         for i, c in enumerate(chans, 1):
-            bot = _bot_name(tokens[i - 1])[0] if i - 1 < len(tokens) and tokens[i - 1] else "the main bots"
+            bot = _bot_name(own_bot(cfg, c))[0] if own_bot(cfg, c) else "the main bots"
             print(f"  Spare channel {i}:  {c}  (posted to by {bot})")
         if not chans:
             print(f"\nNo spare channels. Add one with: {launcher()} spare add <channel id> [bot token]")
@@ -1617,8 +1646,15 @@ def cmd_spare(args):
             print(f"\nEvery group of {k} pieces gets {m} spare pieces, spread over {what}: about {100 * m // k}% "
                   f"extra space.")
         return 0
+    if action == "assign":
+        given = _assign_bots(cfg)
+        print(f"[OK] {given} spare channel(s) got a bot of their own." if given else
+              "Every spare channel that can have a bot of its own has one.")
+        if given and is_mounted(cfg.mount_point):
+            print("Restart the drive (stop, then start) to use them.")
+        return 0
     if action == "grant":
-        shared = [c for i, c in enumerate(chans) if not (i < len(tokens) and tokens[i])]
+        shared = [c for c in chans if not own_bot(cfg, c)]
         if not shared:
             print("Every spare channel has a bot of its own: nothing to give access to.")
             return 0
@@ -1682,11 +1718,9 @@ def cmd_spare(args):
         print("         The bot has to be in that channel's server and be able to see, post in and delete")
         print("         messages in it. A channel in another server, with a bot of its own, is safest.")
         return 1
+    shared_ok = True
     if not token and cfg.extra_bot_tokens:
-        print(f"Giving the {len(cfg.extra_bot_tokens)} extra bot(s) access to it (uploads use every bot)...")
-        if _grant_bots(cfg, chan, list(cfg.extra_bot_tokens)):
-            print("[!] Some bots can't use it yet. The drive works without them (it posts with the others);")
-            print(f"    fix them and run: {launcher()} spare grant")
+        shared_ok = False                         # decided below, once the channel is in the list
     tokens += [""] * (len(chans) - len(tokens))
     cfg.spare_channels = chans + [chan]
     cfg.spare_bot_tokens = tokens[:len(chans)] + [token]
@@ -1703,6 +1737,12 @@ def cmd_spare(args):
             pass
     cfg.channel_servers = servers
     cfg.save()
+    if not shared_ok and not _assign_bots(cfg):
+        # no extra bot is free to be its own: every bot posts there, so every bot needs access
+        print(f"Giving the {len(cfg.extra_bot_tokens)} extra bot(s) access to it (no bot is free to be its own)...")
+        if _grant_bots(cfg, chan, list(cfg.extra_bot_tokens)):
+            print("[!] Some bots can't use it yet. The drive works without them (it posts with the others);")
+            print(f"    fix them and run: {launcher()} spare grant")
     k = max(1, int(cfg.parity_group or 10))
     places, what = _places(cfg)
     m = max(int(cfg.parity_pieces or 0), spread_pieces(k, places))
@@ -2764,8 +2804,8 @@ def main():
                                                              "Discord (bots and channels stay)")
     p_erase.add_argument("--yes", action="store_true", help="Don't ask to type the confirmation")
     p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], "
-                                              "grant, remove <n>, lost <n>")
-    p_spare.add_argument("action", nargs="?", choices=["list", "add", "grant", "remove", "lost"])
+                                              "assign, grant, remove <n>, lost <n>")
+    p_spare.add_argument("action", nargs="?", choices=["list", "add", "assign", "grant", "remove", "lost"])
     p_spare.add_argument("channel", nargs="?", help="Channel id (add) or number (remove)")
     p_spare.add_argument("token", nargs="?", help="The spare channel's own bot token (optional)")
     p_spare.add_argument("--force", action="store_true", help="(no longer needed: a channel holding pieces is given up "
