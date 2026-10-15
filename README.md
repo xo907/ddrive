@@ -812,6 +812,8 @@ Settings) decides who may make one:
   and when it last signed in. **Switch off** signs it out and stops its share links without deleting
   anything; **Delete** removes it from this computer and from Discord. An account can delete itself
   under *Your account*. The same from a terminal: `accounts list`, `accounts disable|enable|delete <id>`.
+  A deleted account can be brought back for `delete_after_days` (7) days, until what it stored is
+  deleted from Discord: `accounts deleted` lists them, `accounts undelete <id>` brings one back.
 - **Moving one account into another.** Two end-to-end encrypted accounts of the same person can be
   made one: everything of one (files, folders, earlier versions, deleted files, snapshots, saved
   messages) goes into a new folder of the other, and the first one is then deleted. On the account

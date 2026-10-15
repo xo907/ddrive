@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.1.0 (2026-10-15)
+
+- **A deleted account can be brought back.** Deleting an account (by the owner, by itself, or the one a
+  move came from) removed its record and its folder at once; only its pieces on Discord waited a week
+  before being deleted, with nothing left that could use them. Now the account is kept aside for those
+  `delete_after_days` (7): `accounts deleted` lists such accounts, and `accounts undelete <id>` brings one
+  back as it was, its pieces taken off the list of what to delete. After that it is gone for good.
+
 ## 3.0.5 (2026-10-15)
 
 - **Moving an account into another one keeps a copy until the move is safe.** The source account was

@@ -475,6 +475,7 @@ class Accounts:
         self._backup_at = 0.0
         self._found = (0.0, [])             # (when looked, the copies in the channel)
         self._stop = threading.Event()
+        self._secrets_of_deleted = {}
         self._thread = None
         self._load()
 
@@ -1076,6 +1077,7 @@ class Accounts:
             rec = self._recs.get(aid)
             if rec is None:
                 return False
+            before = json.loads(json.dumps(rec))
             rec["disabled"] = True           # nothing opens it again while it is taken apart
         self._close(aid, force=True)
         mids = set()
@@ -1099,13 +1101,92 @@ class Accounts:
             mids.add((rec.get("checkpoint") or {}).get("mid"))
             mids.update(rec.get("kept") or [])
             self._recs.pop(aid, None)
-            self._secrets.pop(aid, None)
+            self._secrets_of_deleted[aid] = self._secrets.pop(aid, None)
             self._save()
             self._backup_wanted = self._backup_soon = True      # a list brought back later doesn't have it any more
-        self.drive.index.trash_add([m for m in mids if m])
-        shutil.rmtree(folder, ignore_errors=True)
-        log.info("Account %s was deleted (%d piece(s) are being removed from Discord).", aid, len(mids))
+        mids = sorted(m for m in mids if m)
+        self.drive.index.trash_add(mids)
+        # Kept aside until its pieces are actually deleted from Discord, so `undelete` can bring it back.
+        hold = self._held(aid)
+        try:
+            shutil.rmtree(hold, ignore_errors=True)
+            os.makedirs(os.path.dirname(hold), exist_ok=True)
+            if os.path.isdir(folder):
+                os.replace(folder, hold)
+            else:
+                os.makedirs(hold, exist_ok=True)
+            with open(os.path.join(hold, "deleted.json"), "w", encoding="utf-8") as f:
+                json.dump({"rec": before, "secret": self._secrets_of_deleted.pop(aid, None), "at": time.time(),
+                           "mids": mids}, f)
+        except OSError as e:
+            log.warning("Account %s couldn't be kept aside for bringing back (%s); it is gone for good.", aid, e)
+            shutil.rmtree(folder, ignore_errors=True)
+        log.info("Account %s was deleted (%d piece(s) are removed from Discord after %s day(s); until then "
+                 "'accounts undelete %s' brings it back).", aid, len(mids), self._grace_days(), aid)
+        self._purge_deleted()
         return True
+
+    # ------------------------------------------------------------ deleted accounts, for a while
+    def _held(self, aid):
+        self.folder(aid)                                 # (checks it looks like an account id)
+        return os.path.join(self.root, "deleted", aid)
+
+    def _grace_days(self):
+        return float(getattr(self.drive.cfg, "delete_after_days", 7.0) or 0)
+
+    def deleted(self):
+        """Accounts deleted lately that can still be brought back: [{"id", "name", "at", "until"}]."""
+        out = []
+        root = os.path.join(self.root, "deleted")
+        for aid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+            try:
+                with open(os.path.join(root, aid, "deleted.json"), encoding="utf-8") as f:
+                    info = json.load(f)
+            except (OSError, ValueError):
+                continue
+            until = info["at"] + self._grace_days() * 86400
+            if until > time.time():
+                out.append({"id": aid, "name": (info.get("rec") or {}).get("name") or "", "at": info["at"], "until": until})
+        return out
+
+    def undelete(self, aid):
+        """Bring back an account deleted less than `delete_after_days` ago: its record, its folder, and its
+        pieces taken off the list of what is deleted from Discord."""
+        hold = self._held(aid)
+        try:
+            with open(os.path.join(hold, "deleted.json"), encoding="utf-8") as f:
+                info = json.load(f)
+        except (OSError, ValueError):
+            raise AccountError("That account wasn't deleted lately (or can't be brought back any more)") from None
+        if time.time() > info["at"] + self._grace_days() * 86400:
+            raise AccountError("Too late: what that account stored has been deleted from Discord")
+        with self._lock:
+            if aid in self._recs:
+                raise AccountError("That account exists")
+        for mid in info.get("mids") or []:
+            self.drive.index.trash_remove(mid)
+        os.remove(os.path.join(hold, "deleted.json"))
+        os.replace(hold, self.folder(aid))
+        with self._lock:
+            self._recs[aid] = info["rec"]
+            if info.get("secret") is not None:
+                self._secrets[aid] = info["secret"]
+            self._save()
+            self._backup_wanted = self._backup_soon = True
+        log.info("Account %s was brought back.", aid)
+        return True
+
+    def _purge_deleted(self):
+        """Deleted accounts whose pieces are gone from Discord by now can't come back: forget them."""
+        root = os.path.join(self.root, "deleted")
+        for aid in os.listdir(root) if os.path.isdir(root) else []:
+            try:
+                with open(os.path.join(root, aid, "deleted.json"), encoding="utf-8") as f:
+                    at = json.load(f)["at"]
+            except (OSError, ValueError, KeyError):
+                at = 0
+            if time.time() > at + self._grace_days() * 86400 + 86400:
+                shutil.rmtree(os.path.join(root, aid), ignore_errors=True)
 
     # ------------------------------------------------------------ invites
     def invites(self):

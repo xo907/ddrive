@@ -1329,7 +1329,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._json({"mode": acc.mode(), "quota": int(cfg.account_quota_bytes or 0), "max": int(cfg.accounts_max or 0),
                     "legal": {k: getattr(cfg, k) or "" for k in ("operator_name", "operator_contact", "legal_region")},
                     "accounts": acc.listing(), "invites": invites, "path": "/signup", "url": f"{base}/signup" if base else "",
-                    "backups": acc.restorable()})
+                    "backups": acc.restorable(), "deleted": acc.deleted()})
 
     def _post_api_accounts_restore(self):
         """Bring back the list of accounts another computer (or this one, before its disk was lost) saved."""
@@ -1394,6 +1394,14 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._not_moving(str(body.get("id") or ""))
         if not self.app.accounts.set_disabled(str(body.get("id") or ""), bool(body.get("off"))):
             raise ApiError(404, "No such account")
+        self._json({"ok": True})
+
+    def _post_api_accounts_undelete(self):
+        """Bring back an account deleted less than delete_after_days ago."""
+        try:
+            self.app.accounts.undelete(str(self._body_json().get("id") or ""))
+        except AccountError as e:
+            raise ApiError(400, str(e)) from None
         self._json({"ok": True})
 
     def _post_api_accounts_delete(self):

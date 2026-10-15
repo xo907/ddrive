@@ -19,7 +19,9 @@ USAGE = f"""Usage: {launcher()} accounts <command>
   list                   the accounts, admin accounts and moves
   disable <id>           switch an account off (an admin is signed out at once)
   enable <id>            switch it on again
-  delete <id>            delete an account for good (with everything it stored)
+  delete <id>            delete an account (what it stored goes from Discord after delete_after_days)
+  deleted                accounts deleted lately, that can still be brought back
+  undelete <id>          bring one back (within delete_after_days, 7 days by default)
   moves                  moves between end-to-end encrypted accounts in progress
   move-cancel <id>       stop a move (the account it came from is left as it was)
 
@@ -81,6 +83,12 @@ class _Remote:
     def move_cancel(self, mid):
         self.call("/api/accounts/moves/cancel", {"id": mid})
 
+    def deleted(self):
+        return self.call("/api/accounts").get("deleted") or []
+
+    def undelete(self, aid):
+        self.call("/api/accounts/undelete", {"id": aid})
+
 
 class _Stub:
     """Just enough of a drive for the list on disk (accounts.Accounts) while the drive is stopped."""
@@ -129,6 +137,13 @@ class _Local:
 
     def move_cancel(self, mid):
         raise RuntimeError(f"Moves are run by the drive: start it first ({launcher()} start).")
+
+    def deleted(self):
+        return self.acc.deleted()
+
+    def undelete(self, aid):
+        raise RuntimeError(f"Bringing an account back needs the drive running ({launcher()} start): its pieces are "
+                           "taken off the drive's list of what to delete from Discord.")
 
 
 def _target(cfg):
@@ -216,6 +231,21 @@ def main(args):
             return 0
         if action == "moves":
             _print_moves(t.moves())
+            return 0
+        if action == "deleted":
+            gone = t.deleted()
+            for g in gone:
+                print(f"  {g['id']}  {g['name'] or '(no name)'}  deleted {_ago(g['at'])}; "
+                      f"can be brought back for {max(0, int((g['until'] - time.time()) // 3600))} more hour(s)")
+            if not gone:
+                print("No account was deleted lately.")
+            return 0
+        if action == "undelete":
+            if not rest:
+                print(f"[ERROR] Which one? {launcher()} accounts undelete <id> (see {launcher()} accounts deleted)")
+                return 1
+            t.undelete(rest[0])
+            print(f"[OK] Account {rest[0]} is back.")
             return 0
     except (RuntimeError, ValueError) as e:
         print(f"[ERROR] {e}")

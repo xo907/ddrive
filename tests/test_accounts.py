@@ -365,11 +365,37 @@ class AccountsTest(helpers.DriveTest):
         self.assertEqual(self.post("/api/accounts/delete", {"id": acct.id}, self.owner)[0], 200)
         self.assertEqual(self.get("/api/status", cookie)[0], 401)
         self.assertIsNone(self.sign_in(phrase))
-        self.assertFalse(os.path.exists(folder))
+        self.assertFalse(os.path.exists(folder))              # (kept aside for undelete, not in place)
         waiting = {r["message_id"] for r in self.d.index._all("SELECT message_id FROM trash")}
         self.assertTrue(mids and mids <= waiting)
         self.assertEqual(self.get("/api/accounts", self.owner)[1]["accounts"], [])
         self.assertEqual(self.post("/api/accounts/delete", {"id": acct.id}, self.owner)[0], 404)
+
+    def test_a_deleted_account_can_be_brought_back(self):
+        self.d.cfg.signup_mode = "public"
+        cookie, phrase = self.sign_up()
+        self.put(cookie, "/a.txt", b"a" * 5000)
+        acct = self.opened(cookie)
+        self.upload(acct)
+        mids = set(acct.index.referenced_mids())
+        aid = acct.id
+        self.assertEqual(self.post("/api/accounts/delete", {"id": aid}, self.owner)[0], 200)
+        self.assertIsNone(self.sign_in(phrase))
+        deleted = self.get("/api/accounts", self.owner)[1]["deleted"]
+        self.assertEqual([g["id"] for g in deleted], [aid])
+        # within delete_after_days: back as it was, its pieces no longer waiting to be deleted
+        self.assertEqual(self.post("/api/accounts/undelete", {"id": aid}, self.owner)[0], 200)
+        waiting = {r["message_id"] for r in self.d.index._all("SELECT message_id FROM trash")}
+        self.assertFalse(mids & waiting)
+        cookie = self.sign_in(phrase)
+        self.assertEqual(self.get("/api/file?path=/a.txt", cookie)[1], b"a" * 5000)
+        self.assertEqual(self.get("/api/accounts", self.owner)[1]["deleted"], [])
+        self.assertEqual(self.post("/api/accounts/undelete", {"id": aid}, self.owner)[0], 400)   # nothing to bring back
+        # too late: once its pieces may have been deleted from Discord, it is not offered any more
+        self.assertEqual(self.post("/api/accounts/delete", {"id": aid}, self.owner)[0], 200)
+        self.d.cfg.delete_after_days = 0
+        self.assertEqual(self.get("/api/accounts", self.owner)[1]["deleted"], [])
+        self.assertEqual(self.post("/api/accounts/undelete", {"id": aid}, self.owner)[0], 400)
 
     def test_an_account_deletes_itself(self):
         self.d.cfg.signup_mode = "public"

@@ -2809,7 +2809,7 @@ def main():
     p_menu.add_argument("action", choices=["install", "uninstall"], default="install", nargs="?")
 
     p_acc = subparsers.add_parser("accounts", help="Accounts on the dashboard: list, disable|enable|delete <id>, "
-                                                    "moves, move-cancel <id>")
+                                                    "moves, move-cancel <id>, deleted, undelete <id>")
     p_acc.add_argument("action", nargs="?", default="list")
     p_acc.add_argument("rest", nargs="*")
 
