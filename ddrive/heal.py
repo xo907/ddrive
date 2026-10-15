@@ -1113,6 +1113,11 @@ class Maintenance:
         channel or server would break, and that no other group over the same pieces covers."""
         lay = _as_layout(chans)
         groups = self.index.all_groups()
+        # A group some of whose pieces are no longer used (an earlier version expired, keeping only the pieces
+        # the file still shares with it) is not worth strengthening: those pieces are in the newer version's own
+        # groups, and the released ones can't be read to compute anything (it would be tried again and again).
+        used = self.index.data_mids()
+        groups = {gid: g for gid, g in groups.items() if all(x[0] in used for x in g[0])}
 
         def strong(mem, sh):
             mids = [x[0] for x in mem] + [x[0] for x in sh]

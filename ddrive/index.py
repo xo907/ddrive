@@ -748,6 +748,13 @@ class Index:
                 "JOIN chunks k ON k.message_id = m.message_id WHERE s.message_id=?", (mid,))})
         return {"files": files, "versions": versions, "snapshots": snapshots, "protects": protects}
 
+    def data_mids(self):
+        """Every stored data piece something still uses (files, earlier versions, snapshots)."""
+        with self.lock:
+            return {r[0] for r in self.db.execute(
+                "SELECT message_id FROM chunks UNION SELECT message_id FROM version_chunks UNION "
+                "SELECT message_id FROM snapshot_chunks")}
+
     def referenced_mids(self):
         """Every stored piece the drive needs (for the background check), in upload order."""
         with self.lock:

@@ -228,3 +228,19 @@ class VerdictTest(helpers.DriveTest):
             f.write(b"x")
         lay = Layout([None, A], {None: "s1", A: "s2"})
         self.assertEqual(safety_verdict(d.cfg, {"chunks": 4, "protected_chunks": 4}, [], 0, lay)[0][:4], "[OK]")
+
+
+class ReleasedMembersTest(helpers.DriveTest):
+    def test_a_group_of_an_expired_version_is_not_strengthened(self):
+        d = self.drive(parity_group=4, parity_pieces=2, keep_versions=False)
+        a, b = os.urandom(helpers.PIECE), os.urandom(helpers.PIECE)
+        self.write(d, "/f.bin", a + b + os.urandom(helpers.PIECE * 2))
+        self.upload(d)
+        self.write(d, "/f.bin", a + b + os.urandom(helpers.PIECE * 2))     # shares two pieces with the old one
+        self.upload(d)
+        self.assertEqual(len(d.index.all_groups()), 2)                       # the old group still holds a and b
+        d.cfg.parity_pieces = 4
+        todo = d.maintenance.groups_to_spread([None])
+        self.assertEqual(len(todo), 1)
+        g = d.index.parity_group(todo[0])
+        self.assertTrue(d.healer.spread(g, [None], 4))                       # the current version's: works

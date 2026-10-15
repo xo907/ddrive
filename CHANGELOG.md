@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.0.4 (2026-10-15)
+
+- **No more downloading for nothing in the background.** When a file is edited in place, its new version
+  can share pieces with the old one. Once the old version expired, its group of spare pieces kept the
+  shared pieces and lost the rest, and the background work that adds spare pieces (after the setting is
+  raised, or a spare channel is added) kept trying to strengthen it: it downloaded the pieces that were
+  left, found the others gone, and tried again later, over and over. Such groups are left alone now;
+  the pieces they share are protected by the newer version's own group.
+
 ## 3.0.3 (2026-10-14)
 
 - **`health` ends with one plain answer: is everything safe?** "[OK] Safe" when every piece has its
