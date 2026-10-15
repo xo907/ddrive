@@ -9,6 +9,7 @@ import io
 import json
 import os
 import time
+from unittest import mock
 import urllib.parse
 
 import helpers
@@ -100,6 +101,15 @@ class VaultTest(helpers.DriveTest):
     def account_drive(self):
         aid = next(iter(self.web.accounts._recs))
         return self.web.accounts.acquire(aid)
+
+    def upload_account(self):
+        """Upload what the account's drive still has waiting (tests run its uploads themselves)."""
+        d = self.account_drive()
+        try:
+            for nid in d.index.unsynced_ids():
+                d.uploader.run_now(nid)
+        finally:
+            self.web.accounts.release(d)
 
     def objects(self):
         """The ids of the sealed objects the host holds for the account."""
@@ -496,13 +506,33 @@ class VaultTest(helpers.DriveTest):
         fresh = self.new_device()                                       # a new device starts from the sealed whole list
         self.assertEqual(sorted(n["name"] for n in fresh.list("/")), ["after.txt"] + [f"f{i}.txt" for i in range(5)])
         self.assertEqual(fresh.read("/f3.txt"), b"3")
-        v.snapshot()                                                    # the one before is dropped
+        v.snapshot()           # the one before is dropped, once the new one is stored on Discord
+        self.upload_account()
+        v.client._json("/api/vault/log?after=0")
+        self.assertEqual(len(self.objects()), 6 + 1)                    # six files and one sealed list
+
+    def test_the_changes_stay_until_the_sealed_list_is_on_discord(self):
+        v = self.device
+        for i in range(3):
+            v.put(f"/f{i}.txt", str(i).encode())
         d = self.account_drive()
         try:
-            objects = [c["name"] for sub in d.index.children(d.index.resolve("/o")["id"]) for c in d.index.children(sub["id"])]
+            with mock.patch.object(d.uploader, "_process_upload", lambda nid: None):      # Discord is unreachable
+                v.snapshot()
+                log = d.index.resolve("/log")
+                self.assertEqual(len(d.index.children(log["id"])), 3)                  # what it can be rebuilt from
+                got = v.client._json("/api/vault/log?after=0")
+                self.assertEqual((got["snapshot"]["seq"], got["batches"]), (3, []))   # but they aren't handed out again
         finally:
             self.web.accounts.release(d)
-        self.assertEqual(len(objects), 6 + 1)                           # six files and one sealed list
+        self.upload_account()
+        v.client._json("/api/vault/log?after=0")
+        d = self.account_drive()
+        try:
+            self.assertEqual(d.index.children(d.index.resolve("/log")["id"]), [])    # stored: now they go
+        finally:
+            self.web.accounts.release(d)
+        self.assertEqual(sorted(n["name"] for n in self.new_device().list("/")), ["f0.txt", "f1.txt", "f2.txt"])
 
 
 class VaultSyncTest(VaultTest):

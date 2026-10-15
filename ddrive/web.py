@@ -1904,9 +1904,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             after = int(self._query().get("after") or 0)
         except ValueError:
             after = 0
+        with self._vault_lock:
+            self._vault_tidy(d)
         last, snap = self._vault_state(d)
         batches, size, more = [], 0, False
         folder = d.index.resolve("/log")
+        if snap:                                   # what the sealed whole list already holds is read from it
+            after = max(after, int(snap["seq"]))
         if folder is not None:
             for c in sorted((c for c in d.index.children(folder["id"]) if c["name"].isdigit()), key=lambda c: int(c["name"])):
                 if int(c["name"]) <= after:
@@ -1950,16 +1954,45 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             if seq > last or (old and seq < int(old["seq"])):
                 raise ApiError(409, "that is not where the list is")
             self._vault_write(d, "/snap", json.dumps({"seq": seq, "object": body["object"], "size": size}).encode("utf-8"))
-            folder = d.index.resolve("/log")
-            for c in (d.index.children(folder["id"]) if folder is not None else []):
-                if c["name"].isdigit() and int(c["name"]) <= seq:
-                    d.fs.unlink(f"/log/{c['name']}")
-            if old and old.get("object") != body["object"]:
-                try:
-                    d.fs.unlink(self._object_path(old["object"]))
-                except (OSError, ApiError):
-                    pass
+            # The changes it replaces (and the sealed list before it) go only once the new one is on Discord:
+            # until then they are what the list can be rebuilt from if this computer is lost.
+            try:
+                tidy = json.loads(d.index.kv_get("vault_tidy") or "{}")
+            except ValueError:
+                tidy = {}
+            stale = list(tidy.get("old") or [])
+            if tidy.get("object") and tidy["object"] != body["object"]:
+                stale.append(tidy["object"])
+            if old and old.get("object") and old["object"] != body["object"]:
+                stale.append(old["object"])
+            d.index.kv_set("vault_tidy", json.dumps({"seq": seq, "object": body["object"],
+                                                     "old": [o for o in dict.fromkeys(stale) if o != body["object"]]}))
+            self._vault_tidy(d)
         self._json({"ok": True})
+
+    def _vault_tidy(self, d):
+        """Drop what the last sealed whole list replaces, once it (and the note of where it is) is stored on
+        Discord. Caller holds _vault_lock."""
+        try:
+            tidy = json.loads(d.index.kv_get("vault_tidy") or "null")
+        except ValueError:
+            tidy = None
+        if not tidy:
+            return
+        for path in ("/snap", self._object_path(tidy["object"])):
+            node = d.index.resolve(path)
+            if node is None or node["state"] != "synced":
+                return                                   # not on Discord yet: keep everything for now
+        folder = d.index.resolve("/log")
+        for c in (d.index.children(folder["id"]) if folder is not None else []):
+            if c["name"].isdigit() and int(c["name"]) <= int(tidy["seq"]):
+                d.fs.unlink(f"/log/{c['name']}")
+        for obj in tidy.get("old") or []:
+            try:
+                d.fs.unlink(self._object_path(obj))
+            except (OSError, ApiError):
+                pass
+        d.index.kv_delete("vault_tidy")
 
     def _get_api_vault_object(self):
         d = self._vault()

@@ -81,11 +81,27 @@ jobs:
             ./gradlew --console=plain :core:test :app:assembleDebug
             exit 0
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ddrive-lite.jks"
+          # Pasted secrets often carry a line break or spaces: neither belongs to the key or its password.
+          export DDRIVE_KEYSTORE_PASSWORD="$(printf '%s' "$DDRIVE_KEYSTORE_PASSWORD" | tr -d '\r\n')"
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/ddrive-lite.jks"; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 (make it with: base64 -w0 ddrive-lite.jks)"
+            exit 1
+          fi
           export DDRIVE_KEYSTORE="$RUNNER_TEMP/ddrive-lite.jks"
-          ./gradlew --console=plain :core:test :app:assembleRelease
+          # Check the key before building, and say what is wrong in words (build logs need admin rights to read).
+          if ! keytool -list -keystore "$DDRIVE_KEYSTORE" -storepass "$DDRIVE_KEYSTORE_PASSWORD" -alias ddrive-lite > "$RUNNER_TEMP/key.txt" 2>&1; then
+            echo "::error::The keystore can't be opened with ANDROID_KEYSTORE_PASSWORD, or has no key named ddrive-lite: $(tr '\n' ' ' < "$RUNNER_TEMP/key.txt" | head -c 400)"
+            rm -f "$DDRIVE_KEYSTORE"
+            exit 1
+          fi
+          echo "::notice::Signing with the certificate whose SHA-256 is $(keytool -list -v -keystore "$DDRIVE_KEYSTORE" -storepass "$DDRIVE_KEYSTORE_PASSWORD" -alias ddrive-lite 2>/dev/null | sed -n 's/.*SHA256: *//p' | head -1)"
+          if ! ./gradlew --console=plain :core:test :app:assembleRelease > "$RUNNER_TEMP/build.log" 2>&1; then
+            echo "::error::The app didn't build:%0A$(grep -v -i password "$RUNNER_TEMP/build.log" | tail -40 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            rm -f "$DDRIVE_KEYSTORE"
+            exit 1
+          fi
           cp app/build/outputs/apk/release/app-release.apk ../dist/DDriveLite.apk
-          rm -f "$RUNNER_TEMP/ddrive-lite.jks"
+          rm -f "$DDRIVE_KEYSTORE"
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -93,7 +109,8 @@ jobs:
           if-no-files-found: ignore
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # The Windows and Debian downloads go out even when the Android app can't be built.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.windows-exe.result == 'success' && needs.deb.result == 'success' }}
     needs: [windows-exe, deb, android]
     runs-on: ubuntu-latest
     steps:

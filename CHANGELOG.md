@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.0.2 (2026-10-14)
+
+- **An end-to-end account's file list can't be lost between two saves.** When a device sealed the whole
+  list of an end-to-end account, the host dropped the changes that led to it right away, before the
+  sealed list itself was on Discord. Had the host been lost in that moment, so was the account's file
+  list. Now the changes and the previous sealed list stay until the new one is stored, and are dropped
+  then; the host never hands out changes the sealed list already holds.
+- **Releases say what is wrong with the Android app's signing key** (a key that can't be opened with
+  its password, or isn't valid base64) instead of only failing, accept secrets pasted with a stray line
+  break, and the Windows and Debian downloads go out even when the app can't be built.
+
 ## 3.0.1 (2026-10-14)
 
 - **The Android app is part of every release again.** The release now signs DDriveLite.apk itself and
