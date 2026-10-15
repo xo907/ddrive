@@ -99,7 +99,7 @@ RETIRED_POST = frozenset("""logout account/delete accounts/e2e locks/unlock lock
 # How the owner signs in: only the owner's to see or change (an answer with one of these is never
 # compressed either).
 OWNER_ONLY = frozenset(("/api/signin/passkey/options", "/api/signin/passkey/register", "/api/signin/passkey/remove",
-                        "/api/signin/phrase", "/api/webdav/password"))
+                        "/api/signin/phrase", "/api/webdav/password", "/api/erase"))
 
 # What an admin account (accounts.py) may ask of the drive itself, next to what any end-to-end
 # encrypted account may ask about its own files: the settings, the accounts and other admins, health
@@ -237,6 +237,16 @@ class WebServer:
                             pass
         except Exception as e:           # nothing made yet, or the drive is stopping
             log.debug("thumbnail clean-up: %s", e)
+
+    def after_erase(self):
+        """The channels are empty: stop the drive (started again, it clears this computer's data and is empty)."""
+        def bye():
+            time.sleep(3)                             # the page gets to see that it is done
+            if os.name == "nt":
+                os._exit(0)
+            import signal
+            os.kill(os.getpid(), signal.SIGTERM)      # the usual way down: the drive letter / folder is unmounted
+        threading.Thread(target=bye, name="EraseDone", daemon=True).start()
 
     def stop(self):
         self.lite.close()
@@ -1394,6 +1404,53 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         self._not_moving(str(body.get("id") or ""))
         if not self.app.accounts.set_disabled(str(body.get("id") or ""), bool(body.get("off"))):
             raise ApiError(404, "No such account")
+        self._json({"ok": True})
+
+    # ------------------------------------------------------------ erase everything
+    def _get_api_erase(self):
+        er = getattr(self.server.app, "eraser", None)
+        from .erase import CONFIRM, pending
+        self._json({"confirm": CONFIRM, "pending": pending(self.drive.cfg), "state": dict(er.state) if er else None})
+
+    def _post_api_erase(self):
+        """The owner's hard reset: every file and account, here and on Discord; the bots and channels stay.
+        The drive's own work stops, the channels are emptied (progress: GET /api/erase), then the drive stops;
+        started again, it clears this computer's data and is empty."""
+        from . import erase
+        app, d = self.server.app, self.drive
+        if self._admin:
+            raise ApiError(403, "Only the owner can erase the drive.")
+        if (self._body_json().get("confirm") or "").strip() != erase.CONFIRM:
+            raise ApiError(400, f"Type {erase.CONFIRM} exactly to erase everything.")
+        er = getattr(app, "eraser", None)
+        if er is not None and er.state.get("running"):
+            raise ApiError(409, "Erasing is already under way.")
+        erase.request(d.cfg)
+        er = app.eraser = erase.Eraser(d.cfg, d.backend, save_config=not d.local_test_dir)
+        er.state.update(running=True, phase="stopping")
+        log.warning("The owner asked to erase everything: stopping the drive's work, then emptying its channels.")
+
+        def work():
+            try:
+                for part in (app.moves.stop, app.accounts.stop):
+                    try:
+                        part()
+                    except Exception as e:
+                        log.debug("stopping before erasing: %s", e)
+                app.accounts._broken = True          # no list of accounts is saved again (it would be one left over)
+                web, d.web = d.web, None              # everything but the dashboard, which shows how far it is
+                try:
+                    d.stop_background_services()
+                finally:
+                    d.web = web
+                er.run(local=False)
+            except Exception as e:
+                er.state.update(running=False, error=str(e))
+                return
+            er.state.update(phase="restart")
+            app.after_erase()
+
+        threading.Thread(target=work, name="Erase", daemon=True).start()
         self._json({"ok": True})
 
     def _post_api_accounts_undelete(self):

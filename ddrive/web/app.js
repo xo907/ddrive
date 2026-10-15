@@ -2367,10 +2367,56 @@ async function renderSettings() {
            h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))]).flat(),
        h("div", { id: "discord-settings" }),
        h("div", { id: "signin-settings" }),
-       h("div", { id: "accounts-settings" }));
+       h("div", { id: "accounts-settings" }),
+       h("div", { id: "erase-settings" }));
   if (!SERVER) discordSection($("#discord-settings"));      // (the owner's Discord account: not an admin's)
   signInSection($("#signin-settings"));
   accountsSection($("#accounts-settings"));
+  if (!SERVER) eraseSection($("#erase-settings"));          // the owner's alone
+}
+
+// The owner's hard reset: every file and account, here and in every channel, erased for good; the bots,
+// the channels and the 24 words stay. Typing the confirmation (and a last question) starts it.
+async function eraseSection(el) {
+  const info = await api("/api/erase").catch(() => null);
+  if (!info || !el) return;
+  const input = h("input", { placeholder: `Type ${info.confirm}`, spellcheck: "false", autocomplete: "off" });
+  const status = h("div", { class: "s" });
+  const btn = h("button", { class: "btn danger", type: "button", onclick: start }, "Erase everything");
+  async function start() {
+    if (input.value.trim() !== info.confirm) { toast(`Type ${info.confirm} exactly to erase everything`); return; }
+    if (!window.confirm("Last chance: every file, version, snapshot and account is erased for good, here and on Discord. Go on?")) return;
+    const r = await attempt(() => api("/api/erase", { confirm: input.value.trim() }));
+    if (r) watch();
+  }
+  function watch() {
+    btn.disabled = input.disabled = true;
+    poll();
+  }
+  async function poll() {
+    const s = await api("/api/erase").catch(() => null);
+    if (!s) {
+      status.textContent = "The channels are empty and the drive has stopped. Start it again: it clears this computer's data and starts empty.";
+      return;
+    }
+    const st = s.state || {};
+    if (st.error) {
+      status.textContent = `Stopped: ${st.error}. Start the drive again and it goes on where it stopped.`;
+      return;
+    }
+    status.textContent = st.phase === "restart" ? "The channels are empty. The drive is stopping…"
+      : st.phase === "stopping" ? "Stopping the drive's work…"
+      : `Erasing ${st.channel || "the channels"}: ${Number(st.deleted || 0).toLocaleString()} message(s) deleted so far. You can leave this page.`;
+    setTimeout(poll, 2000);
+  }
+  el.append(h("h2", { class: "warn-text" }, "Erase everything"),
+    h("div", { class: "settings" }, h("div", { class: "set-row" },
+      h("div", { class: "set-text" }, h("div", { class: "t" }, "A hard reset"),
+        h("div", { class: "s" }, "Deletes every file, earlier version, snapshot and account, on this computer and in every channel on Discord, "
+          + "for good. The bots, the channels and your 24 words stay: the drive starts again empty, in the same channels."),
+        status),
+      h("div", { class: "set-ctl wide" }, input, btn))));
+  if (info.state && info.state.running) watch();
 }
 
 // ------------------------------------------------------------------ notes

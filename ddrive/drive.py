@@ -105,6 +105,14 @@ class DDrive:
         from . import logbuf
         from .config import default_data_dir
         logbuf.install(os.path.join(default_data_dir(), "ddrive.log") if not self.local_test_dir else None)
+        from . import erase
+        if erase.pending(self.cfg):
+            # Erasing everything was asked for (dashboard or erase-everything) and isn't finished: finish it
+            # before anything is opened, then start as an empty drive.
+            log.warning("Erasing everything, as was asked; the drive starts empty afterwards.")
+            erase.Eraser(self.cfg, self.backend, save_config=not self.local_test_dir).run(local=True)
+            os.makedirs(staging_dir, exist_ok=True)
+            os.makedirs(cache_dir, exist_ok=True)
         self.index = Index(db_path)
         self.index.keep_versions = bool(self.cfg.keep_versions)
         self.journal = Journal(self.cfg, self.index, self.backend, crypto=self.crypto, staging_dir=staging_dir)

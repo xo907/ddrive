@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.2.0 (2026-10-15)
+
+- **Erase everything.** A hard reset for starting over, in the dashboard (Settings → Erase everything,
+  the owner's only) and as `erase-everything` in a terminal: every file, earlier version, snapshot and
+  account is erased for good, on this computer and in every channel on Discord (the main one and every
+  spare one). The bots, the channels, the 24 words and the dashboard's sign-in stay, and the drive starts
+  again empty in the same channels. It asks for `ERASE EVERYTHING` to be typed, shows how far it is, and
+  an interrupted reset is finished the next time the drive starts, never left half done. Messages younger
+  than 14 days go 100 at a time.
+- A test that uploads random data no longer fails now and then when that data happens to start with `{`.
+
 ## 3.1.0 (2026-10-15)
 
 - **A deleted account can be brought back.** Deleting an account (by the owner, by itself, or the one a

@@ -1714,6 +1714,57 @@ def cmd_spare(args):
     return 0
 
 
+def cmd_erase_everything(args):
+    """The hard reset, from a terminal (the drive stopped): every file and account, here and on Discord."""
+    import threading
+    from . import erase
+    cfg = Config.load()
+    if not cfg.is_configured():
+        print(f"[ERROR] Run '{launcher()} setup' first.")
+        return 1
+    if is_mounted(cfg.mount_point):
+        print("[ERROR] The drive is running. Erase it from the dashboard (Settings, at the bottom), or stop it first "
+              f"({launcher()} stop).")
+        return 1
+    print("This deletes every file, earlier version, snapshot and account of this drive: on this computer and")
+    print("every message in its channels on Discord (the main one and every spare one), for good.")
+    print("Kept: the bots, the channels and the 24 words. The drive starts again empty, in the same channels.")
+    if not getattr(args, "yes", False):
+        try:
+            typed = input(f"Type {erase.CONFIRM} to go on: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            typed = ""
+        if typed != erase.CONFIRM:
+            print("Nothing was erased.")
+            return 1
+    setup_logging(args.verbose, log_to_file=True)
+    idx, j, crypto = _open_journal(cfg)
+    idx.close()                                  # its file is erased too
+    er = erase.Eraser(cfg, j.backend)
+    done = threading.Event()
+
+    def report():
+        while not done.wait(5):
+            st = er.state
+            print(f"  ... {st.get('channel') or st.get('phase')}: {st['deleted']:,} message(s) deleted", flush=True)
+
+    threading.Thread(target=report, daemon=True).start()
+    try:
+        er.run(local=True)
+    except KeyboardInterrupt:
+        er.stop.set()
+        print("\nStopped. Run it again (or start the drive) and it goes on where it stopped.")
+        return 1
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        print("Run it again (or start the drive) and it goes on where it stopped.")
+        return 1
+    finally:
+        done.set()
+    print(f"[OK] Everything is erased ({er.state['deleted']:,} message(s) on Discord). Start the drive: it is empty.")
+    return 0
+
+
 # --------------------------------------------------------------------- snapshots
 def _snapshot_by_number(idx, n):
     snaps = idx.snapshots()
@@ -2709,6 +2760,9 @@ def main():
     # stop
     subparsers.add_parser("stop", help="Stop the background DDrive daemon and unmount")
 
+    p_erase = subparsers.add_parser("erase-everything", help="Hard reset: erase every file and account, here and on "
+                                                             "Discord (bots and channels stay)")
+    p_erase.add_argument("--yes", action="store_true", help="Don't ask to type the confirmation")
     p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], "
                                               "grant, remove <n>, lost <n>")
     p_spare.add_argument("action", nargs="?", choices=["list", "add", "grant", "remove", "lost"])
@@ -2886,6 +2940,8 @@ def main():
         return cmd_bots(args)
     elif args.command == "spare":
         return cmd_spare(args)
+    elif args.command == "erase-everything":
+        return cmd_erase_everything(args)
     elif args.command == "snapshots":
         return cmd_snapshots(args)
     elif args.command == "snapshot-restore":

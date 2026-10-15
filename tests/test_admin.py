@@ -23,6 +23,16 @@ _A = test_accounts.AccountsTest.__dict__
 ADMIN = {"X-DD-Admin": "1"}        # what an admin's page sends with what it asks of the drive itself
 
 
+
+def _maybe_json(data):
+    """A JSON answer as data, anything else (a file's bytes, which may well start with { or [) as it is."""
+    if data[:1] in (b"{", b"["):
+        try:
+            return json.loads(data)
+        except ValueError:
+            pass
+    return data
+
 class AdminTest(helpers.DriveTest):
     # the dashboard and its helpers as the accounts' tests have them (without running those tests again)
     def setUp(self):
@@ -42,7 +52,7 @@ class AdminTest(helpers.DriveTest):
     def ask(self, method, path, cookie, body=None):
         """What an admin's page asks of the drive itself."""
         status, _, data = self.req(method, path, body, cookie=cookie, headers=ADMIN)
-        return status, (json.loads(data) if data[:1] in (b"{", b"[") else data)
+        return status, (_maybe_json(data))
 
     def sign_in_key(self, key):
         """Sign in as a browser does: with the sign-in key made from the 24 words, which stay behind."""

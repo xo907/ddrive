@@ -423,6 +423,10 @@ class DiscordAPI:
         return self.request("POST", f"/channels/{channel_id}/messages",
                             {"content": content[:2000], "allowed_mentions": {"parse": []}})
 
+    def bulk_delete(self, channel_id, message_ids):
+        """Delete 2 to 100 messages younger than 14 days in one request."""
+        return self.request("POST", f"/channels/{channel_id}/messages/bulk-delete", {"messages": list(message_ids)})
+
     def delete_message(self, channel_id, message_id):
         return self.request("DELETE", f"/channels/{channel_id}/messages/{message_id}")
 

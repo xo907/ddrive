@@ -491,6 +491,7 @@ webdav-password                      Set the user name and password other apps u
 health [--check] [--protect]         Self-healing status; check every piece now; protect old files now
 health --why <piece>                 Why one piece is missing: what uses it, whether DDrive deleted it, what each bot sees
 spare [add <channel id> [token] | remove <n>]  Spare channels, so losing any one channel loses no file
+erase-everything                     Hard reset: every file and account erased, here and on Discord (asks first)
 snapshots [create [label]|delete <n>] List snapshots, take one now, or delete one
 snapshot-restore <n> [path] [--to p] [--in-place]
                                      Bring back a folder (or everything) from snapshot n
@@ -632,6 +633,22 @@ spare lost <n>                       The channel is gone (deleted, server gone):
   fly when a file is read, and in the background check.
 - A repair goes back into the channel the piece was in, or into another one if that channel is gone.
 - Accounts on your dashboard (end-to-end ones included) are spread the same way as your own files.
+
+### Erase everything
+
+A hard reset, for starting over: **Settings → Erase everything** in the dashboard (the owner's only), or
+`erase-everything` in a terminal while the drive is stopped. Type `ERASE EVERYTHING` to confirm.
+
+- **Erased for good:** every message in the drive's channels (the main one and every spare one): all
+  files, earlier versions, snapshots, spare pieces, index checkpoints and the change journal; every
+  account and its files; and on this computer the file list, uploads still waiting, the cache, the
+  daily backups and kept-aside copies.
+- **Kept:** the config file: the bots, the channels, the spare channels, the 24 words and how you sign
+  in to the dashboard. The drive starts again empty, in the same channels.
+- From the dashboard, the drive stops its work, empties the channels (the page shows how far it is),
+  then stops; started again, it clears this computer's data and is empty. Interrupted, it goes on where
+  it stopped the next time the drive (or `erase-everything`) starts.
+- Every message in those channels is deleted, so they should be the drive's alone.
 
 ## Web dashboard
 

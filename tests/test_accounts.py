@@ -15,6 +15,16 @@ from ddrive import accounts, codec, lite, words
 from ddrive.crypto import AuthenticationError
 
 
+
+def _maybe_json(data):
+    """A JSON answer as data, anything else (a file's bytes, which may well start with { or [) as it is."""
+    if data[:1] in (b"{", b"["):
+        try:
+            return json.loads(data)
+        except ValueError:
+            pass
+    return data
+
 class AccountsTest(helpers.DriveTest):
     def setUp(self):
         super().setUp()
@@ -49,11 +59,11 @@ class AccountsTest(helpers.DriveTest):
 
     def get(self, path, cookie):
         status, _, data = self.req("GET", path, cookie=cookie)
-        return status, (json.loads(data) if data[:1] in (b"{", b"[") else data)
+        return status, (_maybe_json(data))
 
     def post(self, path, body, cookie):
         status, _, data = self.req("POST", path, body, cookie=cookie)
-        return status, (json.loads(data) if data[:1] in (b"{", b"[") else data)
+        return status, (_maybe_json(data))
 
     def sign_in(self, phrase):
         status, headers, _ = self.req("POST", "/login", urllib.parse.urlencode({"phrase": phrase}))
