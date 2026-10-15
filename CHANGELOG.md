@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.3.2 (2026-10-15)
+
+- **DDrive Lite stops trying words the host turned down.** When the host no longer knew a device's 24
+  words (its account was deleted, or the drive erased), the drive letter and folder syncing kept signing
+  in again on every file they asked for, until the host blocked the whole computer for too many wrong
+  tries, the owner's own sign-in from it included. Now Lite asks again at most every 15 minutes (5 after
+  "too many tries"), says why in the meantime, and the message says the account may have been deleted.
+- **The menu no longer shows an old file list as "in Discord".** On a computer that isn't set up as a
+  drive (one that only uses Lite, say), a file list left from an earlier setup was counted as if the
+  drive still held it.
+
 ## 3.3.1 (2026-10-15)
 
 - **Erasing everything keeps the bots, really.** On Linux the secrets of the config file (the bot tokens,

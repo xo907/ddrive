@@ -60,6 +60,10 @@ class HostError(Exception):
         self.status = status
 
 
+REFUSED_PAUSE = 15 * 60   # after the host refused this device's words: don't ask again for this long...
+BUSY_PAUSE = 5 * 60       # ...or this long after "too many wrong tries"
+
+
 class HostClient:
     """The host's dashboard, as a program sees it. Keeps one connection per thread and signs in again
     by itself when the session has run out."""
@@ -77,6 +81,7 @@ class HostClient:
         self.timeout = timeout
         self._local = threading.local()
         self._login_lock = threading.Lock()
+        self._refused = None                 # (until when, the error): the host turned these words down
 
     # ------------------------------------------------------------ plumbing
     def _send(self, method, path, body, headers):
@@ -124,29 +129,45 @@ class HostClient:
         with self._login_lock:
             if stale is not None and stale != f"dd_session={self.cookie}":
                 return                       # another thread signed in meanwhile
-            form = urllib.parse.urlencode({"auth": self.auth} if self.auth else {"phrase": self.phrase})
-            resp = self._send("POST", "/login", form, {"Content-Type": "application/x-www-form-urlencoded"})
-            resp.read()
-            cookie = ""
-            for part in (resp.getheader("Set-Cookie") or "").split(";"):
-                k, _, v = part.strip().partition("=")
-                if k == "dd_session":
-                    cookie = v
-            if resp.status == 303 and cookie:
-                self.cookie = cookie
-                return
-            if resp.status == 429:
-                raise HostError(429, "Too many wrong tries from this computer. Wait a few minutes and try again.")
-            if resp.status == 410:
-                raise HostError(410, "This account was moved into another account and no longer exists. Connect again "
-                                     "with that account's 24 words.")
-            if resp.status == 401:
-                raise HostError(401, "The host doesn't know those 24 words. Use the drive's recovery phrase, or the "
-                                     "phrase of your account on that dashboard.")
-            if resp.status == 421:
-                raise HostError(421, "The host doesn't answer to that name. Use its number address, or add the name to "
-                                     "\"Domain names\" in the host's Settings.")
-            raise HostError(resp.status, f"That address doesn't answer like a DDrive dashboard (HTTP {resp.status})")
+            # Turned down lately: say so again without asking. A drive letter asks for files all the time, and
+            # every one of those asks would be another wrong try: the host would block this computer (the
+            # owner's sign-in included) for words that are not going to work (an account that was deleted).
+            if self._refused is not None and time.time() < self._refused[0]:
+                raise self._refused[1]
+            try:
+                self._login()
+            except HostError as e:
+                if e.status in (401, 410, 429):
+                    self._refused = (time.time() + (BUSY_PAUSE if e.status == 429 else REFUSED_PAUSE), e)
+                raise
+            self._refused = None
+
+    def _login(self):
+        """Sign in once (`login` decides whether to)."""
+        form = urllib.parse.urlencode({"auth": self.auth} if self.auth else {"phrase": self.phrase})
+        resp = self._send("POST", "/login", form, {"Content-Type": "application/x-www-form-urlencoded"})
+        resp.read()
+        cookie = ""
+        for part in (resp.getheader("Set-Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "dd_session":
+                cookie = v
+        if resp.status == 303 and cookie:
+            self.cookie = cookie
+            return
+        if resp.status == 429:
+            raise HostError(429, "Too many wrong tries from this computer. Wait a few minutes and try again.")
+        if resp.status == 410:
+            raise HostError(410, "This account was moved into another account and no longer exists. Connect again "
+                                 "with that account's 24 words.")
+        if resp.status == 401:
+            raise HostError(401, "The host doesn't know those 24 words (the account may have been deleted, or the "
+                                 "drive erased). Use the drive's recovery phrase, or the phrase of your account on "
+                                 "that dashboard, and connect again.")
+        if resp.status == 421:
+            raise HostError(421, "The host doesn't answer to that name. Use its number address, or add the name to "
+                                 "\"Domain names\" in the host's Settings.")
+        raise HostError(resp.status, f"That address doesn't answer like a DDrive dashboard (HTTP {resp.status})")
 
     def _json(self, path, body=None):
         if body is None:

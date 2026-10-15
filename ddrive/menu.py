@@ -176,7 +176,9 @@ def drive_line(cfg):
     state = f"{GREEN}RUNNING{RESET}" if running else f"{GRAY}not running{RESET}"
     parts = [f"Drive {BOLD}{cfg.mount_point}{RESET} {state}"]
     db = os.path.join(cfg.resolved_data_dir, "index.db")
-    if os.path.exists(db):
+    # Not set up here (or only used through Lite): a file list left from an earlier setup says nothing
+    # about what is in Discord now, so it isn't shown as if it did.
+    if os.path.exists(db) and cfg.is_configured():
         try:
             from .index import Index
             from .cli import _human

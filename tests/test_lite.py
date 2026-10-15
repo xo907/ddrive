@@ -170,3 +170,31 @@ class LiteTest(helpers.DriveTest):
 
 if __name__ == "__main__":
     helpers.unittest.main()
+
+
+class RefusedWordsTest(helpers.unittest.TestCase):
+    def test_turned_down_words_are_not_tried_again_and_again(self):
+        from ddrive.lite import HostClient, HostError
+
+        class Answer:
+            def __init__(self, status):
+                self.status = status
+
+            def read(self):
+                return b""
+
+            def getheader(self, name):
+                return None
+
+        sent = []
+        client = HostClient("https://drive.example.com", phrase="words that are gone")
+        client._send = lambda method, path, body, headers: sent.append(path) or Answer(401)
+        for _ in range(20):                                      # a drive letter asking for files
+            with self.assertRaises(HostError) as e:
+                client.request("GET", "/api/list")
+            self.assertEqual(e.exception.status, 401)
+        self.assertEqual(sent.count("/login"), 1)                # the host saw one wrong try, not twenty
+        client._refused = (0, client._refused[1])                # some minutes later: asked once more
+        with self.assertRaises(HostError):
+            client.request("GET", "/api/list")
+        self.assertEqual(sent.count("/login"), 2)
