@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.0.3 (2026-10-14)
+
+- **`health` ends with one plain answer: is everything safe?** "[OK] Safe" when every piece has its
+  spare pieces, any one server can be lost and the file list is backed up; otherwise exactly what isn't,
+  most serious first, each with what to do: damaged files, pieces without spare pieces, groups still
+  getting theirs, everything in one channel or one server, no recent local copy of the file list.
+
 ## 3.0.2 (2026-10-14)
 
 - **An end-to-end account's file list can't be lost between two saves.** When a device sealed the whole

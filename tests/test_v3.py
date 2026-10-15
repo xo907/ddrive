@@ -211,3 +211,20 @@ class V3Test(helpers.DriveTest):
         kept = os.listdir(os.path.join(os.path.dirname(d.fs.staging_dir), "recovered"))
         self.assertEqual(len(kept), 1)
         self.assertFalse(os.path.exists(orphan))
+
+
+class VerdictTest(helpers.DriveTest):
+    def test_says_what_is_not_safe(self):
+        from ddrive.cli import safety_verdict
+        d = self.drive()
+        st = {"chunks": 10, "protected_chunks": 8}
+        lines = safety_verdict(d.cfg, st, [], 3, Layout([None]))
+        text = "\n".join(lines)
+        self.assertIn("Not fully safe", text)
+        self.assertIn("2 piece(s) have no spare pieces", text)
+        self.assertIn("one channel", text)
+        os.makedirs(os.path.join(d.cfg.resolved_data_dir, "backups"), exist_ok=True)
+        with open(os.path.join(d.cfg.resolved_data_dir, "backups", "index-x.db.gz"), "wb") as f:
+            f.write(b"x")
+        lay = Layout([None, A], {None: "s1", A: "s2"})
+        self.assertEqual(safety_verdict(d.cfg, {"chunks": 4, "protected_chunks": 4}, [], 0, lay)[0][:4], "[OK]")

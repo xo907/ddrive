@@ -1810,6 +1810,36 @@ def cmd_snapshot_restore(args):
 
 
 # --------------------------------------------------------------------- health
+def safety_verdict(cfg, st, damaged, left, lay):
+    """One plain answer to "is everything safe?": [OK] when it is, else what isn't, most serious first."""
+    worries = []
+    files_hurt = [e for e in damaged if e["kind"] == "file"]
+    if files_hurt:
+        worries.append(f"{len(files_hurt)} file(s) have a part that can't be rebuilt (listed above)")
+    if not cfg.parity_enabled:
+        worries.append("spare pieces are off: a piece Discord loses can't be rebuilt (config parity_enabled true)")
+    elif st["chunks"] and st["protected_chunks"] < st["chunks"]:
+        worries.append(f"{st['chunks'] - st['protected_chunks']:,} piece(s) have no spare pieces yet (health --protect)")
+    if left:
+        worries.append(f"{left:,} group(s) still need the spare pieces the settings ask for (added in the background)")
+    if len(lay.chans) < 2:
+        worries.append("everything is in one channel: losing it loses the drive (spare add <channel id>)")
+    elif not lay.by_server:
+        worries.append("all channels are in one server: losing the server loses the drive (add a channel in "
+                       "another server, with its own bot)")
+    folder = os.path.join(cfg.resolved_data_dir, "backups")
+    try:
+        newest = max((os.path.getmtime(os.path.join(folder, n)) for n in os.listdir(folder) if n.endswith(".db.gz")),
+                     default=0)
+    except OSError:
+        newest = 0
+    if time.time() - newest > 2 * 86400:
+        worries.append("no local copy of the file list from the last 2 days (made daily while the drive runs)")
+    if not worries:
+        return ["[OK] Safe: every piece has its spare pieces, any one server can be lost, and the file list is backed up."]
+    return ["[!] Not fully safe yet:"] + [f"    - {w}" for w in worries]
+
+
 def _deleted_here(cfg, mids):
     """Which of `mids` this device's deletion log names."""
     from .uploader import DELETIONS_LOG
@@ -1937,6 +1967,9 @@ def cmd_health(args):
             if ours:
                 print(f"[!] {len(ours)} of these part(s) were deleted from Discord by this device "
                       f"(see {launcher()} health --why <piece>).")
+        print()
+        for line in safety_verdict(cfg, st, damaged, left, lay):
+            print(line)
         if args.protect:
             from .uploader import parity_shape
             from .channels import layout_of
