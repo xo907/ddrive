@@ -55,6 +55,21 @@ class OpenNode:
         self.mtime = None        # mtime to record when the file is finalized
 
 
+def keep_aside(staging_dir, path, name):
+    """Move a local copy that is about to be thrown away into 'recovered' next to the staging folder
+    instead: it may be the only copy of something. Returns where it went (None if it couldn't)."""
+    where = os.path.join(os.path.dirname(os.path.abspath(staging_dir)), "recovered")
+    try:
+        os.makedirs(where, exist_ok=True)
+        dest = os.path.join(where, f"{time.strftime('%Y%m%d-%H%M%S')}-{name}")
+        os.replace(path, dest)
+        log.warning("Kept a local copy no file of the drive points to in %s", dest)
+        return dest
+    except OSError as e:
+        log.debug("Could not keep %s aside: %s", path, e)
+        return None
+
+
 class DDriveFS(Operations):
     def __init__(self, cfg, index, cache, staging_dir):
         self.cfg = cfg
@@ -67,6 +82,7 @@ class DDriveFS(Operations):
         self.handles = {}               # fh -> (nid, writable)
         self._next_fh = 0
         self._chunk_maps = {}
+        self._read_ends = {}        # nid -> where the last read ended (a read starting there is sequential)
         self.uploader = None
         self.capacity = 1 << 50         # advertised size: 1 PiB
         self._staging_usage = (0.0, 0)  # (timestamp, bytes) cache for _pending_staging_bytes
@@ -386,8 +402,11 @@ class DDriveFS(Operations):
                     self._ensure_room(total, self.index.path_of(on.nid))
                     log.info("Downloading %s for editing (%d bytes)", self.index.path_of(on.nid), total)
                     tmp = p + ".part"
+                    ahead = max(1, int(getattr(self.cfg, "download_threads", 4) or 4))
                     with open(tmp, "wb") as out:
-                        for c in chunks:
+                        for n, c in enumerate(chunks):
+                            for later in chunks[n + 1:n + 1 + ahead]:      # the next ones download meanwhile
+                                self.cache.prefetch(later)
                             out.write(self._read_chunk(on.nid, c, 0, c["size"]))
                     os.replace(tmp, p)
                     on.f = open(p, "r+b")
@@ -423,7 +442,15 @@ class DDriveFS(Operations):
             e = min(end, offsets[i] + c["size"]) - offsets[i]
             parts.append(self._read_chunk(nid, c, s, e - s))
             i += 1
-        for j in range(i, min(i + self.cfg.prefetch_chunks, len(chunks))):
+        # Reading straight through (copying, playing): keep every download thread busy ahead of it.
+        # Jumping around (seeking): only the usual few, so nothing is fetched for nothing.
+        ahead = int(self.cfg.prefetch_chunks or 0)
+        if self._read_ends.get(nid) == offset and not self.cache.memory_mode:
+            ahead = max(ahead, int(getattr(self.cfg, "download_threads", 4) or 4))
+        self._read_ends[nid] = end
+        if len(self._read_ends) > 256:
+            self._read_ends.clear()
+        for j in range(i, min(i + ahead, len(chunks))):
             self.cache.prefetch(chunks[j])
         return b"".join(parts)
 
@@ -515,7 +542,9 @@ class DDriveFS(Operations):
             except ValueError:
                 continue
             node = self.index.get(nid)
-            if node is None or node["is_dir"] or node["state"] == "synced":
+            if node is None:
+                keep_aside(self.staging_dir, p, f"staging-{name}")     # no file of the drive knows it: keep it
+            elif node["is_dir"] or node["state"] == "synced":
                 self._remove_staging(nid)
         requeued = 0
         for node in self.index.unsynced_files():
@@ -681,7 +710,21 @@ class DDriveFS(Operations):
                 on.f.flush()
         return 0
 
-    fsync = lambda self, path, datasync, fh: self.flush(path, fh)
+    def fsync(self, path, datasync, fh):
+        """A program asks for its data to be on disk: it is (the staging copy is all there is until it
+        has been uploaded)."""
+        self.flush(path, fh)
+        try:
+            _, _, on = self._handle(fh)
+        except FuseOSError:
+            return 0
+        with on.lock:
+            if on.f is not None:
+                try:
+                    os.fsync(on.f.fileno())
+                except (OSError, ValueError):
+                    pass
+        return 0
 
     def release(self, path, fh):
         with self.lock:

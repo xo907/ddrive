@@ -259,6 +259,34 @@ class Journal:
             except Exception as e:
                 log.debug("Could not delete old index checkpoints: %s", e)
 
+    def checkpoints(self):
+        """Every checkpoint that could restore the drive, best first (see SpreadBackend.index_candidates)."""
+        find = getattr(self.backend, "index_candidates", None)
+        if find is not None:
+            return find()
+        latest = self.backend.find_latest_index()
+        return [latest] if latest is not None else []
+
+    def restore_any(self, candidates, merge_local=False):
+        """Restore the first of `candidates` that can be read and is sound; a damaged or unreadable newest
+        checkpoint is not the end, an older one (or a copy in a spare channel) takes its place, and the
+        journal after it brings the drive up to date. Returns the checkpoint used; raises if none can be."""
+        last = None
+        for msg in candidates:
+            try:
+                self.restore(msg, merge_local=merge_local)
+                if last is not None:
+                    log.warning("Restored from an older index checkpoint (%s); the change journal brings it up to date.",
+                                msg["id"])
+                return msg
+            except Exception as e:
+                last = e
+                log.warning("Index checkpoint %s%s can't be used: %s", msg["id"],
+                            f" (spare channel {msg['spare']})" if msg.get("spare") else "", e)
+        if last is not None:
+            raise last
+        return None
+
     def _index_empty(self):
         st = self.index.stats(max_age=0)
         return st["files"] == 0 and st["dirs"] == 0
@@ -266,16 +294,16 @@ class Journal:
     def _rebuild_empty_index(self):
         """The local file list is empty although Discord holds the drive: restore it automatically."""
         try:
-            latest = self.backend.find_latest_index()
-            if latest is None:
+            found = self.checkpoints()
+            if not found:
                 return
             log.info("This device's file list is empty; rebuilding it from Discord...")
             if self.fs is not None:
                 with self.fs.lock:
-                    self.restore(latest)
+                    self.restore_any(found)
                     self.fs._chunk_maps.clear()
             else:
-                self.restore(latest)
+                self.restore_any(found)
             with self._sync_lock:
                 self.poll()
             self._needs_rebuild = False
@@ -384,19 +412,32 @@ class Journal:
 
         # First start with the journal: a fresh install, or an upgrade from an older version.
         try:
-            latest = self.backend.find_latest_index()
+            found = self.checkpoints()
         except Exception as e:
             raise RuntimeError(f"Could not reach Discord to set up the drive: {e}") from e
+        latest = found[0] if found else None
 
         stats = self.index.stats(max_age=0)
         local_empty = stats["files"] == 0 and stats["dirs"] == 0
 
-        if latest is not None and latest.get("cursor"):
+        journal_ones = [m for m in found if m.get("cursor")]
+        if journal_ones:
             # Another device already runs the journal: adopt its state, keep anything only we had.
-            self.restore(latest, merge_local=not local_empty)
+            self.restore_any(journal_ones, merge_local=not local_empty)
             with self._sync_lock:
                 self.flush()
                 self.poll()
+            return
+
+        if latest is None and local_empty and self._channel_holds_a_drive():
+            # The channel holds a drive but no checkpoint can be found: never start an empty drive over it
+            # (its checkpoint would be taken for the newest). The journal has every change: read all of it.
+            log.warning("This channel holds a drive, but no index checkpoint was found. Rebuilding the file list "
+                        "from the whole change journal (this can take a while)...")
+            self.index.kv_set("journal_cursor", "0")
+            with self._sync_lock:
+                self.poll()
+                self.checkpoint(force=True)
             return
 
         if latest is not None:
@@ -414,6 +455,21 @@ class Journal:
             self.poll()
             self.checkpoint(force=True)
 
+    def _channel_holds_a_drive(self):
+        """Are there journal entries in the channel (the oldest pages, where a drive's journal starts)?"""
+        try:
+            after = "0"
+            for _ in range(20):
+                page = self.backend.messages_after(after)
+                if not page:
+                    return False
+                if any((m.get("content") or "").startswith(OP_PREFIX) for m in page):
+                    return True
+                after = page[-1]["id"]
+        except Exception as e:
+            raise RuntimeError(f"Could not reach Discord to set up the drive: {e}") from e
+        return False
+
     def restore(self, msg, merge_local=False):
         """Replace the local index with checkpoint `msg`, keeping un-uploaded local files.
 
@@ -423,6 +479,7 @@ class Journal:
         """
         try:
             gz = self.backend.load_index_message(msg)
+            self.index.check_snapshot(gz)
         except Exception as e:
             raise RuntimeError(
                 f"Found index checkpoint {msg['id']} on Discord but could not restore it: {e}. "

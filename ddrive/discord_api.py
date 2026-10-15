@@ -207,10 +207,19 @@ class DiscordAPI:
             if multipart_file:
                 # tuple of (field_name, filename, data_bytes, optional_payload_json)
                 field_name, filename, data_bytes, payload_json = multipart_file
-                stdin_data = data_bytes
                 # curl's -F syntax treats ; , and " specially inside the filename
                 safe_name = "".join("_" if ch in '";,\r\n' else ch for ch in filename)
-                cmd.extend(["-F", f"{field_name}=@-;filename={safe_name}"])
+                if _TMPDIR:
+                    # A file in RAM (/dev/shm): handing a piece to curl through its stdin takes Python thousands
+                    # of small writes, each needing the interpreter lock that busy upload threads hold.
+                    with tempfile.NamedTemporaryFile(delete=False, dir=_TMPDIR) as pf:
+                        pf.write(data_bytes)
+                        payload_path = pf.name
+                    temp_files.append(payload_path)
+                    cmd.extend(["-F", f"{field_name}=@{payload_path};filename={safe_name}"])
+                else:
+                    stdin_data = data_bytes
+                    cmd.extend(["-F", f"{field_name}=@-;filename={safe_name}"])
                 if payload_json:
                     # --form-string: no @file / <file / ;type= interpretation of the value
                     cmd.extend(["--form-string", f"payload_json={payload_json}"])

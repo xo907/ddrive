@@ -551,10 +551,12 @@ Discord can delete messages or attachments at any time. DDrive plans for that:
   its group and the read simply succeeds. The rebuilt piece is uploaded again, and every device
   is told where it lives now.
 - **Background check.** One device (the one with the smallest device ID among those active in
-  the last 3 days) asks Discord about every piece, spread over `scrub_days` (2 days), and repairs
-  anything missing, including lost spare pieces. When one piece of a group is missing, the rest of
-  its group is checked straight away, while its spare pieces can still rebuild all of it. `health` shows the progress; `health --check`
-  checks everything right now.
+  the last 3 days) reads every channel 100 messages at a time, spread over `scrub_days` (2 days),
+  and compares that with the pieces the drive expects there: a hundred times fewer requests than
+  asking about each piece. A piece missing from the list is asked about on its own, then repaired,
+  including lost spare pieces. When one piece of a group is missing, the rest of its group is
+  checked straight away, while its spare pieces can still rebuild all of it. `health` shows the
+  progress; `health --check` checks everything right now.
 - **Older files.** Files uploaded before 0.2 have no spare pieces yet. That same device adds them
   in the background, one file at a time, while nothing else is uploading (it downloads each file
   once). `health --protect` does it all now; `config protect_existing false` turns it off. A file
@@ -566,6 +568,14 @@ Discord can delete messages or attachments at any time. DDrive plans for that:
   nothing uses any more stay on Discord for `delete_after_days` (7) before they are deleted, and
   every deletion is written to `deletions.log` in the data folder, so `health --why <piece>` can
   tell a piece DDrive deleted from one Discord lost. The last 5 index checkpoints are kept.
+- **The file list is safe too.** Restoring tries every checkpoint it can find, newest first (an older
+  one plus the change journal after it gives the same result), and checks each one before using it;
+  a checkpoint that is damaged is never uploaded. If no checkpoint can be found at all but the channel
+  holds a drive, the file list is rebuilt from the whole change journal instead of starting an empty
+  drive over it. Once a day a copy of this computer's `index.db` goes to `backups` in the data folder
+  (7 kept), and SQLite checks it. A finished upload is on disk before its local copy is deleted, even
+  through a power cut, and a local copy that no file knows about, or of a file whose waiting upload
+  is cancelled, goes to `recovered` in the data folder instead of being deleted.
 
 Space: about 20% extra for big files, one extra piece for small ones. `config parity_pieces 3`
 survives 3 losses per group; `config parity_enabled false` turns spare pieces off for new uploads.
@@ -588,7 +598,8 @@ without losing a file**.
 spare                                List the spare channels and what they cost
 spare add <channel id> [bot token]   Add one (checked first); its own bot is optional but safest
 spare grant                          Give every bot of the drive access to the spare channels, in one go
-spare remove <n> [--force]           Remove one (refused while pieces are stored there)
+spare remove <n>                     Remove one; if it holds pieces, they are rebuilt into the others first
+spare lost <n>                       The channel is gone (deleted, server gone): rebuild its pieces elsewhere
 ```
 
 - **Safest:** a channel in another server, with a bot of its own (a separate application). Then
@@ -596,6 +607,9 @@ spare remove <n> [--force]           Remove one (refused while pieces are stored
 - **Space:** with C channels in all, every group of 10 pieces gets at least 10 / (C - 1) spare pieces.
   One spare channel costs as much space again as the files (like a second copy); two cost half that,
   four a quarter. `spare` shows the figure.
+- **Servers.** DDrive learns which server each channel is in. With channels in two or more servers,
+  groups are spread over the servers first, so **a whole server can be lost** (deleted, or its bots
+  banned): with S servers a group needs 10 / (S - 1) spare pieces per 10, e.g. as much again with 2.
 - **Files already on the drive** get the extra spare pieces in the background, one group at a time,
   while nothing uploads (each group is downloaded once). Their spare pieces so far are kept. `health`
   and the dashboard's Health page show how many groups are left.
@@ -605,7 +619,13 @@ spare remove <n> [--force]           Remove one (refused while pieces are stored
   `spare grant` does it again (after `bots add`, or after fixing permissions). A bot that isn't in
   that channel's server can't be added by another bot: its invite link is printed, with the server
   already chosen. Until a bot has access, uploads go to the channel with the bots that do.
-- **Index checkpoints** are copied to the first spare channel too.
+- **Copies of what finds the files:** index checkpoints, every account's checkpoint and the list of
+  accounts are copied to up to 3 spare channels (over as many servers as there are), 2 kept in each.
+  Copies are marked with the drive they belong to, so a channel shared with another drive is safe.
+- **A channel that is gone** (deleted, its server gone): `spare lost <n>` gives it up. Its pieces count
+  as gone, so they are rebuilt from the rest of their groups into the channels that are left, a few
+  at a time in the background (`health` shows it). A channel that refuses every bot is named on the
+  Health page; nothing new goes there meanwhile, and its pieces are read from the others.
 - **If the main channel is lost:** make a new channel, put its id in the config (`channel_id`; the
   bot needs access), and start the drive. It finds no checkpoint in the new channel, starts from the
   copy in the spare channel, and rebuilds every piece the old channel held from the others: on the

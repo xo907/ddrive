@@ -560,7 +560,7 @@ def cmd_verify(args):
                 from .heal import confirm_unreadable
                 removed = 0
                 for nid, path in unreadable:
-                    if not confirm_unreadable(idx, j.backend, crypto, nid):
+                    if not confirm_unreadable(idx, j.backend, crypto, nid, healer):
                         print(f"  [KEPT] {path}: it can be read now, or Discord could not be asked. Not removed.")
                         continue
                     idx.purge_node(nid)
@@ -709,7 +709,11 @@ def cmd_cancel_uploads(args):
                 print(f"[OK] {path}: back to its last uploaded version.")
             else:
                 idx.delete_node(n["id"])
-                print(f"[OK] {path}: removed (it had never been uploaded).")
+                from .fs import keep_aside
+                where = keep_aside(staging, os.path.join(staging, f"{n['id']}.dat"), os.path.basename(path))
+                print(f"[OK] {path}: removed from the drive (it had never been uploaded)"
+                      + (f"; its local copy is kept in {where}" if where else "") + ".")
+                continue
             try:
                 os.remove(os.path.join(staging, f"{n['id']}.dat"))
             except OSError:
@@ -1575,6 +1579,17 @@ def _grant_bots(cfg, chan, tokens=None):
     return missing
 
 
+def _places(cfg):
+    """(places that can fail on their own, how to say it): servers when the channels are in two or more."""
+    from .channels import spare_channels
+    chans = [str(cfg.channel_id)] + spare_channels(cfg)
+    known = dict(cfg.channel_servers or {})
+    servers = {known.get(c) or "?" for c in chans}
+    if len(servers) >= 2:
+        return len(servers), f"{len(chans)} channels in {len(servers)} servers (any one server can be lost)"
+    return len(chans), f"{len(chans)} channels (any one channel can be lost)"
+
+
 def cmd_spare(args):
     """Spare channels: pieces are spread over them so that losing any one channel loses no file."""
     from .channels import spare_channels, spread_pieces
@@ -1597,9 +1612,10 @@ def cmd_spare(args):
             print("that, four a quarter.")
         else:
             k = max(1, int(cfg.parity_group or 10))
-            m = max(int(cfg.parity_pieces or 0), spread_pieces(k, 1 + len(chans)))
-            print(f"\nEvery group of {k} pieces gets {m} spare pieces, spread over {1 + len(chans)} channels: "
-                  f"about {100 * m // k}% extra space.")
+            places, what = _places(cfg)
+            m = max(int(cfg.parity_pieces or 0), spread_pieces(k, places))
+            print(f"\nEvery group of {k} pieces gets {m} spare pieces, spread over {what}: about {100 * m // k}% "
+                  f"extra space.")
         return 0
     if action == "grant":
         shared = [c for i, c in enumerate(chans) if not (i < len(tokens) and tokens[i])]
@@ -1616,7 +1632,7 @@ def cmd_spare(args):
         if is_mounted(cfg.mount_point):
             print("Restart the drive (stop, then start) to use them.")
         return 0
-    if action == "remove":
+    if action in ("remove", "lost"):
         try:
             i = int(args.channel or 0)
             chan = chans[i - 1]
@@ -1628,17 +1644,21 @@ def cmd_spare(args):
             held = idx.pieces_in_channel(chan)
         finally:
             idx.close()
-        if held and not getattr(args, "force", False):
-            print(f"[ERROR] Spare channel {i} holds {held:,} piece(s). Without it they can't be read, and files")
-            print("        whose other pieces are lost too could not be rebuilt. Keep it, or remove it anyway with")
-            print(f"        {launcher()} spare remove {i} --force")
-            return 1
         full = [str(c) for c in cfg.spare_channels or []]
         pos = full.index(chan) if chan in full else i - 1
         cfg.spare_channels = [c for n, c in enumerate(full) if n != pos]
         cfg.spare_bot_tokens = [t for n, t in enumerate(tokens) if n != pos]
+        if held or action == "lost":
+            # Its pieces are rebuilt from the rest of their groups into the channels that are left.
+            cfg.lost_channels = sorted(set(map(str, cfg.lost_channels or [])) | {chan})
         cfg.save()
-        print(f"[OK] Removed spare channel {i} ({chan}). Restart the drive for it to take effect.")
+        if held or action == "lost":
+            print(f"[OK] Spare channel {i} ({chan}) is given up. Its {held:,} piece(s) are rebuilt from their spare")
+            print("     pieces into the other channels while the drive runs ('health' shows how far it is).")
+            print("     Keep the drive running until that is done.")
+        else:
+            print(f"[OK] Removed spare channel {i} ({chan}).")
+        print("Restart the drive (stop, then start) for it to take effect.")
         return 0
     chan = (args.channel or "").strip()
     if not chan.isdigit():
@@ -1654,7 +1674,7 @@ def cmd_spare(args):
     print("Checking the channel...")
     api = DiscordAPI(token or cfg.bot_token, timeout=30, retries=2)
     try:
-        api.get_channel(chan)
+        guild = (api.get_channel(chan) or {}).get("guild_id")
         msg = api.send_message(chan, "DDrive: checking a spare channel (removed right away)")
         api.delete_message(chan, msg["id"])
     except DiscordError as e:
@@ -1665,16 +1685,29 @@ def cmd_spare(args):
     if not token and cfg.extra_bot_tokens:
         print(f"Giving the {len(cfg.extra_bot_tokens)} extra bot(s) access to it (uploads use every bot)...")
         if _grant_bots(cfg, chan, list(cfg.extra_bot_tokens)):
-            print(f"[!] Some bots can't use it yet. The drive works without them (it posts with the others);")
+            print("[!] Some bots can't use it yet. The drive works without them (it posts with the others);")
             print(f"    fix them and run: {launcher()} spare grant")
     tokens += [""] * (len(chans) - len(tokens))
     cfg.spare_channels = chans + [chan]
     cfg.spare_bot_tokens = tokens[:len(chans)] + [token]
+    cfg.lost_channels = [c for c in cfg.lost_channels or [] if str(c) != chan]
+    servers = dict(cfg.channel_servers or {})
+    if guild:
+        servers[chan] = str(guild)
+    if str(cfg.channel_id) not in servers:
+        try:
+            main_guild = (DiscordAPI(cfg.bot_token, timeout=30, retries=2).get_channel(cfg.channel_id) or {}).get("guild_id")
+            if main_guild:
+                servers[str(cfg.channel_id)] = str(main_guild)
+        except DiscordError:
+            pass
+    cfg.channel_servers = servers
     cfg.save()
     k = max(1, int(cfg.parity_group or 10))
-    m = max(int(cfg.parity_pieces or 0), spread_pieces(k, 1 + len(cfg.spare_channels)))
+    places, what = _places(cfg)
+    m = max(int(cfg.parity_pieces or 0), spread_pieces(k, places))
     print(f"[SUCCESS] Added spare channel {chan}. New files get {m} spare pieces per group of {k}, spread over "
-          f"{1 + len(cfg.spare_channels)} channels (about {100 * m // k}% extra space).")
+          f"{what} (about {100 * m // k}% extra space).")
     print("Files already on the drive get theirs in the background (health shows how far it is).")
     if is_mounted(cfg.mount_point):
         print("Restart the drive (stop, then start) to use it.")
@@ -1872,12 +1905,19 @@ def cmd_health(args):
             print(f"{'Found missing:':20}{sc['missing']:,} (rebuilt: {sc.get('repaired', 0):,}, "
                   f"lost: {sc.get('lost', 0):,})")
         print(f"{'Snapshots:':20}{st['snapshots']:,}")
-        from .channels import channels_of
-        chans = channels_of(j.backend)
+        from .channels import layout_of
+        lay = layout_of(j.backend)
+        chans = lay.chans
         from .heal import Maintenance
-        left = len(Maintenance(cfg, idx, j.backend, None).groups_to_spread(chans)) if cfg.parity_enabled else 0
+        left = len(Maintenance(cfg, idx, j.backend, None).groups_to_spread(lay)) if cfg.parity_enabled else 0
         if len(chans) > 1:
-            print(f"{'Channels:':20}{len(chans)} (the main one and {len(chans) - 1} spare)")
+            print(f"{'Channels:':20}{len(chans)} (the main one and {len(chans) - 1} spare)"
+                  + (f", in {len(lay.servers)} servers: any one server can be lost" if lay.by_server else
+                     ": any one channel can be lost"))
+        lost_chans = sorted(getattr(j.backend, "lost", ()) or ())
+        if lost_chans:
+            print(f"{'Given up:':20}{len(lost_chans)} channel(s); their pieces are rebuilt into the others "
+                  f"(the background check does it, or 'spare rebuild')")
         if left:
             print(f"{'Getting more spare:':20}{left:,} group(s) stored with fewer spare pieces than the settings ask "
                   f"for (added in the background while the drive runs)")
@@ -1899,8 +1939,8 @@ def cmd_health(args):
                       f"(see {launcher()} health --why <piece>).")
         if args.protect:
             from .uploader import parity_shape
-            from .channels import channels_of
-            nchan = len(channels_of(j.backend))
+            from .channels import layout_of
+            nchan = layout_of(j.backend).places
             k, _ = parity_shape(cfg, 10, nchan)
             if not k:
                 print("\n[ERROR] Spare pieces are turned off (parity_enabled).")
@@ -2636,11 +2676,13 @@ def main():
     # stop
     subparsers.add_parser("stop", help="Stop the background DDrive daemon and unmount")
 
-    p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], grant, remove <n>")
-    p_spare.add_argument("action", nargs="?", choices=["list", "add", "grant", "remove"])
+    p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], "
+                                              "grant, remove <n>, lost <n>")
+    p_spare.add_argument("action", nargs="?", choices=["list", "add", "grant", "remove", "lost"])
     p_spare.add_argument("channel", nargs="?", help="Channel id (add) or number (remove)")
     p_spare.add_argument("token", nargs="?", help="The spare channel's own bot token (optional)")
-    p_spare.add_argument("--force", action="store_true", help="Remove even though pieces are stored there")
+    p_spare.add_argument("--force", action="store_true", help="(no longer needed: a channel holding pieces is given up "
+                                                              "and its pieces rebuilt elsewhere)")
     p_bots = subparsers.add_parser("bots", help="Extra bots for faster uploads: list, add [token], remove <n>")
     p_bots.add_argument("action", nargs="?", choices=["list", "add", "remove"])
     p_bots.add_argument("token", nargs="?", help="Bot token (add) or number (remove)")

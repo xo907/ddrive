@@ -94,6 +94,9 @@ def _check(key: bytes) -> str:
     return hashlib.sha256(b"DiscordDrive-account-check:" + key).hexdigest()
 
 
+COPY_GENERATIONS = 3   # generations of an account's checkpoint copies kept in spare channels
+
+
 class _AccountConfig(Config):
     """The settings an account's drive runs with: the drive's own, with the account's key and folder.
     It is never written anywhere (the file on disk is the owner's)."""
@@ -158,6 +161,10 @@ class AccountBackend:
         """The drive's channels: an account's pieces are spread over its spare channels too."""
         return getattr(self.base, "channels", None) or [None]
 
+    @property
+    def layout(self):
+        return getattr(self.base, "layout", None)
+
     def route(self, mid):
         return self.base.route(mid) if hasattr(self.base, "route") else (self.base, mid)
 
@@ -214,10 +221,27 @@ class AccountBackend:
 
     # ------------------------------------------------------------ checkpoints: the channel
     def save_index(self, data, previous_message_id=None, cursor=None):
-        chunk = self.base.upload(f"acct_{secrets.token_hex(8)}.bin", self.crypto.encrypt(data),
-                                 f"{MARKER} c={cursor}\nAn account's index checkpoint.")
+        sealed = self.crypto.encrypt(data)
+        name, content = f"acct_{secrets.token_hex(8)}.bin", f"{MARKER} c={cursor}\nAn account's index checkpoint."
+        chunk = self.base.upload(name, sealed, content)
+        # Copies in the spare channels that keep copies, so the account survives losing the main channel.
+        # The last few generations stay: a saved list of accounts may still name an earlier one.
+        copies = []
+        for chan, _ in (self.base.mirrors() if hasattr(self.base, "mirrors") else []):
+            try:
+                copies.append(self.base.upload(name, sealed, content, channel=chan).message_id)
+            except Exception as e:
+                log.debug("an account's checkpoint could not be copied to spare channel %s: %s", chan, e)
+        older = [g for g in [list(self.checkpoint.get("copies") or [])] + list(self.checkpoint.get("older") or []) if g]
+        for gen in older[COPY_GENERATIONS - 1:]:
+            for mid in gen:
+                try:
+                    self.base.delete(mid)
+                except Exception as e:
+                    log.debug("an account's old checkpoint copy could not be deleted: %s", e)
         old = self.checkpoint.get("mid") or previous_message_id
-        self.checkpoint = {"mid": chunk.message_id, "cursor": str(cursor or "0")}
+        self.checkpoint = {"mid": chunk.message_id, "cursor": str(cursor or "0"), "copies": copies,
+                           "older": older[:COPY_GENERATIONS - 1]}
         # The copy of the list of accounts in the channel may still name the previous one: then it
         # stays until a newer copy has been written (Accounts.backup deletes it).
         keep = self.on_checkpoint is not None and self.on_checkpoint(dict(self.checkpoint))
@@ -233,11 +257,21 @@ class AccountBackend:
         if not self.checkpoint.get("mid"):
             return None
         return {"id": self.checkpoint["mid"], "content": f"{MARKER} ENC c={self.checkpoint.get('cursor') or 0}",
-                "attachments": [{"url": None}], "cursor": str(self.checkpoint.get("cursor") or "0")}
+                "attachments": [{"url": None}], "cursor": str(self.checkpoint.get("cursor") or "0"),
+                "copies": list(self.checkpoint.get("copies") or [])}
 
     def load_index_message(self, msg):
-        data, _ = self.base.download(msg["id"], (msg.get("attachments") or [{}])[0].get("url"))
-        return self.crypto.decrypt(data) if data.startswith(b"DENC") else data
+        """The checkpoint, from the main channel or else from one of its copies in the spare channels."""
+        last = None
+        for mid in [msg["id"], *(msg.get("copies") or [])]:
+            try:
+                url = (msg.get("attachments") or [{}])[0].get("url") if mid == msg["id"] else None
+                data, _ = self.base.download(mid, url)
+                return self.crypto.decrypt(data) if data.startswith(b"DENC") else data
+            except Exception as e:
+                last = e
+                log.warning("An account's checkpoint (%s) can't be read: %s", mid, e)
+        raise last
 
     def load_latest_index(self, *args):
         latest = self.find_latest_index()

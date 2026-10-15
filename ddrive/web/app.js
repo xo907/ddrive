@@ -2172,10 +2172,16 @@ function renderHealth(quiet) {
       stat("Repaired", Number((sc.repaired || 0) + (hl.healer.repaired || 0)).toLocaleString(),
            (sc.lost || hl.healer.lost) ? `${sc.lost || hl.healer.lost} could not be rebuilt` : "nothing lost")),
     hl.channels > 1 ? h("p", { class: "muted", style: "max-width:680px" },
-      `Pieces are spread over ${hl.channels} channels (the main one and ${hl.channels - 1} spare), so losing any one of them loses no file. ` +
+      `Pieces are spread over ${hl.channels} channels (the main one and ${hl.channels - 1} spare)` +
+      (hl.servers > 1 ? ` in ${hl.servers} servers, so losing any one server loses no file. ` : ", so losing any one of them loses no file. ") +
       (hl.spread && hl.spread.checked && !hl.spread.left ? "Every group is spread." : "")) : null,
     hl.spread && hl.spread.left ? h("p", { class: "muted", style: "max-width:680px" },
       `${Number(hl.spread.left).toLocaleString()} group(s) stored earlier are getting the extra spare pieces the settings now ask for, in the background while nothing uploads.`) : null,
+    (hl.unreachable || []).length ? h("p", { class: "warn-text", style: "max-width:680px" },
+      `Discord refuses every bot in ${plural(hl.unreachable.length, "spare channel")} (${hl.unreachable.join(", ")}). Nothing new goes there and its pieces are read from the other channels meanwhile. ` +
+      "If the channel is gone for good, give it up on the host (spare lost <n>) and its pieces are rebuilt into the others.") : null,
+    (hl.given_up || []).length ? h("p", { class: "muted", style: "max-width:680px" },
+      `${plural(hl.given_up.length, "spare channel")} given up: its pieces are being rebuilt into the other channels.`) : null,
     (hl.refused || []).length ? h("p", { class: "warn-text", style: "max-width:680px" },
       `Discord refuses ${hl.refused.length === 1 ? `bot ${hl.refused[0].bot}` : `bots ${hl.refused.map((b) => b.bot).join(", ")}`} access to the channel. ` +
       "Pieces are read with the other bots meanwhile, and nothing is counted as lost because of it. Check that the bot is still in the server and can see the channel.") : null,

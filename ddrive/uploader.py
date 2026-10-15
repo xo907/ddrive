@@ -18,16 +18,28 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .logbuf import tname
 from . import codec, rs
-from .channels import channel_of, channels_of, counts, fill, spread_pieces
+from .channels import layout_of, spread_pieces
 
 log = logging.getLogger("ddrive.uploader")
 
-MAX_PIECE_WORKERS = 8      # pieces in flight at once (each holds a few copies of up to chunk_size in RAM)
+MAX_PIECE_WORKERS = 16     # pieces in flight at once (each holds a few copies of up to chunk_size in RAM)
+PARITY_BATCH = 8           # spare pieces computed (and held in memory) at a time
+PROGRESS_EVERY = 2.0       # seconds between saves of an upload's progress (always saved at the end of a group)
 REVERIFY_AFTER = 300.0     # re-check reused pieces still exist if the upload took longer than this
 
 
 class _Interrupted(Exception):
     pass
+
+
+def _free_memory():
+    """Bytes of memory free right now, or 0 if that can't be told."""
+    try:
+        from . import resources
+        f = resources._memory_windows if os.name == "nt" else resources._memory_linux
+        return int((f() or {}).get("available") or 0)
+    except Exception:
+        return 0
 
 
 def parity_shape(cfg, n, channels=1):
@@ -64,6 +76,7 @@ class Uploader:
         self._upload_threads = []
         self._trash_thread = None
         self._pool = None
+        self._parity_pool = None  # computes and uploads a group's spare pieces while the next group uploads
         self._reserved = collections.Counter()   # reused pieces of uploads in progress: never trash them
         self.progress = {}                         # nid -> {"path", "done", "total", "size"} (status page)
         self.stats = {"uploaded_bytes": 0, "reused_bytes": 0, "compressed_saved": 0, "spare_bytes": 0}
@@ -116,8 +129,14 @@ class Uploader:
                 self._drop_progress(nid)
 
     def _piece_workers(self):
+        """Pieces uploaded at once: upload_threads per bot (over every channel's bots), at most
+        MAX_PIECE_WORKERS, and no more than a quarter of the free memory can hold."""
         per_bot = max(1, int(getattr(self.cfg, "upload_threads", 1) or 1))
-        return max(1, min(MAX_PIECE_WORKERS, per_bot * int(getattr(self.backend, "upload_slots", 1) or 1)))
+        n = min(MAX_PIECE_WORKERS, per_bot * int(getattr(self.backend, "upload_slots", 1) or 1))
+        free = _free_memory()
+        if free:
+            n = min(n, max(4, free // 4 // max(1, 4 * int(self.cfg.chunk_size or 1))))
+        return max(1, n)
 
     def start(self):
         try:
@@ -130,6 +149,7 @@ class Uploader:
             self._running = True
             self._pool = ThreadPoolExecutor(max_workers=self._piece_workers(), thread_name_prefix=tname("UploadPiece"))
             n = max(1, int(getattr(self.cfg, "upload_threads", 1) or 1))
+            self._parity_pool = ThreadPoolExecutor(max_workers=n, thread_name_prefix=tname("SparePieces"))
             self._upload_threads = [
                 threading.Thread(target=self._upload_loop, name=tname(f"UploaderWorker-{i}"), daemon=True)
                 for i in range(n)
@@ -154,6 +174,8 @@ class Uploader:
                 t.join(timeout=timeout)
         if self._pool is not None:
             self._pool.shutdown(wait=False, cancel_futures=True)
+        if self._parity_pool is not None:
+            self._parity_pool.shutdown(wait=False, cancel_futures=True)
 
         log.info("Uploader services stopped.")
 
@@ -161,6 +183,8 @@ class Uploader:
         """Upload one file in the calling thread (used by tests and one-off tools)."""
         if self._pool is None:
             self._pool = ThreadPoolExecutor(max_workers=self._piece_workers(), thread_name_prefix=tname("UploadPiece"))
+        if self._parity_pool is None:
+            self._parity_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=tname("SparePieces"))
         was = self._running
         self._running = True
         try:
@@ -282,7 +306,7 @@ class Uploader:
         # 4. Upload the pieces group by group, each group followed by its spare pieces
         chunk_size = self.cfg.chunk_size
         total = (file_size + chunk_size - 1) // chunk_size
-        k, _ = parity_shape(self.cfg, total, len(self._chans()))
+        k, _ = parity_shape(self.cfg, total, self._layout().places)
         group = k or total
         job = _Job(nid, path, node["name"], version, file_size, chunk_size, self.index.is_pinned(nid))
         job.k = k
@@ -311,21 +335,28 @@ class Uploader:
                     self._one_message_per_position(job, staging_path, idxs, k)
                 if k and gkey not in job.parity:
                     self._check(nid)
+                    # one group's spare pieces at a time go on in the background (memory stays bounded)
+                    self._settle_parity(job)
                     existing = None
                     if all(job.done[i].get("reused") for i in idxs):
                         existing = self.index.find_group([job.done[i]["message_id"] for i in idxs])
-                    if not existing:
-                        self._report(job, "spare pieces")
-                    job.parity[gkey] = existing or self._upload_parity(
-                        staging_path, idxs, chunk_size, [job.done[i]["sha256"] for i in idxs],
-                        [job.done[i]["message_id"] for i in idxs])
-                    self._report(job, "uploading")
-                    self._save_progress(nid, version, file_size, chunk_size, job.done, k, job.parity)
+                    if existing:
+                        job.parity[gkey] = existing
+                        self._save_progress(nid, version, file_size, chunk_size, job.done, k, job.parity)
+                    else:
+                        job.pending = (gkey, self._parity_pool.submit(
+                            self._upload_parity, staging_path, idxs, chunk_size,
+                            [job.done[i]["sha256"] for i in idxs], [job.done[i]["message_id"] for i in idxs]))
+            if job.pending:
+                self._report(job, "spare pieces")
+            self._settle_parity(job)
+            self._report(job, "uploading")
             chunks = [job.done[i] for i in range(total)]
             self._reverify_reused(job, staging_path, chunks)
         except _Interrupted as why:
             # The pieces uploaded so far are recorded; the next attempt continues from there
             # (if the file is changed meanwhile, the record no longer matches and is discarded).
+            self._settle_parity(job, quiet=True)
             self._unreserve(job)
             self.progress.pop(nid, None)
             if self.index.get(nid) is None:
@@ -338,6 +369,7 @@ class Uploader:
                 self.enqueue(nid, delay=self.cfg.upload_delay)
             return
         except Exception as e:
+            self._settle_parity(job, quiet=True)
             self._unreserve(job)
             self.progress.pop(nid, None)
             if self.index.get(nid) is None:
@@ -353,12 +385,13 @@ class Uploader:
         parity = {"k": k, "g": [job.parity[str(g)] for g in range((total + group - 1) // group)]} if k else None
         for c in chunks:
             c.pop("reused", None)
-        self._drop_progress(nid, trash=False)
         try:
             ok = self.fs.commit_upload(nid, version, chunks, parity)
         finally:
             self._unreserve(job)
             self.progress.pop(nid, None)
+        # only now: until the file is committed, the record is what says which pieces are already uploaded
+        self._drop_progress(nid, trash=False)
         if ok:
             self._failures.pop(nid, None)
             if self.journal is not None:
@@ -368,6 +401,22 @@ class Uploader:
         elif self.index.get(nid) is not None:
             log.info("%s changed during upload; re-queued", path)
             self.enqueue(nid, delay=self.cfg.upload_delay)
+
+    def _settle_parity(self, job, quiet=False):
+        """Wait for the group whose spare pieces are being made in the background, and record them. With
+        `quiet` (the upload stopped anyway), a failure there is only logged."""
+        pending, job.pending = job.pending, None
+        if not pending:
+            return
+        gkey, fut = pending
+        try:
+            job.parity[gkey] = fut.result()
+        except Exception as e:
+            if not quiet:
+                raise
+            log.debug("Spare pieces of %s, group %s: %s", job.path, gkey, e)
+            return
+        self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, job.k, job.parity)
 
     def _report(self, job, stage):
         """Live progress of one upload (status page, dashboard, log tab)."""
@@ -412,7 +461,9 @@ class Uploader:
                         error = error or e
                         continue
                     job.done[c["idx"]] = c
-                    self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, k, job.parity)
+                    if time.time() - job.saved_at >= PROGRESS_EVERY:      # rewriting it is not free on big files
+                        job.saved_at = time.time()
+                        self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, k, job.parity)
                     self._report(job, "uploading")
                 if error is None and pending:
                     try:
@@ -460,8 +511,8 @@ class Uploader:
             return {"idx": i, "size": len(data), "sha256": sha256, "reused": time.time(), **reused}
         return self._store_piece(job, i, data, sha256, self._channel_for(i, getattr(job, "k", 0)))
 
-    def _chans(self):
-        return channels_of(self.backend)
+    def _layout(self):
+        return layout_of(self.backend)
 
     def _put(self, filename, payload, content, channel):
         if channel is None:
@@ -469,9 +520,9 @@ class Uploader:
         return self.backend.upload(filename, payload, content=content, channel=channel)
 
     def _channel_for(self, i, k):
-        """Where data piece i goes: the places of a group take turns over the channels."""
-        chans = self._chans()
-        return chans[(i % k if k else i) % len(chans)] if len(chans) > 1 else None
+        """Where data piece i goes: the places of a group take turns over the servers and channels."""
+        order = self._layout().order()
+        return order[(i % k if k else i) % len(order)] if len(order) > 1 else None
 
     def _store_piece(self, job, i, data, sha256, channel=None):
         if self.crypto:
@@ -523,24 +574,23 @@ class Uploader:
         """A group survives the loss of any m messages only if no message fills two of its positions.
         De-duplication can reuse one stored piece for repeated content (runs of zeros in a disk image):
         each repeat after the first gets its own message."""
-        chans = self._chans()
-        _, m = parity_shape(self.cfg, len(idxs), len(chans))
-        seen, held = set(), {}
+        lay = self._layout()
+        _, m = parity_shape(self.cfg, len(idxs), lay.places)
+        seen, held = set(), []
         for i in idxs:
             c = job.done[i]
-            chan = channel_of(c["message_id"])
-            # With spare channels, a reused piece can also put more of the group in one channel than the
-            # group can lose: it is uploaded again into the channel holding fewest.
-            crowded = len(chans) > 1 and held.get(chan, 0) >= m
+            # With spare channels, a reused piece can also put more of the group in one channel (or server)
+            # than the group can lose: it is uploaded again where the group has fewest.
+            crowded = len(lay.chans) > 1 and lay.worst(held + [c["message_id"]]) > m
             if c["message_id"] in seen or crowded:
                 data = self._read_piece(path, i, job.chunk_size)
                 if hashlib.sha256(data).hexdigest() != c["sha256"]:
                     raise _Interrupted("file changed during upload")
-                chan = min(chans, key=lambda x: held.get(x, 0)) if len(chans) > 1 else None
+                chan = lay.fill(held, 1)[0] if len(lay.chans) > 1 else None
                 job.done[i] = self._store_piece(job, i, data, c["sha256"], chan)
                 self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, k, job.parity)
             seen.add(job.done[i]["message_id"])
-            held[chan] = held.get(chan, 0) + 1
+            held.append(job.done[i]["message_id"])
 
     def _compress(self):
         return bool(getattr(self.cfg, "compression", True))
@@ -583,21 +633,26 @@ class Uploader:
         `shas`: the checksums of the pieces as uploaded; spare pieces computed from anything else
         could never rebuild them. `mids`: where the data pieces are (the spare pieces fill up the
         channels holding fewest)."""
-        chans = self._chans()
-        _, m = parity_shape(self.cfg, len(idxs), len(chans))
-        enc = rs.Encoder(len(idxs), m)
-        with open(path, "rb") as f:
-            for pos, i in enumerate(idxs):
-                f.seek(i * chunk_size)
-                data = f.read(chunk_size)
-                if shas and hashlib.sha256(data).hexdigest() != shas[pos]:
-                    raise _Interrupted("file changed during upload")
-                enc.add(pos, data)
-        shards = enc.parity()
-        del enc
-        where = fill(counts(mids), len(shards), chans) if len(chans) > 1 else [None] * len(shards)
-        futures = [self._pool.submit(self.upload_blob, s, c) for s, c in zip(shards, where)]
-        return [secrets.token_hex(8), [fut.result() for fut in futures]]
+        lay = self._layout()
+        _, m = parity_shape(self.cfg, len(idxs), lay.places)
+        where = lay.fill(list(mids), m) if len(lay.chans) > 1 else [None] * m
+        out = []
+        for first in range(0, m, PARITY_BATCH):
+            rows = list(range(first, min(m, first + PARITY_BATCH)))
+            enc = rs.Encoder(len(idxs), m, rows)
+            with open(path, "rb") as f:
+                for pos, i in enumerate(idxs):
+                    f.seek(i * chunk_size)
+                    data = f.read(chunk_size)
+                    if shas and hashlib.sha256(data).hexdigest() != shas[pos]:
+                        raise _Interrupted("file changed during upload")
+                    enc.add(pos, data)
+            shards = enc.parity()
+            del enc, data
+            futures = [self._pool.submit(self.upload_blob, s, where[j]) for j, s in zip(rows, shards)]
+            del shards
+            out += [fut.result() for fut in futures]
+        return [secrets.token_hex(8), out]
 
     def upload_blob(self, data, channel=None):
         """Upload a spare (or repaired) piece. Returns [message_id, size, sha256]."""
@@ -657,7 +712,7 @@ class Uploader:
             return 0
         if grace is None:
             grace = max(0.0, float(getattr(self.cfg, "delete_after_days", 7.0) or 0)) * 86400
-        deleted = 0
+        deleted = failed = 0
         for mid, released in self.index.trash_batch(limit, grace=grace, with_time=True):
             if not self._running:
                 break
@@ -669,8 +724,14 @@ class Uploader:
                 self.index.trash_remove(mid)
                 deleted += 1
             except Exception as e:
+                # this one (its channel refused, say) is tried again later, behind the others: one piece that
+                # can't be deleted must not hold up all the rest
                 log.debug("Failed deleting trashed message %s: %s", mid, e)
-                break  # back off until next round
+                self.index.trash_later(mid)
+                failed += 1
+                if failed >= 3:
+                    break  # Discord itself is unreachable: back off until next round
+                continue
             log_deletion(self.cfg, mid, released)
         return deleted
 
@@ -710,6 +771,8 @@ class _Job:
         self.nid, self.path, self.name, self.version = nid, path, name, version
         self.size, self.chunk_size, self.pinned = size, chunk_size, pinned
         self.k = 0             # data pieces per group (0: no spare pieces)
+        self.pending = None    # (group number, future) of spare pieces being made in the background
+        self.saved_at = 0.0    # when its progress was last saved
         self.done = {}         # idx -> chunk dict
         self.parity = {}       # group number (str) -> [gid, [[mid, size, sha], ...]]
         self.reserved = []

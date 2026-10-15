@@ -26,6 +26,7 @@ INDEX_FILENAME = "discorddrive-index.db.gz"
 KEEP_CHECKPOINTS = 5         # index checkpoints kept in the channel (newest pinned): one bad one is not the end
 NO_ACCESS_PAUSE = 600.0      # a bot refused access to the channel is left out of the rotation this long
 _CURSOR_RE = re.compile(r"\bc=(\d+)")
+_TAG_RE = re.compile(r"\bm=(\S+)")
 
 
 @dataclass
@@ -47,9 +48,9 @@ def url_expired(url: str, margin: float = 300.0) -> bool:
         return True
 
 
-def _index_content(encrypted: bool, cursor) -> str:
+def _index_content(encrypted: bool, cursor, tag=None) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    c = f" c={cursor}" if cursor is not None else ""
+    c = (f" c={cursor}" if cursor is not None else "") + (f" m={tag}" if tag else "")
     if encrypted:
         return f"{INDEX_MARKER} ENC_V3{c} {stamp}\nEncrypted index checkpoint."
     return f"{INDEX_MARKER} v3{c} {stamp}\nDDrive index checkpoint - do not delete or unpin."
@@ -69,6 +70,26 @@ def _pick_latest(candidates):
     if journal:
         return max(journal, key=lambda m: (int(m["cursor"]), int(m["id"])))
     return max(candidates, key=lambda m: int(m["id"])) if candidates else None
+
+
+def tag_of(m):
+    """The drive a checkpoint copy in a spare channel belongs to (its main channel id), or None."""
+    match = _TAG_RE.search((m.get("content") or "").split("\n", 1)[0])
+    return match.group(1) if match else None
+
+
+def sort_checkpoints(candidates):
+    """Checkpoints best first: furthest along the journal (then newest), legacy backups after them."""
+    candidates = [_with_cursor(m) if "cursor" not in m else m for m in candidates]
+    seen, out = set(), []
+    for m in sorted(candidates, key=lambda m: (m["cursor"] is not None, int(m["cursor"] or 0),
+                                               m.get("spare") is None, int(str(m["id"]).rpartition("-")[2])),
+                    reverse=True):
+        key = (m.get("spare"), str(m["id"]))
+        if key not in seen:
+            seen.add(key)
+            out.append(m)
+    return out
 
 
 def is_encrypted_index(msg) -> bool:
@@ -122,6 +143,13 @@ class DiscordBackend:
             log.warning("Bot %d of %d may not read the channel (%s). It is left out for now; pieces are read "
                         "with the other bots. Check that it is in the server and can see the channel.",
                         i + 1, len(self.apis), e)
+
+    def all_refused(self):
+        """Has Discord refused every bot of this channel lately?"""
+        with self._rr_lock:
+            now = time.time()
+            return all(i in self.no_access and now - self.no_access[i][0] <= NO_ACCESS_PAUSE
+                       for i in range(len(self.apis)))
 
     def bot_problems(self):
         """Bots the channel refused lately: [{"bot": 1-based number, "since", "error"}]."""
@@ -224,6 +252,12 @@ class DiscordBackend:
         page = self.api.get_messages(self.channel_id, after=after or "0", limit=limit) or []
         return sorted(page, key=lambda m: int(m["id"]))
 
+    def messages_in(self, chan, after, limit=100):
+        """A page of this channel's messages (the background check lists it; `chan` is None, this channel)."""
+        if chan is not None:
+            raise KeyError(chan)
+        return self.messages_after(after, limit)
+
     def latest_message_id(self):
         page = self.api.get_messages(self.channel_id, limit=1) or []
         return page[0]["id"] if page else None
@@ -241,14 +275,14 @@ class DiscordBackend:
         return data
 
     # ---------------------------------------------------------- index backup
-    def save_index(self, data: bytes, previous_message_id=None, cursor=None) -> str:
+    def save_index(self, data: bytes, previous_message_id=None, cursor=None, tag=None) -> str:
         if self.crypto:
             upload_data = self.crypto.encrypt(data)
             fn = f"idx_{secrets.token_hex(8)}.bin"
         else:
             upload_data = data
             fn = INDEX_FILENAME
-        msg = self.api.send_file(self.channel_id, fn, upload_data, _index_content(bool(self.crypto), cursor))
+        msg = self.api.send_file(self.channel_id, fn, upload_data, _index_content(bool(self.crypto), cursor, tag))
         try:
             self.api.pin(self.channel_id, msg["id"])
         except DiscordError as e:
@@ -263,11 +297,35 @@ class DiscordBackend:
     def drop_checkpoints(self, mids):
         """Delete index checkpoints that are no longer among the newest KEEP_CHECKPOINTS."""
         for mid in mids:
-            for fn_act in (self.api.unpin, self.api.delete_message):
-                try:
-                    fn_act(self.channel_id, mid)
-                except DiscordError:
-                    pass
+            self.unpin_delete(mid)
+
+    def unpin_delete(self, mid):
+        for fn_act in (self.api.unpin, self.api.delete_message):
+            try:
+                fn_act(self.channel_id, mid)
+            except DiscordError:
+                pass
+
+    def index_candidates(self, scan_pages: int = 10):
+        """Every checkpoint in the channel, best first: the pinned ones, and older (unpinned) ones found in
+        the newest `scan_pages` pages of messages. Restoring tries them in turn."""
+        found = {}
+        try:
+            for m in self.api.list_pins(self.channel_id):
+                if _is_index_msg(m):
+                    found[m["id"]] = m
+        except DiscordError as e:
+            log.warning("Could not list pins: %s", e)
+        before = None
+        for _ in range(scan_pages):
+            page = self.api.get_messages(self.channel_id, before=before)
+            if not page:
+                break
+            for m in page:
+                if _is_index_msg(m):
+                    found.setdefault(m["id"], m)
+            before = min(page, key=lambda m: int(m["id"]))["id"]
+        return sort_checkpoints(list(found.values()))
 
     def find_latest_index(self, scan_pages: int = 10):
         """Returns the newest index checkpoint message (dict with a 'cursor' key), or None."""
@@ -417,6 +475,11 @@ class LocalBackend:
         after = int(after or 0)
         return [self._msg(str(i)) for i in self._ids() if i > after][:limit]
 
+    def messages_in(self, chan, after, limit=100):
+        if chan is not None:
+            raise KeyError(chan)
+        return self.messages_after(after, limit)
+
     def latest_message_id(self):
         ids = self._ids()
         return str(ids[-1]) if ids else None
@@ -435,13 +498,13 @@ class LocalBackend:
         except FileNotFoundError:
             return []
 
-    def save_index(self, data, previous_message_id=None, cursor=None):
+    def save_index(self, data, previous_message_id=None, cursor=None, tag=None):
         if self.crypto:
             data = self.crypto.encrypt(data)
             fn = f"idx_{secrets.token_hex(8)}.bin"
         else:
             fn = INDEX_FILENAME
-        chunk = self.upload(fn, data, _index_content(bool(self.crypto), cursor))
+        chunk = self.upload(fn, data, _index_content(bool(self.crypto), cursor, tag))
         pins = [p for p in self._pins() if p != previous_message_id] + [chunk.message_id]
         with open(os.path.join(self.root, "pins.json"), "w") as f:
             json.dump(pins, f)
@@ -453,6 +516,21 @@ class LocalBackend:
             json.dump(pins, f)
         for mid in mids:
             self.delete(mid)
+
+    def unpin_delete(self, mid):
+        self.drop_checkpoints([mid])
+
+    def index_candidates(self, scan_pages=10):
+        """Every checkpoint in the folder, best first (pinned or not)."""
+        out = []
+        for i in self._ids():
+            try:
+                m = self._msg(str(i))
+            except (OSError, ValueError):
+                continue
+            if _is_index_msg(m):
+                out.append(m)
+        return sort_checkpoints(out)
 
     def _pinned_msgs(self):
         msgs = []

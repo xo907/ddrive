@@ -5,7 +5,6 @@ deletion is written down."""
 import hashlib
 import json
 import os
-import time
 from unittest import mock
 
 import helpers

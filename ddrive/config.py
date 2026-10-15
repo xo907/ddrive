@@ -127,6 +127,8 @@ class Config:
     extra_bot_tokens: list = field(default_factory=list)  # more bots in the same channel = faster uploads
     spare_channels: list = field(default_factory=list)    # more channels: pieces are spread so any one can be lost
     spare_bot_tokens: list = field(default_factory=list)  # a spare channel's own bot (same order; "" = the main bots)
+    lost_channels: list = field(default_factory=list)     # spare channels given up: their pieces are rebuilt elsewhere
+    channel_servers: dict = field(default_factory=dict)   # channel id -> server (guild) id, learnt from Discord
     discord_pace: str = "gentle"       # how fast to talk to Discord: gentle | balanced | fast | off
     uploads_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 30)
     deletes_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 15)

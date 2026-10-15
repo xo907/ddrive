@@ -69,18 +69,23 @@ class Encoder:
     """Builds the m parity pieces of a group while its k data pieces are fed in one at a time,
     so only one data piece and the m running sums are in memory."""
 
-    def __init__(self, k, m):
+    def __init__(self, k, m, rows=None):
+        """`rows`: compute only these parity pieces (their numbers, < m); a parity piece depends only on
+        its own number, so a large m can be made a few at a time without holding all of them."""
         check_shape(k, m)
         self.k, self.m = k, m
+        self.rows = list(range(m)) if rows is None else list(rows)
+        if any(not 0 <= j < m for j in self.rows):
+            raise IndexError(f"parity rows {self.rows} are outside 0..{m - 1}")
         self.size = 0
-        self._acc = [0] * m
+        self._acc = [0] * len(self.rows)
 
     def add(self, i, data):
         if not 0 <= i < self.k:
             raise IndexError(f"data piece {i} is outside a group of {self.k}")
         self.size = max(self.size, len(data))
-        for j in range(self.m):
-            self._acc[j] ^= _scaled(coef(self.k, j, i), data)
+        for n, j in enumerate(self.rows):
+            self._acc[n] ^= _scaled(coef(self.k, j, i), data)
 
     def parity(self):
         return [a.to_bytes(self.size, "little") for a in self._acc]

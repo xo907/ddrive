@@ -195,13 +195,15 @@ class Index:
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=NORMAL")
+        # FULL: a finished upload is on disk before its local copy is deleted, even through a power cut
+        self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA busy_timeout=10000")
         self._migrate()
         # Counts metadata changes made during this session (used to decide when to checkpoint).
         self.change_counter = 1
         self.last_change = time.time()
         self._stats_cache = (0.0, None)
+        self._stats_at = 0.0
 
     def _migrate(self):
         with self.lock:
@@ -551,6 +553,40 @@ class Index:
         rows = self._all("SELECT message_id, added FROM trash WHERE added <= ? ORDER BY added LIMIT ?", (cutoff, n))
         return [(r["message_id"], r["added"]) if with_time else r["message_id"] for r in rows]
 
+    def trash_later(self, mid):
+        """A piece that couldn't be deleted: try again after the grace period, behind the others."""
+        with self.lock:
+            self.db.execute("UPDATE trash SET added=? WHERE message_id=?", (time.time(), mid))
+
+    def backup_to(self, path):
+        """A gzip copy of the database at `path` (from its own connection, without holding the lock).
+        Returns SQLite's quick_check verdict of the live database ("ok" when sound)."""
+        fd, tmp = tempfile.mkstemp(suffix=".db", dir=os.path.dirname(os.path.abspath(path)))
+        os.close(fd)
+        try:
+            src = sqlite3.connect(self.path)
+            dst = sqlite3.connect(tmp)
+            try:
+                verdict = src.execute("PRAGMA quick_check").fetchone()[0]
+                src.backup(dst)
+            finally:
+                src.close()
+                dst.close()
+            with open(tmp, "rb") as f, gzip.open(path + ".part", "wb", 6) as out:
+                while True:
+                    block = f.read(1 << 20)
+                    if not block:
+                        break
+                    out.write(block)
+            os.replace(path + ".part", path)
+            return verdict
+        finally:
+            for p in (tmp, path + ".part"):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
     def trash_remove(self, mid):
         with self.lock:
             self.db.execute("DELETE FROM trash WHERE message_id=?", (mid,))
@@ -660,15 +696,21 @@ class Index:
                 out.setdefault(gid, ([], []))[1].append((mid, size, sha))
         return out
 
+    _IN_CHANNEL = ("SELECT message_id FROM chunks WHERE message_id >= ? AND message_id < ? UNION "
+                   "SELECT message_id FROM version_chunks WHERE message_id >= ? AND message_id < ? UNION "
+                   "SELECT message_id FROM snapshot_chunks WHERE message_id >= ? AND message_id < ? UNION "
+                   "SELECT message_id FROM parity_shards WHERE message_id >= ? AND message_id < ?")
+
     def pieces_in_channel(self, chan):
         """How many stored pieces the drive keeps in spare channel `chan`."""
-        like = f"{chan}-%"
         with self.lock:
-            return self.db.execute(
-                "SELECT COUNT(*) FROM (SELECT message_id FROM chunks WHERE message_id LIKE ? UNION "
-                "SELECT message_id FROM version_chunks WHERE message_id LIKE ? UNION "
-                "SELECT message_id FROM snapshot_chunks WHERE message_id LIKE ? UNION "
-                "SELECT message_id FROM parity_shards WHERE message_id LIKE ?)", (like,) * 4).fetchone()[0]
+            return self.db.execute(f"SELECT COUNT(*) FROM ({self._IN_CHANNEL})",
+                                   (f"{chan}-", f"{chan}.") * 4).fetchone()[0]
+
+    def pieces_in(self, chan, limit=50):
+        """Up to `limit` of the pieces the drive keeps in spare channel `chan` (their full ids)."""
+        with self.lock:
+            return [r[0] for r in self.db.execute(f"{self._IN_CHANNEL} LIMIT ?", (f"{chan}-", f"{chan}.") * 4 + (limit,))]
 
     def parity_group(self, gid):
         """One group as parity_groups_for gives them, or None."""
@@ -1423,10 +1465,15 @@ class Index:
             return [r[0] for r in self.db.execute("SELECT key FROM kv WHERE key LIKE ?", (prefix + "%",))]
 
     # ---------------------------------------------------------------- stats
-    def stats(self, max_age=5.0):
+    def stats(self, max_age=5.0, lazy=False):
+        """`lazy` (pages asking every few seconds): a count up to `max_age` old even if files changed
+        since, so a busy drive isn't counted again on every request."""
         t, cached = self._stats_cache
         if cached is not None and time.time() - t < max_age:
             return cached
+        last = getattr(self, "_stats_last", None)
+        if lazy and last is not None and time.time() - self._stats_at < max_age:
+            return last
         with self.lock:
             r = self.db.execute(
                 "SELECT COUNT(*) FILTER (WHERE is_dir=0), COUNT(*) FILTER (WHERE is_dir=1) - 1, "
@@ -1454,6 +1501,7 @@ class Index:
             "snapshots": snaps, "unique_chunks": stored,
         }
         self._stats_cache = (time.time(), s)
+        self._stats_last, self._stats_at = s, time.time()
         return s
 
     # ------------------------------------------------------------- pinning
@@ -1503,11 +1551,12 @@ class Index:
                     if c not in all_pinned:
                         all_pinned.add(c)
                         to_visit.append(c)
-            placeholders = ",".join("?" * len(all_pinned))
-            rows = self.db.execute(
-                f"SELECT message_id FROM chunks WHERE node_id IN ({placeholders})", tuple(all_pinned)
-            ).fetchall()
-            return {r[0] for r in rows}
+            out, ids = set(), sorted(all_pinned)
+            for i in range(0, len(ids), 500):          # SQLite allows only so many ? in one query
+                part = ids[i:i + 500]
+                out.update(r[0] for r in self.db.execute(
+                    f"SELECT message_id FROM chunks WHERE node_id IN ({','.join('?' * len(part))})", part))
+            return out
 
     # --------------------------------------------------------------- backup
     def snapshot_bytes(self) -> bytes:
@@ -1523,8 +1572,18 @@ class Index:
         os.close(fd)
         try:
             dst = sqlite3.connect(tmp)
-            with self.lock:
-                self.db.backup(dst)
+            # From a connection of its own: WAL lets it read a consistent copy while the drive goes on
+            # (the shared connection would be locked for the whole copy).
+            src = sqlite3.connect(self.path)
+            try:
+                src.backup(dst)
+            finally:
+                src.close()
+            ok = dst.execute("PRAGMA quick_check").fetchone()[0]
+            if ok != "ok":
+                dst.close()
+                raise ValueError(f"this computer's file list (index.db) is damaged ({ok}); not uploading it as a "
+                                 f"checkpoint. Daily backups of it are in the 'backups' folder next to it.")
             dst.execute("DELETE FROM nodes WHERE id != ? AND jstate < 2", (ROOT_ID,))
             dst.execute(
                 "DELETE FROM nodes WHERE is_dir=0 AND state!='synced' "
@@ -1561,6 +1620,39 @@ class Index:
                 os.remove(tmp)
             except OSError:
                 pass
+
+    @staticmethod
+    def check_snapshot(gz_data: bytes):
+        """Raise ValueError unless `gz_data` is a sound index (gzip of an SQLite database with the drive's
+        tables that passes SQLite's own check). Nothing local is touched before this has passed."""
+        try:
+            raw_db = gzip.decompress(gz_data)
+        except Exception as e:
+            raise ValueError(f"not a compressed index ({e})") from None
+        if not raw_db.startswith(b"SQLite format 3"):
+            raise ValueError("not an index database")
+        fd, tmp = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            with open(tmp, "wb") as f:
+                f.write(raw_db)
+            src = sqlite3.connect(tmp)
+            try:
+                ok = src.execute("PRAGMA quick_check").fetchone()[0]
+                tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            finally:
+                src.close()
+        except sqlite3.Error as e:
+            raise ValueError(f"damaged index database ({e})") from None
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if ok != "ok":
+            raise ValueError(f"damaged index database ({ok})")
+        if not {"nodes", "chunks"} <= tables:
+            raise ValueError("not a drive's index")
 
     def restore_from_snapshot(self, gz_data: bytes):
         """Replace the index with a snapshot, keeping this device's offline pins and trash queue."""

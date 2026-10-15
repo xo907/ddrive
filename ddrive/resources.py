@@ -239,13 +239,18 @@ def cancel_waiting_uploads(drive):
         except OSError:
             pass
         chunks = idx.get_chunks(nid)
+        path = idx.path_of(nid)
         with fs.lock:
             fs._chunk_maps.pop(nid, None)
             if chunks:
                 idx.update(nid, state="synced", size=sum(c["size"] for c in chunks))
             else:
                 idx.delete_node(nid)
-        fs._remove_staging(nid)
+        if chunks:
+            fs._remove_staging(nid)
+        else:      # never uploaded: its local copy is the only one, so it is kept in 'recovered'
+            from .fs import keep_aside
+            keep_aside(fs.staging_dir, fs.staging_path(nid), os.path.basename(path or f"{nid}.dat"))
         up.progress.pop(nid, None)
         cancelled += 1
     _forget_sizes()

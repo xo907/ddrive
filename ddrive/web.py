@@ -1124,7 +1124,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     # ------------------------------------------------------------ status
     def _get_api_status(self):
         d = self.drive
-        st = d.index.stats(max_age=2)
+        st = d.index.stats(max_age=2, lazy=True)
         if self._acct is not None:               # an account sees its own storage, nothing of the computer
             return self._json({
                 "version": __version__, "role": "account", "account": d.id, "user": "", "encrypted": True, "e2e": self._e2e,
@@ -1172,6 +1172,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 "leader": d.maintenance.leader() if d.maintenance else False,
                 "refused": d.backend.bot_problems() if hasattr(d.backend, "bot_problems") else [],
                 "channels": len(getattr(d.backend, "channels", None) or [None]),
+                "servers": len(getattr(getattr(d.backend, "layout", None), "servers", None) or [1]),
+                "unreachable": d.backend.channel_problems() if hasattr(d.backend, "channel_problems") else [],
+                "given_up": sorted(getattr(d.backend, "lost", None) or []),
                 "spread": d.maintenance.spread_state if d.maintenance else {},
             },
             "devices": devices,
@@ -1274,7 +1277,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
         if d is None:
             raise ApiError(404, "The owner has no account page")
         rec = self.app.accounts.active(d.id) or {}
-        st = d.index.stats(max_age=2)
+        st = d.index.stats(max_age=2, lazy=True)
         self._json({"id": d.id, "created": rec.get("created"), "files": st["files"], "bytes": st["bytes"],
                     "version_bytes": st["version_bytes"], "quota": d.cfg.quota_bytes})
 
@@ -1469,7 +1472,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
 
     def _get_api_activity(self):
         d = self.drive
-        st = d.index.stats(max_age=2)
+        st = d.index.stats(max_age=2, lazy=True)
         self._json({
             **self._transfers(),
             "sync": {"outbox": st["outbox"], "trash": st["trash"], "unsynced": st["unsynced"],
@@ -1891,7 +1894,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
     def _get_api_vault(self):
         d = self._vault()
         last, snap = self._vault_state(d)
-        st = d.index.stats(max_age=2)
+        st = d.index.stats(max_age=2, lazy=True)
         self._json({"seq": last, "snapshot": snap, "quota": d.cfg.quota_bytes, "used": st["bytes"] + st["version_bytes"]})
 
     def _get_api_vault_log(self):
@@ -2691,7 +2694,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             node = idx.get_by_uid(uid)
             if node is not None and not node["is_dir"]:
                 # Removing frees its pieces for deletion: only when Discord confirms, right now, that it is broken
-                if not confirm_unreadable(idx, self.drive.backend, self.drive.crypto, node["id"]):
+                if not confirm_unreadable(idx, self.drive.backend, self.drive.crypto, node["id"], self.drive.healer):
                     kept.append(uid)
                     log.warning("Did not remove %s: it can be read now (or Discord could not be asked).",
                                 idx.path_of(node["id"]))

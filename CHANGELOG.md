@@ -3,6 +3,63 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.0.0 (2026-10-14)
+
+The data-safety and speed release: DDrive guards against everything on its own side that could lose
+a file, and against a whole channel or server going on Discord's side, while uploading, reading and
+checking faster.
+
+**Survive more**
+- **A whole server can be lost.** DDrive learns which server each channel is in. With spare channels in
+  two or more servers, every group is spread over the servers first, with enough spare pieces that any
+  one server can go (deleted, or its bots banned) without losing a file: with 2 servers that is as much
+  space again, not three times as much.
+- **A channel that is gone is rebuilt elsewhere.** `spare lost <n>` (or `spare remove <n>` on a channel
+  that holds pieces) gives a channel up: its pieces are rebuilt from the rest of their groups into the
+  channels that are left, in the background. Until then they are read around it. A channel that refuses
+  every bot is named on the Health page, and nothing new goes there.
+- **Copies of what finds your files.** Index checkpoints, every account's checkpoint (end-to-end ones
+  too) and the list of accounts are copied to up to 3 spare channels in different servers, 2 kept in each,
+  marked with the drive they belong to (a channel shared with another drive is never cleaned of its
+  copies). An account's checkpoint is read from a copy when the main channel's is gone.
+- **Restoring never stops at one bad checkpoint.** Every checkpoint found is tried, newest first, and
+  checked before it is used (an older one plus the change journal after it gives the same result).
+  With no checkpoint at all in a channel that holds a drive, the file list is rebuilt from the whole
+  change journal, instead of an empty drive being started over it.
+- **The file list on this computer is backed up.** Once a day a copy of `index.db` goes to `backups` in
+  the data folder (7 kept) and SQLite checks it; a damaged file list is said loudly and never uploaded
+  as a checkpoint.
+- **Crash-proof uploads.** A finished upload is written to disk before its local copy is deleted, even
+  through a power cut, and an upload's progress record is only dropped once the file is committed.
+  Programs asking for their data to be on disk (fsync) now really get that.
+- **Nothing local is thrown away unasked.** A local copy no file knows about, and the copy of a file
+  whose waiting upload is cancelled before it was ever uploaded, go to `recovered` in the data folder.
+- **"Remove unreadable" tries the spare pieces first.** A file is only removed when Discord confirms a
+  piece is gone *and* its spare pieces can't rebuild it; a piece that can be rebuilt is put back instead.
+- **Old groups with repeated pieces are counted at their real strength** (a message filling several
+  places of a group costs all of them when it goes) and get the spare pieces that makes up for it.
+- **Trash cleanup can't get stuck** behind one piece it can't delete.
+
+**Faster**
+- **Groups overlap.** A group's spare pieces are computed and uploaded while the next group's pieces
+  upload, instead of everything waiting for them.
+- **More at once.** Up to 16 pieces upload at the same time (was 8), counting the bots of every channel,
+  and never more than a quarter of the free memory can hold.
+- **Spare pieces use little memory.** They are computed 8 at a time, so 50 per group no longer needs
+  hundreds of megabytes; repairing one spare piece computes only that one.
+- **Uploads hand their data to curl through memory** on Linux, not through its input one small write
+  at a time.
+- **The background check lists channels** 100 messages per request instead of asking about each piece:
+  a hundred times fewer requests, so big drives are checked in full every `scrub_days`.
+- **Rebuilding reads in parallel.** Pieces needed to rebuild one (and to add spare pieces) download 4 at a
+  time, and spare pieces upload several at a time.
+- **Read-ahead** keeps every download thread busy when a file is read straight through, and opening a
+  file to edit it downloads several pieces at once.
+- **The drive doesn't freeze for checkpoints:** they are copied from a connection of their own instead
+  of locking the file list, and the dashboard's counts aren't recomputed on every request while files
+  change. Upload progress is saved every 2 seconds instead of after every piece (big files).
+- Looking for groups that still need spare pieces only happens when the settings or channels change.
+
 ## 2.40.1 (2026-10-14)
 
 - **Accounts use the spare channels and the spare-piece setting too.** An account's files (also
