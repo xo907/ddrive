@@ -159,13 +159,16 @@ class Eraser:
 
     # ------------------------------------------------------------ this computer
     def wipe_local(self):
-        """Everything in the data folder but the logs, the mark and (if it is there) the config file."""
+        """Everything in the data folder but the logs, the mark, the key that unlocks the config's secrets
+        and (if it is there) the config file."""
         from .config import config_path
         data = os.path.abspath(self.cfg.resolved_data_dir)
         keep = {os.path.abspath(config_path()), os.path.abspath(mark_path(self.cfg))}
         for name in os.listdir(data) if os.path.isdir(data) else []:
             p = os.path.join(data, name)
-            if os.path.abspath(p) in keep or name.endswith((".log", ".pid")):
+            # machine.key decrypts the config's secrets on Linux (secretbox.py): without it the bots, the
+            # 24 words and the dashboard's sign-in kept in the config could never be read again.
+            if os.path.abspath(p) in keep or name.endswith((".log", ".pid", ".key")):
                 continue
             if os.path.isdir(p):
                 shutil.rmtree(p, ignore_errors=True)

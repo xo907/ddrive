@@ -31,6 +31,8 @@ class EraseTest(helpers.DriveTest):
     def test_everything_goes_and_the_drive_starts_empty(self):
         d = self.filled()
         data_dir = d.cfg.resolved_data_dir
+        with open(os.path.join(data_dir, "machine.key"), "wb") as f:      # what unlocks the config's secrets
+            f.write(b"k" * 32)
         d.stop_background_services()
         d.index.close()
         er = erase.Eraser(d.cfg, d.backend, save_config=False)
@@ -38,6 +40,7 @@ class EraseTest(helpers.DriveTest):
         self.assertEqual(messages(self.channel), [])
         self.assertEqual(messages(f"{self.channel}-{SPARE}"), [])
         self.assertFalse(os.path.exists(os.path.join(data_dir, "index.db")))
+        self.assertTrue(os.path.exists(os.path.join(data_dir, "machine.key")))     # the bots stay readable
         self.assertFalse(erase.pending(d.cfg))
         self.drives.remove(d)
         again = self.drive(spare_channels=[SPARE])                 # same channels, same words: empty

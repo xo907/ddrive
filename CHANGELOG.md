@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.3.1 (2026-10-15)
+
+- **Erasing everything keeps the bots, really.** On Linux the secrets of the config file (the bot tokens,
+  the 24 words' key, the dashboard's sign-in) are encrypted with a key file kept in the data folder
+  (`machine.key`), and erasing everything deleted it with the rest of the data folder: the config was
+  kept, but its secrets could no longer be read. That key is kept now. A drive that was erased with
+  3.2.0 to 3.3.0 on Linux needs `setup` (the main bot's token, and the 24 words or a new key) and
+  `bots add` for each extra bot once; the channels and spare channels were kept.
+
 ## 3.3.0 (2026-10-15)
 
 - **Each spare channel gets a bot of its own, picked at random.** A spare channel without a bot of its
