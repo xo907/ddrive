@@ -105,5 +105,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Run again for a tag that already has its release (e.g. once the signing secrets are added):
+          # its files are replaced and anything missing (the Android app) is added.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "DDrive $GITHUB_REF_NAME" \
             --notes "Windows: DDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./ddrive_*.deb. Lite (uses a drive that runs on another computer): DDriveLite.exe, or sudo apt install ./ddrive-lite_*.deb. Android phones: DDriveLite.apk (backs up the phone's folders to the drive; set up from the host's Sync page)"

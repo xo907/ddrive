@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.0.1 (2026-10-14)
+
+- **The Android app is part of every release again.** The release now signs DDriveLite.apk itself and
+  attaches it next to the Windows and Debian downloads. Running the release again for a version that
+  already has one adds what is missing instead of failing.
+
 ## 3.0.0 (2026-10-14)
 
 The data-safety and speed release: DDrive guards against everything on its own side that could lose
