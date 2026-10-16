@@ -404,7 +404,7 @@ def cmd_approve_keys(args):
 
 
 _SECRET_FIELDS = {"bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens", "spare_bot_tokens",
-                  "web_token", "web_password", "discord_user_token"}
+                  "web_token", "web_password", "discord_user_token", "monitor_key"}
 _LIST_COMMANDS = {"extra_bot_tokens": "bots add <token>", "hidden_folders": "hide <folder>", "sync_jobs": "sync add",
                   "spare_channels": "spare add <channel id>", "spare_bot_tokens": "spare add <channel id> <bot token>",
                   "old_encryption_keys": "add-old-key", "web_user": "webdav-password",
@@ -2530,6 +2530,26 @@ def cmd_webdav_password(args):
     return 0
 
 
+def cmd_monitor_key(args):
+    """The key a status bot reads /api/monitor with (numbers about the drive, nothing else)."""
+    import secrets as _secrets
+    cfg = Config.load()
+    if args.action == "off":
+        cfg.monitor_key = ""
+        cfg.save()
+        print("[OK] No status bot can read the drive any more. Restart the drive if it is running.")
+        return 0
+    if args.action == "new" or not cfg.monitor_key:
+        cfg.monitor_key = _secrets.token_urlsafe(32)
+        cfg.save()
+        print("[OK] A new monitor key was made (an older one no longer works). Restart the drive if it is running.")
+    print(f"Monitor key:  {cfg.monitor_key}")
+    print(f"Address:      http://127.0.0.1:{cfg.web_port}  (or your domain, if the dashboard is behind a reverse proxy)")
+    print("It only lets a status bot read numbers (counts, sizes, uploads, errors), never names or files.")
+    print(f"Set up the bot with: {launcher()} statusbot setup")
+    return 0
+
+
 def cmd_purge(args):
     """Delete deleted files for good (no recovery afterwards)."""
     setup_logging(args.verbose)
@@ -2907,11 +2927,22 @@ def main():
     p_acc.add_argument("action", nargs="?", default="list")
     p_acc.add_argument("rest", nargs="*")
 
+    p_mkey = subparsers.add_parser("monitor-key", help="The key a status bot reads the drive's status with: show, new, off")
+    p_mkey.add_argument("action", nargs="?", default="show", choices=["show", "new", "off"])
+    p_sbot = subparsers.add_parser("statusbot", add_help=False,
+                                   help="A Discord bot that shows how the drive is doing: statusbot setup, statusbot, statusbot test")
+    p_sbot.add_argument("rest", nargs=argparse.REMAINDER)
+
     p_lite = subparsers.add_parser("lite", add_help=False,
                                    help="Use a drive that runs on another computer: lite connect <address>, lite mount, lite stop")
     p_lite.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
+    if args.command == "statusbot":
+        from .statusbot import main as statusbot_main
+        return statusbot_main(args.rest)
+    if args.command == "monitor-key":
+        return cmd_monitor_key(args)
     if args.command == "lite":
         from .lite import main as lite_main
         return lite_main(args.rest, args.verbose)

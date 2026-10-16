@@ -39,7 +39,7 @@ from .config import Config, config_path, launcher as _launcher
 from .accounts import MODES, AccountError, Accounts, AccountShares, account_id
 from .crypto import hash_password
 from .index import ROOT_ID, new_uid
-from . import legal, passkeys, resources, words
+from . import legal, monitor, passkeys, resources, words
 from .shares import Shares
 from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
 from .bookmarks import BookmarkHandlers
@@ -216,6 +216,8 @@ class WebServer:
         self.moves = self.accounts.moves = Moves(self.accounts)   # end-to-end accounts moving into others (transfer.py)
         self.lite = LiteDevices()         # computers running DDrive Lite that sync folders with this drive
         self.sealed = SealedDevices()     # the same for end-to-end encrypted accounts: sealed messages, passed on unread
+        self.monitor_lock = threading.Lock()
+        self.monitor_cache = (0.0, None)  # /api/monitor, worked out at most every 2 seconds
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -865,6 +867,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 # An end-to-end encrypted account gets the same dashboard as everybody: e2e-api.js, which it
                 # loads, answers its questions in the browser from what only the browser can open.
                 return self._static(route.lstrip("/") or "index.html")
+            if method == "GET" and route == "/api/monitor":      # a status bot, with the monitor key: numbers only
+                return self._monitor()
             who = self._who()
             if who is None:
                 return self._error(401, "Signed out. Reload the page to sign in.")
@@ -1569,6 +1573,20 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
             "download_speed": dl_speed,
             "offline": jobs,
         }
+
+    def _monitor(self):
+        app = self.server.app
+        if not monitor.key_ok(app.cfg, self.headers.get("Authorization")):
+            addr = self._addr()
+            if app.note_unknown(b"monitor", addr):
+                log.warning("A status bot at %s asked for /api/monitor with a wrong or no monitor key (monitor-key shows it).", addr)
+            return self._error(401, "Wrong monitor key." if app.cfg.monitor_key else "No monitor key is set: make one with monitor-key.")
+        with app.monitor_lock:
+            at, snap = app.monitor_cache
+            if snap is None or time.time() - at > 2:
+                snap = monitor.snapshot(app)
+                app.monitor_cache = (time.time(), snap)
+        self._json(snap, fresh=True)
 
     def _get_api_queue(self):
         """The Queue page asks this every second while it is open. An account gets its own (for an

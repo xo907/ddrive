@@ -361,6 +361,9 @@ other devices**:
   browser, so the computer that runs DDrive can't read them either
   ([who can read what](#who-can-read-what)).
 - **Self-healing.** Spare pieces rebuild what Discord loses; a background check finds losses early.
+- **Status bot.** A Discord bot of its own whose status says what the drive is doing ("Uploading 20/100
+  files", "Uptime: 25 hours", "Experiencing I/O failures"), with alerts and a live status message
+  ([more](#status-bot)).
 - **Compression and de-duplication** before encryption; extra bots and parallel uploads for speed.
 - **Web dashboard** for your browser and phone (installable as an app): a home page, a photo and video
   gallery, bookmarks with link previews, starred and recent files, an activity list, storage insights,
@@ -503,6 +506,8 @@ sync [list|add|edit|remove|run|stop|pause|resume|status|modes]
                                      Folders kept in sync with the drive (see "Sync and back up folders")
 accounts [list|disable <id>|enable <id>|delete <id>|moves|move-cancel <id>]
                                      Accounts on the dashboard, admin accounts, moves between accounts
+monitor-key [show|new|off]           The key a status bot reads the drive's status with
+statusbot [setup|test|show]          A Discord bot that shows how the drive is doing (see "Status bot")
 ```
 
 Paths can be given as `Z:\Folder\file.mp4`, `/mnt/ddrive/Folder/file.mp4`, or `/Folder/file.mp4`.
@@ -950,6 +955,105 @@ and every extra bot adds the same again:
    checks the bot can post in the channel, and saves it). Restart the drive.
 
 Each device can use its own set of extra bots; any bot in the channel can read every piece.
+
+## Status bot
+
+A Discord bot that watches your drive and tells you what is going on, in its status (the line under its
+name in the member list) and, if you like, in a channel:
+
+- **A status that changes every 20 seconds**, made from what the drive is doing right now: `⬆️ Uploading
+  20/100 files`, `🚀 Uploading at 4.2 MB/s`, `⏳ About 6 minutes of uploads left`, `✅ All uploads completed
+  (100 files)`, `⏱️ Uptime: 25 hours`, `📁 25,000 files on the drive`, `☁️ 500 GB of files on Discord`,
+  `🛡️ Every piece has spares`, `🔍 Background check 63% through`, `📅 1,204 files uploaded today`,
+  `📶 Online 99.97% this week`, `🏆 Busiest day: 4,000 files`, `🎯 312 files to 25,000`... There are
+  close to a hundred kinds, and only the ones that are true at that moment are shown, so what you
+  see follows the drive. Problems are shown most and come first: `💥 Experiencing I/O failures`,
+  `⚠️ 3 uploads failing, retrying`, `🐢 Discord is rate-limiting, slowing down`, `📡 Network trouble
+  reaching Discord`, `🩹 2 parts can't be repaired`, `💽 Low disk space`, `🔴 Drive offline for 5 minutes`.
+- **The dot tells you at a glance**: green when all is well, yellow when something needs a look, red when
+  something is wrong or the drive doesn't answer.
+- **A status message in a channel** (optional), kept up to date: problems, what is going on, the drive's
+  numbers, errors in the last 5 minutes / hour / day, the computer, and how much of the week the drive was
+  reachable.
+- **Alerts in that channel** when something happens: problems start and clear, a batch of uploads
+  finishes ("All uploads completed: 100 files, 2.3 GB in 14 minutes"), the drive restarts, is updated,
+  goes offline or comes back, files can't be repaired, the disk gets low, milestones (10,000 files,
+  1 TB). Serious ones can mention you or a role.
+- **Slash commands**: `/status` (the whole picture), `/statuses` (every status there is right now) and
+  `/uptime`.
+
+**What it can see.** The bot reads `/api/monitor` on the dashboard with a **monitor key**. That gives it
+numbers and states only (counts, sizes, speeds, errors by kind), never a file or folder name, the log's
+text or anything of an account, and the key opens nothing else on the dashboard. `monitor-key new`
+replaces the key, `monitor-key off` lets no bot in.
+
+**Where it runs.** On the drive's computer, or anywhere else that can reach the dashboard (through your
+reverse proxy, say). On another computer it is also the one that notices when the drive itself is down.
+It needs Python and the DDrive folder, nothing else; the drive doesn't need to be set up there.
+
+### Setting it up
+
+1. **Make the bot.** It is a bot of its own, not the drive's. At
+   <https://discord.com/developers/applications>: **New Application** → **Bot** → **Reset Token** and
+   copy the token. Then **OAuth2** → **URL Generator**: scopes `bot` and `applications.commands`,
+   permissions **View Channel**, **Send Messages** and **Embed Links**; open the link and add the bot to
+   your server. (No privileged intents are needed.)
+2. **Optional: a channel for the status message and alerts.** Turn on Developer Mode (Discord Settings →
+   Advanced), right-click the channel → **Copy Channel ID**. A channel only you can see is a good choice.
+3. **On the drive's computer**, make the monitor key (it is shown; keep it like a password) and restart
+   the drive so it takes it:
+
+   ```bash
+   ./run.sh monitor-key
+   ./run.sh stop && ./run.sh start
+   ```
+
+   On Windows: `run.bat monitor-key`, then `run.bat stop` and `run.bat start`.
+4. **Where the bot runs**, answer its questions (token, the drive's address, the key, the channel, who to
+   mention):
+
+   ```bash
+   ./run.sh statusbot setup
+   ```
+
+   On the drive's computer the address (`http://127.0.0.1:8765`) and the key are filled in for you. On
+   another computer use the address the dashboard has there, e.g. `https://drive.example.com`, or
+   `http://<drive computer's address>:8765` with `config web_lan true` on the drive. The answers are kept
+   in `statusbot.json` next to the config file, with the token and the key encrypted for that computer.
+5. **Check it**, then **start it**:
+
+   ```bash
+   ./run.sh statusbot test
+   ./run.sh statusbot
+   ```
+
+   `test` prints every status it would show now, without Discord. `statusbot` runs the bot in that window
+   (Ctrl+C stops it).
+
+**Keep it running on Linux** (systemd, like the drive):
+
+```bash
+mkdir -p ~/.config/systemd/user
+sed "s|%h/DDrive|$HOME/DDrive|g" ~/DDrive/ddrive/scripts/linux/ddrive-statusbot.service > ~/.config/systemd/user/ddrive-statusbot.service
+systemctl --user daemon-reload && systemctl --user enable --now ddrive-statusbot
+sudo loginctl enable-linger "$USER"
+journalctl --user -u ddrive-statusbot -f            # what it is doing
+```
+
+**Keep it running on Windows**: start it when you sign in, in a minimised window (run in the DDrive
+folder; `schtasks /delete /tn "DDrive status bot"` removes it again):
+
+```bat
+schtasks /create /tn "DDrive status bot" /sc onlogon /tr "cmd /c start \"DDrive status bot\" /min \"%CD%un.bat\" statusbot"
+```
+
+**Settings** in `statusbot.json` (change them there and restart the bot): `poll` (seconds between looks
+at the drive, 15), `rotate` (seconds between statuses, 20; Discord doesn't allow much faster), `board`
+(the status message, `true`), `alerts` (`true`), `trivia` (the lighter statuses such as records and
+"compression saved", `true`), `name` (shown in the message), `mention`. The token, key and address can
+also come from `DDRIVE_STATUSBOT_TOKEN`, `DDRIVE_MONITOR_KEY` and `DDRIVE_MONITOR_URL` (Docker, say).
+`statusbot show` prints the settings without the secrets. What the bot learns over time (records, uploads
+per day, how long the drive was reachable) is kept in `statusbot-state.json` beside it.
 
 ## The config file
 

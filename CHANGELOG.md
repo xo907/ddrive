@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.4.0 (2026-10-16)
+
+- **Status bot.** A Discord bot of its own that watches the drive and says what is going on, in its status
+  and its green / yellow / red dot: "Uploading 20/100 files", "Uploading at 4.2 MB/s", "All uploads
+  completed", "Uptime: 25 hours", "25,000 files on the drive", "500 GB of files on Discord", "Experiencing
+  I/O failures", "Drive offline for 5 minutes", and close to a hundred more, each shown only while it is
+  true. Optionally it keeps a status message up to date in a channel, posts when something happens
+  (problems starting and clearing, uploads finished, restarts, updates, milestones, the drive going offline
+  and coming back, with a mention for serious ones) and answers `/status`, `/statuses` and `/uptime`. It can
+  run on another computer, and then also notices the drive being down. `statusbot setup`, then `statusbot`;
+  see "Status bot" in the README.
+- **`monitor-key`** makes the key the bot reads the drive with (`/api/monitor`). It shows numbers and
+  states only, never a name, and opens nothing else on the dashboard.
+
 ## 3.3.3 (2026-10-15)
 
 - **"A sign-in key that belongs to no account here" no longer fills the Log.** A device still signed in

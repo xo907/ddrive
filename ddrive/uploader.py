@@ -79,7 +79,8 @@ class Uploader:
         self._parity_pool = None  # computes and uploads a group's spare pieces while the next group uploads
         self._reserved = collections.Counter()   # reused pieces of uploads in progress: never trash them
         self.progress = {}                         # nid -> {"path", "done", "total", "size"} (status page)
-        self.stats = {"uploaded_bytes": 0, "reused_bytes": 0, "compressed_saved": 0, "spare_bytes": 0}
+        self.stats = {"uploaded_bytes": 0, "reused_bytes": 0, "compressed_saved": 0, "spare_bytes": 0,
+                      "files": 0, "file_bytes": 0, "failed": 0, "last_done": 0.0, "last_failed": 0.0}   # since the drive started
 
     # ----------------------------------------------------- resumable uploads
     # After every uploaded piece, what is done so far is saved under "upload:<nid>" in the index,
@@ -378,6 +379,8 @@ class Uploader:
                 self.index.update(nid, state="error")
             delay = self._retry_later(nid)
             why = "this computer is out of memory" if isinstance(e, MemoryError) else str(e) or type(e).__name__
+            self.stats["failed"] += 1
+            self.stats["last_failed"] = time.time()
             log.error("Failed uploading %s: %s (retrying in %.0fs)", path, why, delay)
             return
 
@@ -394,6 +397,9 @@ class Uploader:
         self._drop_progress(nid, trash=False)
         if ok:
             self._failures.pop(nid, None)
+            self.stats["files"] += 1
+            self.stats["file_bytes"] += file_size
+            self.stats["last_done"] = time.time()
             if self.journal is not None:
                 self.journal.wake()  # publish the new file to other devices right away
             log.info("Successfully uploaded %s (%d bytes across %d chunk(s)%s)", path, file_size, len(chunks),

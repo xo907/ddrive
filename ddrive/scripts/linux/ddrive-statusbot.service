@@ -1,0 +1,20 @@
+# systemd *user* unit for the status bot. Assumes the repository is at ~/DDrive (sed rewrites the path:
+# see "Status bot" in the README). Run 'statusbot setup' once first.
+#   systemctl --user enable --now ddrive-statusbot
+#   sudo loginctl enable-linger $USER     # keep it running without a login session
+[Unit]
+Description=DDrive status bot (Discord)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/DDrive
+Environment=PYTHONPATH=%h/DDrive
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m ddrive statusbot
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
