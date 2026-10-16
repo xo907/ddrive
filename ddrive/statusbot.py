@@ -130,11 +130,12 @@ def board(snap, statuses, hist, name, down=False, now=None):
         fields.append({"name": "Going on", "value": "\n".join(happening[:10])[:1024], "inline": False})
     if snap and not down:
         d, up, h = snap.get("drive") or {}, snap.get("uploads") or {}, snap.get("health") or {}
+        tot = sl.totals(snap)
         e = snap.get("errors") or {}
         res = snap.get("resources") or {}
         disk = res.get("disk") or {}
         fields += [
-            {"name": "Drive", "value": f"{sl.count(d.get('files'), 'file')}\n{sl.size(d.get('bytes'))} on Discord\n"
+            {"name": "Drive", "value": f"{sl.count(tot.get('files'), 'file')}\n{sl.size(tot.get('bytes'))} on Discord\n"
                                        f"{sl.count(d.get('versions'), 'version')}, {sl.count(d.get('snapshots'), 'snapshot')}",
              "inline": True},
             {"name": "Uploads", "value": f"{sl.count(up.get('active'), 'active')}, {sl.count(up.get('queued'))} queued\n"
@@ -496,7 +497,8 @@ def setup(path=None):
     print(f"[OK] Saved in {path or settings_path()}.")
     try:
         snap = fetch(s["url"], s["key"])
-        print(f"[OK] The drive answers: DDrive {snap.get('version')}, {sl.count((snap.get('drive') or {}).get('files'), 'file')}.")
+        tot = sl.totals(snap)
+        print(f"[OK] The drive answers: DDrive {snap.get('version')}, {sl.count(tot.get('files'), 'file')}, {sl.size(tot.get('bytes'))}.")
     except DriveDown as e:
         print(f"[!] The drive doesn't answer yet: {e}")
     return 0

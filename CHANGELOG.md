@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.4.1 (2026-10-16)
+
+- **The status bot counts what the accounts hold.** "Files on the drive" and "of files on Discord" counted
+  only the owner's own files, so a drive whose files are in dashboard accounts said "0 files, 0 B". They now
+  add up the owner's and every account's files (only the numbers, still no names). Uploads, downloads and
+  repairs going on in accounts count too, so "Uploading 20/100 files" also follows an account's uploads.
+- "Error-free for 0 seconds" and "Watching this drive for 0 seconds" wait until there is an hour to say.
+
 ## 3.4.0 (2026-10-16)
 
 - **Status bot.** A Discord bot of its own that watches the drive and says what is going on, in its status

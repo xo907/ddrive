@@ -109,26 +109,65 @@ def _num(x):
     return x if isinstance(x, (int, float)) else 0
 
 
+def _drives(app):
+    """The owner's drive and every account's drive open right now (each has an uploader, cache, healer of
+    its own: what happens in an account is part of what the computer is doing)."""
+    out = [app.drive]
+    accounts = getattr(app, "accounts", None)
+    if accounts is not None:
+        with accounts._lock:
+            out += [ad for ad in accounts._open.values() if getattr(ad, "index", None) is not None]
+    return out
+
+
+def _totals(app, own):
+    """Files and bytes on the drive: the owner's and every account's (an end-to-end encrypted account's
+    files are sealed objects here, one per file)."""
+    files, size, n = own.get("files", 0), own.get("bytes", 0) + own.get("version_bytes", 0), 0
+    accounts = getattr(app, "accounts", None)
+    if accounts is not None:
+        try:
+            for a in accounts.listing():
+                files += a.get("files") or 0
+                size += a.get("bytes") or 0
+                n += 1
+        except Exception:
+            pass
+    return {"files": files, "bytes": size, "accounts": n}
+
+
 def snapshot(app):
-    """Everything a status bot shows, from the drive itself (the owner's: accounts are only counted)."""
+    """Everything a status bot shows, from the drive itself and its accounts (only ever counted)."""
     d = app.drive
     now = time.time()
     st = d.index.stats(max_age=5, lazy=True)
-    up = d.uploader
-    progress = list(up.progress.values()) if up else []
-    sent = sum(max(0, p.get("bytes", 0) - p.get("base", 0)) for p in progress)
+    drives = _drives(app)
+    ups = [x.uploader for x in drives if getattr(x, "uploader", None) is not None]
+    progress = [p for up in ups for p in list(up.progress.values())]
     speed = 0.0
+    sent = 0
     for p in progress:
         moved = p.get("bytes", 0) - p.get("base", 0)
         if moved > 0:
+            sent += moved
             speed += moved / max(0.5, now - p.get("started", now))
-    queue = up.queue_info() if up else []
-    queued = len(up._pending) if up else 0
+    queued = sum(len(up._pending) for up in ups)
+    queue = [q for up in ups for q in up.queue_info()]
     left = sum(q["size"] for q in queue) + sum(max(0, p.get("size", 0) - p.get("bytes", 0)) for p in progress)
-    ustats = dict(up.stats) if up else {}
+    ustats = {}
+    for up in ups:
+        for k, v in up.stats.items():
+            ustats[k] = max(ustats.get(k, 0), v) if k.startswith("last_") else ustats.get(k, 0) + v
+    caches = [x.cache for x in drives if getattr(x, "cache", None) is not None]
+    active_dl = [a for c in caches for a in list(c.active.values())]
+    recent = [r for c in caches for r in list(c.recent) if now - r[0] < 10]
     cache = d.cache
-    recent = [r for r in (cache.recent if cache else []) if now - r[0] < 10]
     healer = d.healer
+    healers = [x.healer for x in drives if getattr(x, "healer", None) is not None]
+    heal = {}
+    for h in healers:
+        for k, v in h.stats.items():
+            heal[k] = heal.get(k, 0) + v
     lost = healer.lost_files(max_age=60) if healer else []
     lost_by = {}
     for e in lost:
@@ -174,25 +213,24 @@ def snapshot(app):
             "eta": left / speed if speed > 0 else None,
             "size": sum(p.get("size", 0) for p in progress),
             "done": ustats.get("files", 0), "done_bytes": ustats.get("file_bytes", 0),
-            "failed": ustats.get("failed", 0), "retrying": len(up._failures) if up else 0,
+            "failed": ustats.get("failed", 0), "retrying": sum(len(up._failures) for up in ups),
             "last_done": ustats.get("last_done", 0), "last_failed": ustats.get("last_failed", 0),
             "uploaded_bytes": ustats.get("uploaded_bytes", 0), "reused_bytes": ustats.get("reused_bytes", 0),
             "compressed_saved": ustats.get("compressed_saved", 0), "spare_bytes": ustats.get("spare_bytes", 0),
             "room": d.fs.room() if hasattr(d.fs, "room") else None,
         },
+        "total": _totals(app, st),               # the owner's files and every account's
         "downloads": {
-            "pieces": len(cache.active) if cache else 0,
-            "files": len({a.get("node") for a in cache.active.values()}) if cache else 0,
-            "jobs": len(cache.jobs) if cache else 0,
+            "pieces": len(active_dl),
+            "files": len({(id(c), a.get("node")) for c in caches for a in list(c.active.values())}),
+            "jobs": sum(len(c.jobs) for c in caches),
             "speed": sum(b for _, b in recent) / 10.0,
         },
         "health": {
             "parity": bool(d.cfg.parity_enabled), "group": d.cfg.parity_group, "pieces": d.cfg.parity_pieces,
             "lost": len(lost), "lost_by": lost_by,
-            "repairs_queued": healer._queue.qsize() if healer else 0,
-            "rebuilt": (healer.stats if healer else {}).get("rebuilt", 0),
-            "repaired": (healer.stats if healer else {}).get("repaired", 0),
-            "lost_found": (healer.stats if healer else {}).get("lost", 0),
+            "repairs_queued": sum(h._queue.qsize() for h in healers),
+            "rebuilt": heal.get("rebuilt", 0), "repaired": heal.get("repaired", 0), "lost_found": heal.get("lost", 0),
             "recheck": recheck, "scrub": scrub,
             "leader": d.maintenance.leader() if d.maintenance else False,
             "bots": getattr(backend, "upload_slots", 1),

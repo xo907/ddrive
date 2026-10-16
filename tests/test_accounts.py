@@ -289,6 +289,25 @@ class AccountsTest(helpers.DriveTest):
         self.assertEqual(self.post("/api/delete", {"path": "/Photos/anna.txt"}, anna)[0], 200)
         self.assertEqual(self.names(anna, "/Photos"), [])
 
+    def test_the_status_bot_counts_the_accounts_files_too(self):
+        self.d.cfg.signup_mode = "public"
+        self.d.cfg.monitor_key = "mon-key"
+        self.write(self.d, "/Owner/private.txt", b"the owner's own file")
+        self.upload(self.d)
+        anna, _ = self.sign_up()
+        self.assertEqual(self.post("/api/mkdir", {"path": "/Photos"}, anna)[0], 200)
+        self.assertEqual(self.put(anna, "/Photos/anna.txt", b"anna's holiday" * 100), 200)
+        self.assertEqual(self.put(anna, "/Photos/beach.txt", b"sand" * 100), 200)
+        self.d.index._stats_cache, self.d.index._stats_last = (0.0, None), None
+        status, _, body = self.req("GET", "/api/monitor", headers={"Authorization": "Bearer mon-key"})
+        self.assertEqual(status, 200)
+        snap = json.loads(body)
+        self.assertEqual(snap["drive"]["files"], 1)                      # the owner's
+        self.assertEqual((snap["total"]["files"], snap["total"]["accounts"]), (3, 1))
+        self.assertGreater(snap["total"]["bytes"], 1400 + 400)
+        for name in (b"anna", b"beach", b"Photos", b"private", self.opened(anna).id.encode()):
+            self.assertNotIn(name, body)
+
     def test_encrypted_with_its_own_words(self):
         self.d.cfg.signup_mode = "public"
         cookie, phrase = self.sign_up()

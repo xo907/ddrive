@@ -143,6 +143,11 @@ class History:
                 self.batch.update(base=0, base_bytes=0, base_failed=0, carried=self.batch.get("carried", 0) +
                                   max(0, (self.prev.get("done") or 0) - self.batch.get("base", 0)))
             self.prev = {k: v for k, v in self.prev.items() if k in ("files", "bytes", "lost", "disk_free")}
+        elif self.batch and done < self.prev.get("done", 0):
+            # an account's drive closed (idle) and took its counters with it: the batch keeps what it had
+            b = self.batch
+            b["carried"] = b.get("carried", 0) + self.prev["done"] - b["base"]
+            b["base"], b["base_bytes"], b["base_failed"] = done, done_bytes, failed
         self.started = snap.get("started")
         if self.version and snap.get("version") and snap["version"] != self.version:
             self._event(INFO, f"⬆️ Updated to DDrive {snap['version']} (was {self.version})")
@@ -184,7 +189,7 @@ class History:
                 self._record("batch_files", b["files"])
             self.batch = None
         # milestones
-        drive = snap.get("drive") or {}
+        drive = totals(snap)
         before_files, before_bytes = self.prev.get("files"), self.prev.get("bytes")
         if before_files is not None:
             for m in FILE_MILESTONES:
@@ -253,6 +258,15 @@ class History:
                 for f in out:
                     out[f] += v.get(f, 0)
         return out
+
+
+def totals(snap):
+    """Files and bytes on the drive: the owner's and every account's (drives from before 3.4.1 sent only the owner's)."""
+    t = snap.get("total")
+    if t:
+        return t
+    d = snap.get("drive") or {}
+    return {"files": d.get("files", 0), "bytes": d.get("bytes", 0), "accounts": 0}
 
 
 def describe_errors(window):
@@ -378,8 +392,13 @@ def build(snap, hist, now=None):
     # ---- the drive's numbers
     uptime = snap.get("uptime") or 0
     add(f"⏱️ Uptime: {duration(uptime)}", INFO, "uptime")
-    add(f"📁 {count(drive.get('files'), 'file')} on the drive", INFO, "files")
-    add(f"☁️ {size(drive.get('bytes'))} of files on Discord", INFO, "bytes")
+    tot = totals(snap)
+    add(f"📁 {count(tot.get('files'), 'file')} on the drive", INFO, "files")
+    add(f"☁️ {size(tot.get('bytes'))} of files on Discord", INFO, "bytes")
+    if tot.get("accounts") and drive.get("files"):
+        add(f"👤 {count(drive['files'], 'file')} ({size(drive.get('bytes'))}) are the owner's", TRIVIA, "ownfiles")
+    if tot.get("accounts") and tot.get("files", 0) > drive.get("files", 0):
+        add(f"👥 Accounts hold {count(tot['files'] - drive.get('files', 0), 'file')}", TRIVIA, "acctfiles")
     if drive.get("dirs"):
         add(f"🗃️ {count(drive['dirs'], 'folder')}", INFO, "dirs")
     if drive.get("unique_chunks"):
@@ -396,8 +415,8 @@ def build(snap, hist, now=None):
         add(f"🗑️ {count(drive['trash'], 'item')} in Deleted", TRIVIA, "trash")
     if drive.get("pinned_files"):
         add(f"📌 {count(drive['pinned_files'], 'file')} kept offline ({size(drive.get('pinned_bytes'))})", TRIVIA, "pinned")
-    if drive.get("files"):
-        add(f"📏 Average file: {size(drive.get('bytes', 0) / drive['files'])}", TRIVIA, "avg")
+    if tot.get("files"):
+        add(f"📏 Average file: {size(tot.get('bytes', 0) / tot['files'])}", TRIVIA, "avg")
 
     # ---- protection
     if health.get("parity"):
@@ -408,7 +427,7 @@ def build(snap, hist, now=None):
                 INFO if p >= 99 else WARNING if p < 50 else INFO, "protected")
         if drive.get("spare_pieces"):
             add(f"🧱 {count(drive['spare_pieces'], 'spare piece')} ({size(drive.get('spare_bytes'))})", TRIVIA, "spares")
-        add(f"🧮 {health.get('pieces')} spare per {health.get('group')} pieces", TRIVIA, "ratio")
+        add(f"🧮 {health.get('pieces')} spare pieces for every {health.get('group')}", TRIVIA, "ratio")
     else:
         add("🛡️ Self-healing is off", WARNING, "noparity")
     sc = health.get("scrub") or {}
@@ -428,7 +447,7 @@ def build(snap, hist, now=None):
         add("💚 No errors in 24 hours", TRIVIA, "clean24")
     elif e24.get("errors"):
         add(f"📋 {count(e24['errors'], 'error')} in the last 24 hours", TRIVIA, "err24")
-    if hist and hist.streak_clean:
+    if hist and hist.streak_clean and now - hist.streak_clean >= 3600:
         add(f"💚 Error-free for {duration(now - hist.streak_clean)}", TRIVIA, "streak")
 
     # ---- how it is set up
@@ -493,13 +512,13 @@ def build(snap, hist, now=None):
             add(f"🏆 Biggest batch: {count(r['batch_files'], 'file')}", TRIVIA, "recbatch")
         if hist.finished and not (active or queued) and now - hist.finished["at"] >= 900:
             add(f"💤 Idle: last upload {duration(now - hist.finished['at'])} ago", INFO, "idle")
-        nxt = next((m for m in FILE_MILESTONES if m > drive.get("files", 0)), None)
-        if nxt and drive.get("files"):
-            add(f"🎯 {count(nxt - drive['files'], 'file')} to {count(nxt)}", TRIVIA, "nextfiles")
-        nxtb = next((m for m in BYTE_MILESTONES if m > drive.get("bytes", 0)), None)
-        if nxtb and drive.get("bytes"):
-            add(f"🎯 {size(nxtb - drive['bytes'])} to {size(nxtb)}", TRIVIA, "nextbytes")
-        if hist.first_seen:
+        nxt = next((m for m in FILE_MILESTONES if m > tot.get("files", 0)), None)
+        if nxt and tot.get("files"):
+            add(f"🎯 {count(nxt - tot['files'], 'file')} to {count(nxt)}", TRIVIA, "nextfiles")
+        nxtb = next((m for m in BYTE_MILESTONES if m > tot.get("bytes", 0)), None)
+        if nxtb and tot.get("bytes"):
+            add(f"🎯 {size(nxtb - tot['bytes'])} to {size(nxtb)}", TRIVIA, "nextbytes")
+        if hist.first_seen and now - hist.first_seen >= 3600:
             add(f"👀 Watching this drive for {duration(now - hist.first_seen)}", TRIVIA, "watching")
     if not (active or queued) and not (hist and hist.finished):
         add("💤 Idle: nothing to upload", INFO, "idle")
