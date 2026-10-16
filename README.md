@@ -1030,21 +1030,32 @@ It needs Python and the DDrive folder, nothing else; the drive doesn't need to b
    `test` prints every status it would show now, without Discord. `statusbot` runs the bot in that window
    (Ctrl+C stops it).
 
-**Keep it running on Linux** (systemd, like the drive):
+**Keep it running on Linux** (systemd). Run these in the DDrive folder (whatever it is called: the
+commands put that folder into the service):
 
 ```bash
 mkdir -p ~/.config/systemd/user
-sed "s|%h/DDrive|$HOME/DDrive|g" ~/DDrive/ddrive/scripts/linux/ddrive-statusbot.service > ~/.config/systemd/user/ddrive-statusbot.service
+sed "s|%h/DDrive|$PWD|g" ddrive/scripts/linux/ddrive-statusbot.service > ~/.config/systemd/user/ddrive-statusbot.service
 systemctl --user daemon-reload && systemctl --user enable --now ddrive-statusbot
 sudo loginctl enable-linger "$USER"
 journalctl --user -u ddrive-statusbot -f            # what it is doing
+```
+
+As **root** (a VPS, say), make it a system service instead:
+
+```bash
+sed -e "s|%h/DDrive|$PWD|g" -e "s|WantedBy=default.target|WantedBy=multi-user.target|" \
+    -e "s|^\[Service\]|[Service]\nUser=root|" ddrive/scripts/linux/ddrive-statusbot.service > /etc/systemd/system/ddrive-statusbot.service
+systemctl daemon-reload && systemctl enable --now ddrive-statusbot
+journalctl -u ddrive-statusbot -f
 ```
 
 **Keep it running on Windows**: start it when you sign in, in a minimised window (run in the DDrive
 folder; `schtasks /delete /tn "DDrive status bot"` removes it again):
 
 ```bat
-schtasks /create /tn "DDrive status bot" /sc onlogon /tr "cmd /c start \"DDrive status bot\" /min \"%CD%un.bat\" statusbot"
+schtasks /create /tn "DDrive status bot" /sc onlogon /tr "cmd /c start \"DDrive status bot\" /min \"%CD%
+un.bat\" statusbot"
 ```
 
 **Settings** in `statusbot.json` (change them there and restart the bot): `poll` (seconds between looks
