@@ -1137,7 +1137,9 @@ function openItem(it, focus) {
     h("dt", {}, "Modified"), h("dd", {}, it.mtime ? fmtFull.format(new Date(it.mtime * 1000)) : "—"),
     !it.dir && [h("dt", {}, "Stored"), h("dd", {}, it.state === "synced" ? "In Discord" : "Waiting to upload")]);
   const actions = h("div", { class: "sheet-actions" },
-    !it.dir && h("a", { class: "btn", href: fileUrl(it.path, true), download: it.name }, "Download"),
+    // Through download(), not a plain link: for an end-to-end encrypted account the file is opened in
+    // this page (the server only has it sealed), and a link the browser follows by itself skips that.
+    !it.dir && h("button", { class: "btn", onclick: () => download(fileUrl(it.path, true), it.name) }, "Download"),
     h("button", { class: "btn ghost", onclick: () => shareDialog(it) }, "Share…"),
     !it.dir && kind(it.name) === "text" && h("button", { class: "btn ghost", onclick: () => editText(it) }, "Edit"),
     h("button", { class: "btn ghost", onclick: () => setStar(it, !it.starred) }, it.starred ? "Remove the star" : "Star"),
@@ -3526,7 +3528,8 @@ function lightbox(g, start) {
   };
   const prev = h("button", { class: "lb-nav prev", "aria-label": "Previous", onclick: () => step(-1) }, icon("back"));
   const next = h("button", { class: "lb-nav next", "aria-label": "Next", onclick: () => step(1) }, icon("back"));
-  const dl = h("a", { class: "icon-btn", title: "Download", "aria-label": "Download" }, icon("download"));
+  const dl = h("button", { class: "icon-btn", title: "Download", "aria-label": "Download",
+                           onclick: () => { const it = g.items[i]; download(fileUrl(it.path, true), it.name); } }, icon("download"));
   const box = h("div", { class: "lightbox", role: "dialog", "aria-label": "Viewer" },
     h("div", { class: "lb-top" }, title,
       dl,
@@ -3538,8 +3541,6 @@ function lightbox(g, start) {
     const it = g.items[i];
     title.replaceChildren(h("div", { class: "t" }, it.name),
       h("div", { class: "s" }, `${fmtFull.format(new Date(it.mtime * 1000))} · ${size(it.size)} · ${parent(it.path)}`));
-    dl.href = fileUrl(it.path, true);
-    dl.setAttribute("download", it.name);
     stage.replaceChildren(kind(it.name) === "video"
       ? h("video", { src: fileUrl(it.path), controls: true, autoplay: true, playsinline: true })
       : h("img", { src: fileUrl(it.path), alt: it.name }));

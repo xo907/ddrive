@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.4.2 (2026-10-16)
+
+- **Download in a file's details works in end-to-end encrypted accounts.** The Download button in the panel
+  that opens when you click a file, and the one in the picture and video viewer, were plain links. For an
+  end-to-end encrypted account the browser then asked the server for the file, which only has it sealed,
+  and the download failed with "File wasn't available on site". They now open the file in the page first,
+  as Download in the right-click menu always did.
+
 ## 3.4.1 (2026-10-16)
 
 - **The status bot counts what the accounts hold.** "Files on the drive" and "of files on Discord" counted
