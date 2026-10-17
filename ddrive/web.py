@@ -44,6 +44,8 @@ from .shares import Shares
 from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
+from .findx import Relay as FindXRelay
+from .findxweb import FindXHandlers
 from .logbuf import QUIET
 from .webplus import ApiErrorProxy, Fetches, PlusHandlers, housekeeping
 from .transfer import MoveError, Moves
@@ -218,6 +220,7 @@ class WebServer:
         self.sealed = SealedDevices()     # the same for end-to-end encrypted accounts: sealed messages, passed on unread
         self.monitor_lock = threading.Lock()
         self.monitor_cache = (0.0, None)  # /api/monitor, worked out at most every 2 seconds
+        self.findx = FindXRelay()         # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -483,7 +486,7 @@ def _times(n):
     return f" ({n} times since it was last in the Log)" if n > 1 else ""
 
 
-class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHandler):
+class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, BaseHTTPRequestHandler):
     server_version = "DDrive"
     protocol_version = "HTTP/1.1"
 
@@ -855,6 +858,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._vshared(route[3:])
             if route.startswith("/v/") and method == "POST":
                 return self._vshared_post(route[3:])
+            if self._findx_public(method, route):              # a FindX live-location link: nobody signs in to it
+                return
+            if method == "GET" and route in ("/findx", "/findx/") and self._who() is None:
+                return self._redirect("/")
             if method == "GET" and route == "/wordlist.txt":       # the 2048 words a phrase is written in: not a secret
                 with open(os.path.join(os.path.dirname(STATIC), "wordlist.txt"), "rb") as f:
                     return self._send(200, f.read(), "text/plain; charset=utf-8", {"Cache-Control": "public, max-age=86400"})
@@ -874,6 +881,12 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, BaseHTTPRequestHand
                 return self._error(401, "Signed out. Reload the page to sign in.")
             if method == "POST" and self.headers.get("X-DD") != "1":
                 return self._error(403, "missing X-DD header")
+            if route.startswith("/api/findx/") or route in ("/findx", "/findx/"):
+                # FindX only ever passes sealed things along, so it is everybody's alike (findxweb.py). Its
+                # requests don't open the account's drive: a phone's wait for commands is held for minutes.
+                if self.headers.get("X-DD-Admin") == "1":
+                    return self._error(403, "FindX is your own, not the drive's.")
+                return self._findx(method, route, who)
             if self.headers.get("X-DD-Admin") == "1":     # an admin account asks something of the drive itself
                 if not who or not self.server.app.accounts.admin_ok(who):
                     return self._error(403, "Only an admin account can do that.")

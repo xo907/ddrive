@@ -520,6 +520,7 @@ ddrive/          the program (Python)
   scripts/windows/     helpers used by run.bat (hidden start, Explorer menu)
   scripts/linux/       install.sh (requirements) and the systemd service
   web/                 the web dashboard (plain HTML, CSS and JavaScript)
+  web/findx/           FindX's map: the dashboard's FindX page and live-location links
 docs/                  images and config.example.json
 tests/                 tests (python -m unittest discover -s tests), run for every change on GitHub
 packaging/             builds DDrive.exe and the .deb (see .github/workflows/release.yml)
@@ -1236,6 +1237,41 @@ install apps).
   syncing against a real DDrive host. Releases are signed with a key that is kept outside the
   repository (the secrets `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`); an update only
   installs over an app signed with the same key.
+
+## FindX
+
+**FindX** is an Android app that finds your phone, down to the spot it's lying on, with this
+drive as its only server. DDrive does three things for it, and reads none of them: everything FindX
+sends is sealed on the phone with keys made from your 24 words.
+
+- **History, kept for good.** Each phone writes where it has been to `/FindX` on the drive: one
+  sealed file per hour (`/FindX/h/…`, names made with a key, so even the times are hidden), a card
+  per device (`/FindX/d/…`) and the keys your browser opens them with (`/FindX/keys.fxk`, which
+  in an end-to-end encrypted account is sealed by the account like all its files). FindX never
+  deletes them; they are ordinary files, versioned and kept in Discord like the rest.
+- **Live finding.** The dashboard's **FindX** page (in the menu, or `/findx/`) shows your phones on
+  a map, live, with where each has been (today, yesterday, a week, a month, with a slider to replay
+  the day). The map follows day and night where the phone is. From there you can **Ring** a phone
+  (loud even on silent and Do Not Disturb), **Pin it down** (its most precise position, which
+  tightens on the map as you watch), watch it **Live**, or turn on **Lost mode**. In between, the
+  drive only keeps each phone's latest sealed report in memory and passes sealed commands on
+  (`/api/findx/…`, findx.py); a phone waits for commands with one request the drive holds open for
+  four minutes, so it hears a "ring" at once at almost no battery cost. A phone sends every few
+  seconds only while somebody has its map open.
+- **Live-location links.** FindX makes links like `https://your-drive/f/<id>#<key>` for 15 minutes
+  up to "until I stop it". Whoever opens one sees the phone move on the same map, with no sign-in.
+  The key is after the `#`, which browsers never send, so the drive passes the location along
+  without being able to read it; ended and stopped links say so. The page is asked at most a few
+  hundred times a minute from one address.
+
+The map's pictures come from [OpenFreeMap](https://openfreemap.org) (OpenStreetMap data; no
+account, no cookies): the FindX pages are allowed to fetch from there and nowhere else.
+
+**Behind a reverse proxy**, let a request take up to five minutes for `/api/findx/wait` (Nginx Proxy
+Manager: Advanced, `proxy_read_timeout 300s;`). Most proxies cut requests off after a minute; FindX
+notices and then asks every 50 seconds instead, which works too but wakes the phone's radio more often. What's live
+is kept in memory only, so a restart of the drive loses nothing that matters: phones say hello
+again within minutes and history is in files.
 
 ## Password-locked folders
 

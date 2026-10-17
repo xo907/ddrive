@@ -20,7 +20,7 @@ ddrive = "ddrive.cli:main"
 packages = ["ddrive", "ddrive._vendor"]
 
 [tool.setuptools.package-data]
-ddrive = ["web/*", "scripts/linux/*", "scripts/windows/*", "wordlist.txt"]
+ddrive = ["web/*", "web/findx/*", "web/findx/vendor/*", "scripts/linux/*", "scripts/windows/*", "wordlist.txt"]
 
 [tool.setuptools.dynamic]
 version = { attr = "ddrive.__version__" }

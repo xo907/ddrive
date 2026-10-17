@@ -3,6 +3,19 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.5.0 (2026-10-17)
+
+- **FindX.** The drive now works with FindX, an Android app that finds your phone down to the spot it's
+  lying on. The dashboard has a **FindX** page: your phones on a soft, Apple Maps-like map that follows
+  day and night where each phone is, live, with where they have been and a slider to replay the day.
+  Ring a phone (through silent and Do Not Disturb), pin it down, watch it live, or turn on lost mode.
+- **Live-location links** (`/f/…`): a phone shares where it is for as long as you choose, or until you
+  stop it, on a page anybody with the link can open. The key is in the link after the `#`, so the drive
+  serves the page without being able to read the location.
+- The drive never reads any of it: FindX seals everything on the phone with keys made from your 24
+  words. The drive keeps each phone's latest sealed report in memory and passes sealed commands on
+  (`findx.py`); history goes to `/FindX` as ordinary sealed files that are never deleted.
+
 ## 3.4.2 (2026-10-16)
 
 - **Download in a file's details works in end-to-end encrypted accounts.** The Download button in the panel

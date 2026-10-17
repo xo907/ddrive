@@ -1,0 +1,8 @@
+/* What e2e-api.js's "your 24 words" box (shown when this browser doesn't have the account's key)
+   expects from the dashboard's own stylesheet, which this page doesn't load. */
+:root { --bg: #f6f4ef; --panel: #ffffff; --ink: #1c1c1e; --line: rgba(60, 60, 67, 0.2); --mono: ui-monospace, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root { --bg: #1b1e25; --panel: #24262d; --ink: #f2f2f7; --line: rgba(255, 255, 255, 0.15); } }
+form h1 { font: 700 24px/1.2 -apple-system, "Inter", Roboto, sans-serif; color: var(--ink); }
+form .muted { color: #8e8e93; } form .err { color: #ff2a2a; }
+.btn { border: 0; border-radius: 12px; padding: 10px 16px; background: #ff2a2a; color: #fff; font-weight: 600; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }

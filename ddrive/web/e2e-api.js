@@ -1177,7 +1177,7 @@
     chatOpen(new URL(a.href, location.href).searchParams).catch((err) => E.say(err.message));
   }, true);
 
-  const PASS = /^(account|account\/delete|changelog|vault(\/.*)?)$/;        // about the account itself: the server's to answer
+  const PASS = /^(account|account\/delete|changelog|vault(\/.*)?|findx(\/.*)?)$/;        // about the account itself (and FindX's sealed relay): the server's to answer
 
   async function answer(url, init) {
     const name = url.pathname.slice(5).replace(/\/+$/, ""), method = (init.method || "GET").toUpperCase();
