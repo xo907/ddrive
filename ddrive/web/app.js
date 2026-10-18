@@ -637,6 +637,7 @@ function render() {
   $("#apps").classList.toggle("on", inMenu(TOOL_PAGES));
   $("#account").classList.toggle("on", route.name === "settings" || inMenu(DRIVE_PAGES));
   closeSheet();
+  main.classList.toggle("fill", route.name === "findx");
   leaveNotes();
   leaveMessages();
   if (notHere(route.name)) return go(SERVER ? "#/settings" : "#/home");
@@ -650,7 +651,7 @@ function render() {
                   settings: isAccount() ? renderAccount : renderSettings, log: renderLog, check: renderCheck, contacts: renderContacts, sync: renderSync,
                   gallery: renderGallery, home: renderHome, starred: renderStarred, recent: renderRecent,
                   history: renderHistory, storage: renderStorage, bookmarks: renderBookmarks, messages: renderMessages, resources: renderResources,
-                  queue: renderQueue,
+                  queue: renderQueue, findx: renderFindX,
                   verify: async () => { await needs("/verify.js"); if (route.name === "verify") window.renderVerify(); } };
   const loaded = () => { if (mine === nav) main.classList.remove("loading"); };
   viewNav = mine;
@@ -1748,6 +1749,17 @@ function queueFill(r, d) {
   set("bar", d.busy ? "" : (d.pct || 0).toFixed(1) + "%", (v) => { r.bar.style.width = v; });
   set("act", d.act ? d.act[0] : "", (v) => { r.act.textContent = v; r.act.hidden = !v; });
   r.run = d.act ? d.act[1] : null;
+}
+
+// ------------------------------------------------------------------ FindX
+/** FindX (your phones, live, and your circles): its own page (/findx/, findx-dashboard.js), shown here in a
+ *  frame that fills the page, so the menu stays. "#/findx?device=<id>" opens on that phone. */
+function renderFindX() {
+  const want = route.qs.get("device");
+  const src = "/findx/" + (want ? q({ device: want }) : "");
+  const old = main.querySelector("iframe.findx-frame");
+  if (old && old.getAttribute("src") === src) return;
+  main.replaceChildren(h("iframe", { class: "findx-frame", src, title: "FindX", allow: "clipboard-write; fullscreen" }));
 }
 
 async function renderQueue() {

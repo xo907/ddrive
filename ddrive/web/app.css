@@ -136,6 +136,9 @@ code { font-family: var(--mono); font-size: 12.5px; }
 .usage { margin-top: auto; padding: 12px 10px 4px; font-size: 12px; color: var(--faint); line-height: 1.6; }
 
 main { overflow-y: auto; padding: 28px 36px 64px; outline: none; }
+/* A page that is all one frame (FindX): edge to edge, under the top bar and beside the menu. */
+main.fill { padding: 0; overflow: hidden; display: flex; }
+.findx-frame { flex: 1; width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
 .page { max-width: 1040px; margin: 0 auto; }
 
 /* ------------------------------------------------------------------ toolbar */
@@ -351,6 +354,7 @@ body.signin b { color: var(--ink); font-weight: 500; }
   .side a svg { width: 20px; height: 20px; }
   .usage { display: none; }
   main { padding: 18px 16px 96px; }
+  main.fill { padding: 0 0 calc(58px + env(safe-area-inset-bottom)); }
   .bar { flex-wrap: wrap; }
   .crumbs { font-size: 16px; width: 100%; }
   .actions { margin-left: 0; }

@@ -147,7 +147,7 @@ body.night .when button.on { background: #f2f2f7; color: #1c1c1e; }
 @keyframes ring { 0% { transform: scale(0.45); opacity: 0.9; } 100% { transform: scale(1.5); opacity: 0; } }
 
 #theme svg { display: none; }
-#theme[data-theme="auto"] .i-auto, #theme[data-theme="light"] .i-light, #theme[data-theme="dark"] .i-dark { display: block; }
+#theme[data-theme="system"] .i-system, #theme[data-theme="auto"] .i-auto, #theme[data-theme="light"] .i-light, #theme[data-theme="dark"] .i-dark { display: block; }
 
 .pick-group { font-size: 12px; font-weight: 650; color: var(--ink2); text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 10px 4px; }
 

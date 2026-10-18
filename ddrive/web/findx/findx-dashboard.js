@@ -12,7 +12,10 @@
  * - "ring", "locate", settings, links...: sealed here with the command key, so only your phones can act.
  * - your circles (/FindX/c/<name>.fxc, one per phone: each circle's key, sealed with yours): their
  *   people, opened with the circle's key; ringing them; the circle's places.
+ *
+ * The page is the dashboard's FindX tab (/#/findx shows it in a frame); opened on its own, it goes there.
  */
+if (window.top === window) location.replace("/#/findx" + location.search);
 (function () {
   const FX = (window.FX = window.FX || {});
   const te = new TextEncoder();
@@ -309,8 +312,9 @@
   // ------------------------------------------------------------ for the map
 
   FX.source = {
-    caps: { act: true, history: true, pick: true, back: true },
+    caps: { act: true, history: true, pick: true, back: window.top === window },
     back: () => { location.href = "/"; },
+    defaultTheme: "system",                    // light or dark as the dashboard (this device) is
     devices: async () => {
       // Opening sealed things takes the browser's cryptography, which it only offers on https (or on this computer).
       if (!window.isSecureContext || !(window.crypto && crypto.subtle)) {

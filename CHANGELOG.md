@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.7.1 (2026-10-17)
+
+- **FindX is a tab of the dashboard.** It opens beside the menu, like Files and Gallery, instead of on a page of
+  its own; the old address (`/findx/`) goes to the tab.
+- **FindX is light or dark as your device is**, like the rest of the dashboard, and changes with it. The map's
+  sun button still offers day and night where the phone is, always light and always dark. Live-location
+  links follow the viewer's device too.
+
 ## 3.7.0 (2026-10-17)
 
 - **Everything FindX does, on the FindX page.** A phone's sheet has a new **Manage** button, and the map a

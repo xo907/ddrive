@@ -31,6 +31,8 @@ CIRCLE_ROUTES = ("info", "setinfo", "report", "members", "command", "wait", "lea
 FINDX_CSP = ("default-src 'self'; connect-src 'self' https://tiles.openfreemap.org; img-src 'self' blob: data:; "
              "worker-src blob:; child-src blob:; style-src 'self'; script-src 'self'; object-src 'none'; "
              "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+# The dashboard's FindX tab shows the FindX page in a frame: only the dashboard (this drive) may.
+FINDX_TAB_CSP = FINDX_CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
 
 
 def _assets():
@@ -152,7 +154,7 @@ class FindXHandlers:
         """The signed-in API and page. `who`: '' for the owner, else the account."""
         relay = self.server.app.findx
         if method == "GET" and route in ("/findx", "/findx/"):
-            return self._findx_page("findx/index.html")
+            return self._findx_page("findx/index.html", {"Content-Security-Policy": FINDX_TAB_CSP})
         try:
             if method == "GET":
                 q = self._query()

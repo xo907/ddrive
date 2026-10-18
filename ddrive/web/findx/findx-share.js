@@ -25,6 +25,7 @@
 
   FX.source = {
     caps: { act: false, history: false, pick: false },
+    defaultTheme: 'system',           // light or dark as the viewer's device is set
     devices: async () => [{ id: 'shared', name: 'Shared location' }],
     latest: async () => {
       try {

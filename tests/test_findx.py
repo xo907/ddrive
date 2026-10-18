@@ -368,6 +368,7 @@ class FindXWebTest(helpers.DriveTest):
         self.assertIn(b"findx-share.js", data)
         self.assertIn("https://tiles.openfreemap.org", h["Content-Security-Policy"])
         self.assertIn("noindex", h["X-Robots-Tag"])
+        self.assertIn("frame-ancestors 'none'", h["Content-Security-Policy"])   # nobody may frame a link's page
         self.assertEqual(h["Referrer-Policy"], "no-referrer")
         st, _, data = self.get(f"/api/findx/shared?share={S1}", auth=False)
         self.assertEqual((st, json.loads(data)["blob"]), (200, blob))
@@ -392,8 +393,9 @@ class FindXWebTest(helpers.DriveTest):
         self.assertIn(b"findx-dashboard.js", data)
         self.assertIn(b"/e2e-api.js", data)                 # an end-to-end account's keys open things in the page
         self.assertIn("worker-src blob:", h["Content-Security-Policy"])
+        self.assertIn("frame-ancestors 'self'", h["Content-Security-Policy"])   # the dashboard's FindX tab frames it
         st, _, data = self.get("/")
-        self.assertIn(b'href="/findx/"', data)              # in the dashboard's menu
+        self.assertIn(b'href="#/findx"', data)              # a tab in the dashboard's menu
 
     def test_circles_over_http(self):
         # Making one needs somebody signed in to this drive...

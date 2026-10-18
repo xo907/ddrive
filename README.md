@@ -520,7 +520,7 @@ ddrive/          the program (Python)
   scripts/windows/     helpers used by run.bat (hidden start, Explorer menu)
   scripts/linux/       install.sh (requirements) and the systemd service
   web/                 the web dashboard (plain HTML, CSS and JavaScript)
-  web/findx/           FindX's map: the dashboard's FindX page and live-location links
+  web/findx/           FindX's map: the dashboard's FindX tab and live-location links
 docs/                  images and config.example.json
 tests/                 tests (python -m unittest discover -s tests), run for every change on GitHub
 packaging/             builds DDrive.exe and the .deb (see .github/workflows/release.yml)
@@ -1249,7 +1249,7 @@ sends is sealed on the phone with keys made from your 24 words.
   per device (`/FindX/d/…`) and the keys your browser opens them with (`/FindX/keys.fxk`, which
   in an end-to-end encrypted account is sealed by the account like all its files). FindX never
   deletes them; they are ordinary files, versioned and kept in Discord like the rest.
-- **Live finding.** The dashboard's **FindX** page (in the menu, or `/findx/`) shows your phones on
+- **Live finding.** The dashboard's **FindX** tab (in the menu, or `/#/findx`) shows your phones on
   a map, live, with where each has been (today, yesterday, a week, a month, with a slider to replay
   the day). The map follows day and night where the phone is. From there you can **Ring** a phone
   (loud even on silent and Do Not Disturb), **Pin it down** (its most precise position, which
@@ -1272,16 +1272,17 @@ sends is sealed on the phone with keys made from your 24 words.
   the invitation, after the `#`: the drive keeps a hash of the token it makes, the circle's sealed name
   and places (in `findx-circles.json`, in the drive's data folder, so circles survive a restart) and,
   in memory, each member's latest sealed report. Members are random ids to it. Your circles' people
-  are on the FindX page too, with their own coloured faces, and **Ring** works from there.
+  are on the FindX tab too, with their own coloured faces, and **Ring** works from there.
 - **Manage from here.** A phone's **Manage** button has what the app has: its battery and what FindX
   used it on (today and the last two weeks), its settings (name, history and its detail, the Bluetooth
   beacon, lost-mode message), its live-location links (make and stop them), its recent activity and anything
   that keeps it from being found. **People** has your circles: make one, invite people, add places,
   let a circle ring a phone or not, have a phone join or leave, ring anybody. Changes go to the phone
   sealed, like Ring; nothing on the drive can turn FindX off, unlink or erase a phone.
-- The FindX page needs **https** (or localhost): browsers only encrypt and decrypt there.
-- **Light or dark.** The map follows day and night where the phone is, or is always light or always
-  dark: the sun button on the map. The app has the same choice for itself (Settings › Appearance).
+- The FindX tab needs **https** (or localhost): browsers only encrypt and decrypt there.
+- **Light or dark.** The FindX tab and live-location links are light or dark as your device is set,
+  like the dashboard; the sun button on the map switches to day and night where the phone is, always
+  light or always dark. The app has the same choice for itself (Settings › Appearance).
 
 The map's pictures come from [OpenFreeMap](https://openfreemap.org) (OpenStreetMap data; no
 account, no cookies): the FindX pages are allowed to fetch from there and nowhere else.

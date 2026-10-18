@@ -22,8 +22,17 @@
     shown: null,             // [lat, lon] the dot is drawn at (moves smoothly toward the report)
     daylight: null, timer: null, scrubT: null, theme: 'auto', others: new Map(), othersAt: 0,
   };
-  try { state.theme = q.get('theme') || localStorage.getItem('fx-theme') || 'auto'; } catch (e) { /* no storage here: auto */ }
-  if (!['auto', 'light', 'dark'].includes(state.theme)) state.theme = 'auto';
+  // 'system': light or dark as this device is set (the default on DDrive's pages); 'auto': day or night
+  // where the phone is (the app's default); or always light or always dark.
+  const firstTheme = src.defaultTheme || 'auto';
+  state.theme = firstTheme;
+  try { state.theme = q.get('theme') || localStorage.getItem('fx-look') || firstTheme; } catch (e) { /* no storage here */ }
+  if (!['system', 'auto', 'light', 'dark'].includes(state.theme)) state.theme = firstTheme;
+  const darkSystem = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const systemLight = () => !(darkSystem && darkSystem.matches);
+  /** The theme as light or dark, or 'auto' (the sun where the phone is). */
+  const look = () => state.theme === 'system' ? (systemLight() ? 'light' : 'dark') : state.theme;
+  if (look() !== 'auto') document.body.classList.toggle('night', look() === 'dark');   // (before anything is on the map)
 
   // A browser that can't draw the map (WebGL off: hardware acceleration disabled, some locked-down
   // computers) still gets everything else: where it is in words, the actions, the Manage panel.
@@ -107,7 +116,7 @@
     map.on('mouseleave', 'stays', () => (map.getCanvas().style.cursor = ''));
   }
 
-  map.on('load', () => { addOverlays(); start(); });
+  map.on('load', () => { addOverlays(); start(); if (!state.skyAt && look() !== 'auto') resky(); });
   if (noMap) setTimeout(start, 0);
 
   // ------------------------------------------------------------ day and night where the phone is
@@ -115,7 +124,8 @@
   function sky(lat, lon) {
     const now = state.scrubT || Date.now();
     state.skyAt = [lat, lon];
-    let t = src.forceNight != null ? src.forceNight : state.theme === 'light' ? 1 : state.theme === 'dark' ? 0 : FX.daylight(lat, lon, now);
+    const lk = look();
+    let t = src.forceNight != null ? src.forceNight : lk === 'light' ? 1 : lk === 'dark' ? 0 : FX.daylight(lat, lon, now);
     if (state.daylight != null && Math.abs(t - state.daylight) < 0.01) return;
     state.daylight = t;
     FX.restyle(map, t);
@@ -123,7 +133,7 @@
     document.body.classList.toggle('night', t < 0.5);
     // Light the 3D buildings from where the sun really is (or a soft moon-like light at night).
     // (Always light: an afternoon sun from the south-west; always dark: the night's soft light.)
-    const s = state.theme === 'light' ? { azimuth: 220, altitude: 40 } : state.theme === 'dark' ? { azimuth: 200, altitude: -20 } : FX.sun(lat, lon, now);
+    const s = lk === 'light' ? { azimuth: 220, altitude: 40 } : lk === 'dark' ? { azimuth: 200, altitude: -20 } : FX.sun(lat, lon, now);
     const polar = Math.max(20, Math.min(80, 90 - Math.max(5, s.altitude)));
     try {
       map.setLight({ anchor: 'map', position: [1.4, s.azimuth, polar], color: t > 0.5 ? '#fff6e8' : '#9fb4d6', intensity: t > 0.5 ? 0.42 : 0.25 });
@@ -439,21 +449,29 @@
     if (r && r.fix) moveTo(r.fix.lat, r.fix.lon, r.fix.acc, r.fix.brg, true);
   };
   map.on('dragstart', () => { state.follow = false; $('follow').classList.remove('on'); });
-  const THEMES = { auto: 'Map follows day and night where they are', light: 'Map: always light', dark: 'Map: always dark' };
+  const THEMES = { system: 'Light or dark as this device is set', auto: 'Map follows day and night where they are', light: 'Map: always light', dark: 'Map: always dark' };
   function showTheme() {
     $('theme').dataset.theme = state.theme;
     $('theme').title = THEMES[state.theme];
   }
   showTheme();
   $('theme').onclick = () => {
-    state.theme = { auto: 'light', light: 'dark', dark: 'auto' }[state.theme];
-    try { localStorage.setItem('fx-theme', state.theme); } catch (e) { /* only for this visit */ }
+    state.theme = { system: 'auto', auto: 'light', light: 'dark', dark: 'system' }[state.theme];
+    try { localStorage.setItem('fx-look', state.theme); } catch (e) { /* only for this visit */ }
     showTheme();
     toast(THEMES[state.theme]);
+    resky();
+  };
+  function resky() {
     state.daylight = null;
     const at = state.skyAt || [map.getCenter().lat, map.getCenter().lng];
     sky(at[0], at[1]);
-  };
+  }
+  // The device switching between light and dark (by hand, or at sunset): the page follows at once.
+  if (darkSystem) {
+    const follow = () => { if (state.theme === 'system') resky(); };
+    if (darkSystem.addEventListener) darkSystem.addEventListener('change', follow); else if (darkSystem.addListener) darkSystem.addListener(follow);
+  }
   $('tilt').onclick = () => {
     state.tilt = !state.tilt;
     $('tilt').classList.toggle('on', state.tilt);
