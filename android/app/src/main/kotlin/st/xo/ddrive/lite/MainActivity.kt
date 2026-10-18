@@ -29,9 +29,9 @@ import st.xo.ddrive.core.Words
 import kotlin.concurrent.thread
 
 /**
- * The whole app on screen: connect to a host (its address and your 24 words), turn folder syncing on,
- * and give the phone's permissions. Which folders are synced, and how, is chosen on the host's Sync
- * page, where this phone then shows up.
+ * Connecting the phone to a host (its address and your 24 words) and the phone's own settings:
+ * folder syncing and what the phone has to allow for it. Everything else is the dashboard
+ * (DashboardActivity). Which folders are synced, and how, is chosen on its Sync page.
  */
 class MainActivity : Activity() {
     private lateinit var store: Store
@@ -136,12 +136,13 @@ class MainActivity : Activity() {
     private fun draw() {
         root.removeAllViews()
         statusLine = null
-        root.addView(text("DDrive Lite", 26f, bold = true))
+        root.addView(text(if (store.connected) "This phone" else "DDrive", 26f, bold = true))
         if (!store.connected) drawConnect() else drawConnected()
     }
 
     private fun drawConnect() {
-        root.addView(text("Use a DDrive that runs on another computer, and back up this phone's folders to it.", 15f, MUTED, top = 6))
+        root.addView(text("Your DDrive on this phone: your files, gallery, notes, FindX and everything else the dashboard has, " +
+                          "and this phone's folders backed up to it by themselves.", 15f, MUTED, top = 6))
         root.addView(text("Address of the host's dashboard", 13f, MUTED, top = 28))
         val address = input("http://192.168.1.20:8765 or https://drive.example.com", type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         root.addView(address)
@@ -192,7 +193,7 @@ class MainActivity : Activity() {
                     if (result != null) {
                         go.text = "Connect"
                         say(result)
-                    } else draw()
+                    } else openDashboard("")
                 }
             }
         }
@@ -203,6 +204,7 @@ class MainActivity : Activity() {
 
     private fun drawConnected() {
         root.addView(text("${store.host}\nSigned in as ${store.user}", 14f, MUTED, top = 6))
+        root.addView(button("Open DDrive", top = 16) { openDashboard("") })
         if (store.e2e) root.addView(text("End-to-end encrypted: files are sealed on this phone before they are sent, and your words never leave it.", 13f, OK, top = 4))
 
         root.addView(toggle("Folder syncing", if (store.e2e) "This phone shows up under Sync on your account's page. Its folders are chosen there."
@@ -230,9 +232,7 @@ class MainActivity : Activity() {
         statusLine = text("", 14f, top = 10).also { root.addView(it) }
 
         if (store.sync) {
-            root.addView(button("Open the Sync page", top = 16) {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(store.host + if (store.e2e) "/#sync" else "/#/sync")))
-            })
+            root.addView(button("Open the Sync page", top = 16) { openDashboard("#/sync") })
             root.addView(text("What the phone has to allow", 13f, FAINT, top = 30))
             permission("All files access", "So that any folder you choose on the Sync page can be read, and written for the modes that copy to the phone.",
                        Phone.hasAllFiles(this)) { askAllFiles() }
@@ -256,18 +256,22 @@ class MainActivity : Activity() {
         })
         root.addView(text("Files a sync removes from this phone (the download mirror and two-way modes) are moved to " +
                           "“DDrive Lite/Removed by sync” in the phone's storage and kept 30 days.", 13f, FAINT, top = 26))
-        root.addView(button("Forget the host", top = 30) {
+        root.addView(button("Sign out on this phone", top = 30) {
             AlertDialog.Builder(this).setMessage("Remove the host's address and your sign-in from this phone? Folder syncing stops; " +
                                                  "nothing is deleted on the phone or on the drive.")
-                .setPositiveButton("Forget") { _, _ ->
-                    store.sync = false
-                    SyncService.stop(this)
-                    store.forget()
+                .setPositiveButton("Sign out") { _, _ ->
+                    DashboardActivity.forgetAll(this, store)
                     draw()
                 }.setNegativeButton("Cancel", null).show()
         })
         root.addView(text("Version ${packageManager.getPackageInfo(packageName, 0).versionName}", 12f, FAINT, top = 24))
         refresh()
+    }
+
+    private fun openDashboard(page: String) {
+        startActivity(Intent(this, DashboardActivity::class.java).putExtra(DashboardActivity.EXTRA_PAGE, page)
+                          .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        finish()
     }
 
     private fun refresh() {

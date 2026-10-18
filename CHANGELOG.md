@@ -3,6 +3,21 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.9.0 (2026-10-18)
+
+- **DDrive for Android: the whole dashboard as an app.** The phone app (until now DDrive Lite, which only
+  synced folders) opens your DDrive: Files, Gallery, Notes, FindX, Sync, locked folders, everything the
+  dashboard has, light or dark as the phone is. It signs in by itself with the words it keeps (encrypted with
+  a key in the phone's keystore): for an end-to-end encrypted account the keys are made on the phone and only
+  a sign-in key goes to the host, as in a browser. Folder syncing is as before, under **This phone** in the
+  account menu (or long-press the app's icon).
+- Downloads go to Downloads/DDrive on the phone, an end-to-end account's opened on the phone first; uploads
+  take files from anywhere on the phone; the phone's Back button closes what is open, then goes back a page.
+  Links to anywhere but your drive open in the phone's browser.
+- It is the same app, so it installs over DDrive Lite and keeps its sign-in and folders. Get
+  [DDrive.apk](https://github.com/xo907/ddrive/raw/main/android/release/DDrive.apk).
+- An end-to-end encrypted account needs the host's https address in the app (or a browser), as ever.
+
 ## 3.8.1 (2026-10-18)
 
 - **A file replaced twice in a row no longer shows its old content for a moment.** When a file was sent to the

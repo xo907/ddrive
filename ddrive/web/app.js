@@ -4293,7 +4293,7 @@ async function renderAccount() {
          status && status.e2e && window.accountMove && row("Move everything into another account", "This account's files, folders, earlier versions and deleted files go into another end-to-end encrypted account; then this account is deleted.",
              h("button", { class: "btn ghost small", onclick: () => window.accountMove.send() }, "Move out…")),
          row("Sign out", "On this browser. Signing in again takes your 24 words.",
-             h("button", { class: "btn ghost small", onclick: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } }, "Sign out")),
+             h("button", { class: "btn ghost small", onclick: signOut }, "Sign out")),
          row("Terms and privacy", "What you agreed to, and what happens to your data here.",
              h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
                h("a", { class: "btn ghost small", href: "/terms", target: "_blank", rel: "noopener" }, "Terms"),
@@ -5188,6 +5188,24 @@ async function renderMessages() {
 }
 
 // ------------------------------------------------------------------ account
+// The DDrive app for Android shows this page (DashboardActivity) and signs it in with the words it keeps:
+// signing out there is the app's (it forgets them, and folder syncing stops), and it has settings of its own.
+const PHONE_APP = window.DDriveApp && typeof window.DDriveApp.settings === "function" ? window.DDriveApp : null;
+/** The phone's Back button (the DDrive app asks this first): closes what is open on top, a dialog, a menu,
+ *  the viewer or the side sheet. False when nothing was, and the app goes back a page instead. */
+window.ddBack = () => {
+  const dlg = [...document.querySelectorAll("dialog[open]")].pop();
+  if (dlg) { dlg.close(); return true; }
+  if (ctxEl) { closeMenu(); return true; }
+  if (document.querySelector(".lightbox")) { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); return true; }
+  if ($("#sheet").classList.contains("open")) { closeSheet(); return true; }
+  return false;
+};
+async function signOut() {
+  if (PHONE_APP) return PHONE_APP.signOut();
+  await api("/api/logout", {}).catch(() => null);
+  location.reload();
+}
 $("#account").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   const who = isAccount() ? `${status.admin ? "Admin account" : "Account"} ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in";
@@ -5202,7 +5220,8 @@ $("#account").addEventListener("click", (e) => {
     !SERVER && { label: "Don't trust, verify", icon: "shield", current: route.name === "verify", run: () => go("#/verify") },
     !SERVER && { label: "Find anything", icon: "open", run: openPalette },
     { label: "What's new", icon: "info", run: whatsNew },
-    { label: "Sign out", icon: "signout", run: async () => { await api("/api/logout", {}).catch(() => null); location.reload(); } },
+    PHONE_APP && { label: "This phone", icon: "sync", run: () => PHONE_APP.settings() },
+    { label: "Sign out", icon: "signout", run: signOut },
   ], r.right - 240, r.bottom + 6, who);
 });
 $("#apps").addEventListener("click", (e) => {

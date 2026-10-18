@@ -62,6 +62,13 @@ class Store(context: Context) {
         return HostClient(host, "", auth = Seal.authKey(Words.phraseToKey(phrase)).joinToString("") { "%02x".format(it) })
     }
 
+    /** The 24 words, for signing the dashboard in on this phone (null when they can't be read). */
+    fun phrase(): String? = try {
+        open(prefs.getString("phrase", "") ?: "")
+    } catch (e: Exception) {
+        null
+    }
+
     /** The key the words stand for (an end-to-end account's files and file list are sealed with keys made from it). */
     fun accountKey(): ByteArray? = try {
         Words.phraseToKey(open(prefs.getString("phrase", "") ?: ""))

@@ -27,12 +27,18 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="35">
 
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <!-- The dashboard: what the app opens. -->
+        <activity android:name=".DashboardActivity" android:exported="true" android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
+        <!-- Connecting to a host, and this phone's settings (folder syncing). -->
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
 
         <service android:name=".SyncService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

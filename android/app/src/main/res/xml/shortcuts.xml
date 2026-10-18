@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-pressing the app's icon: this phone's settings (folder syncing, signing out). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="phone" android:enabled="true" android:icon="@drawable/ic_sync"
+        android:shortcutShortLabel="@string/shortcut_phone" android:shortcutLongLabel="@string/shortcut_phone_long">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="st.xo.ddrive.lite"
+            android:targetClass="st.xo.ddrive.lite.MainActivity" />
+    </shortcut>
+</shortcuts>

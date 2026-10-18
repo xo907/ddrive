@@ -810,7 +810,7 @@ Settings) decides who may make one:
   folders are added and run as on the owner's Sync page. The computer seals the files itself, and
   everything said between it and the page (its name, its folders, how a pair is doing) is sealed
   too: your computer passes those messages on unread. `lite ls`, `get` and `put` work as well; a
-  drive letter doesn't yet. The [phone app](#ddrive-lite-for-android) does the same: connected with
+  drive letter doesn't yet. The [phone app](#ddrive-for-android) does the same: connected with
   the account's words it backs up the phone's folders sealed.
 - **On their computers**: `lite mount` shows the account as a drive letter or folder (opened and
   sealed on that computer), file requests let others send them files sealed in the sender's browser,
@@ -1194,17 +1194,26 @@ Ubuntu and Raspberry Pi OS (`ddrive-lite`), which contain only this.
 - Everything the host's dashboard account may see is on the drive. Password-locked folders stay
   hidden (unlocking them is done in the dashboard).
 
-## DDrive Lite for Android
+## DDrive for Android
 
-An app that makes a phone one of the computers on the host's Sync page: it backs up the camera roll,
-or any other folder of the phone, to the drive by itself, and can free the phone of what it has
-uploaded. Get [**DDriveLite.apk**](https://github.com/xo907/ddrive/raw/main/android/release/DDriveLite.apk)
-(the signed app, kept in this repository under `android/release`) and install it by opening the
-file on the phone (Android 8 or later; Android asks once whether your browser or file manager may
-install apps).
+The app for your phone: your DDrive, the whole dashboard (Files, Gallery, Notes, FindX, Sync, locked
+folders, end-to-end encrypted accounts), and backing up the phone's folders to it by itself. Get
+[**DDrive.apk**](https://github.com/xo907/ddrive/raw/main/android/release/DDrive.apk) (the signed app,
+kept in this repository under `android/release`; it was DDrive Lite before 3.9.0 and installs over it)
+and install it by opening the file on the phone (Android 8 or later; Android asks once whether your
+browser or file manager may install apps).
 
-1. Open the app, give the address of the host's dashboard and your 24 words (the drive's recovery
-   phrase, or the words of an [account](#accounts)), and turn on **Folder syncing**.
+Open it and give the address of the host's dashboard and your 24 words (the drive's recovery phrase, or
+the words of an [account](#accounts)). From then on it opens straight into the dashboard, signed in: for
+an end-to-end encrypted account the keys are made on the phone, and only a sign-in key made from them goes
+to the host, as in a browser (which needs the host's **https** address; plain http works for the owner).
+Downloads go to Downloads/DDrive, uploads take files from anywhere on the phone, the Back button closes
+what is open and then goes back a page, and links to anywhere but your drive open in the phone's browser.
+**This phone** in the account menu (or a long press on the app's icon) has folder syncing and signing out.
+
+### Folder syncing
+
+1. In the app, open **This phone** (account menu) and turn on **Folder syncing**.
 2. Allow what it asks for: *All files access* (any folder can be chosen, and the modes that copy to
    the phone can write), notifications (the one that says syncing is running) and running in the
    background (otherwise Android stops it after a while).
@@ -1231,8 +1240,7 @@ install apps).
 - The 24 words are kept on the phone encrypted with a key in Android's keystore. Over plain `http`
   they travel unencrypted when signing in: fine on your own Wi-Fi, use the host's `https` address
   elsewhere.
-- The app syncs folders; it does not show the drive as a folder on the phone. For browsing the drive
-  on a phone, open the dashboard in the browser (it works as an app there: "Add to Home screen").
+- The drive doesn't show up as a folder in the phone's own Files app; it is browsed in the app.
 - It is built from `android/` (`./gradlew :core:test :app:assembleRelease`); the tests run the phone's
   syncing against a real DDrive host. Releases are signed with a key that is kept outside the
   repository (the secrets `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`); an update only
@@ -1381,7 +1389,7 @@ the drive at once, elsewhere and for changes on the drive it checks every few se
 - Computers that use the drive through [DDrive Lite](#ddrive-lite) can sync their folders too. Turn
   it on there (`lite sync on`); each such computer is then listed on this Sync page under the host's
   folders, and its folders are added and run from here. So is a phone with
-  [DDrive Lite for Android](#ddrive-lite-for-android).
+  [DDrive for Android](#ddrive-for-android).
 
 ## Snapshots
 

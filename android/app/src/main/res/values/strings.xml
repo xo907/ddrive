@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">DDrive Lite</string>
+    <string name="app_name">DDrive</string>
+    <string name="shortcut_phone">This phone</string>
+    <string name="shortcut_phone_long">Folder syncing and sign-in on this phone</string>
 </resources>
