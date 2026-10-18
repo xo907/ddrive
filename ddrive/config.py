@@ -165,6 +165,7 @@ class Config:
     legal_region: str = ""             # whose law the terms are under, e.g. "England and Wales" (empty: not said)
     fetch_private: bool = False        # "save from a link" may also fetch from this computer and the home network
     lock_timeout_minutes: float = 15.0  # password-locked folders lock again after this long (0 = until the drive restarts)
+    update_check: bool = True          # ask GitHub twice a day whether a newer DDrive is out (updates.py; nothing is sent)
     sync_jobs: list = field(default_factory=list)  # folders kept in sync with the drive ('sync add', dashboard Sync)
     sync_remote_edit: bool = False     # let the dashboard on other devices add or change sync folders
     discord_user_token: str = ""       # your own Discord account, for the message logger and archiver (dashboard: Settings)

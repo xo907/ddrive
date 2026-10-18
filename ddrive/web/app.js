@@ -6,10 +6,16 @@ const $ = (sel) => document.querySelector(sel);
 const main = $("#main");
 let status = null;
 let pageVersion = "", toldReload = false;
+/** Where the page's notices go (one under the other, at the top). */
+function bars() {
+  let el = document.getElementById("bars");
+  if (!el) { el = h("div", { id: "bars" }); document.body.append(el); }
+  return el;
+}
 function reloadNotice(version) {
   const bar = h("div", { class: "reload-bar", role: "status" }, `DDrive was updated to ${version}. This page is still the old one. `,
     h("button", { class: "btn small", onclick: () => location.reload() }, "Reload"));
-  document.body.append(bar);
+  bars().append(bar);
 }
 let route = { name: "", args: [] };
 // Somebody signed in to an account (not the owner) has files and tools of their own, and none of the
@@ -541,11 +547,15 @@ async function refreshStatus() {
   const seen = status ? JSON.stringify(status) : "";
   if (seen && seen === statusSeen && route.name !== "health" && route.name !== "resources") return;
   statusSeen = seen || "-";
+  downNotice(!status);
   // The drive was updated while this page was open: the page is still the old one until it is loaded again.
   if (status && status.version) {
     if (!pageVersion) pageVersion = status.version;
+    else if (status.version !== pageVersion && updatingNow) location.reload();        // (updated from here: the new page at once)
     else if (status.version !== pageVersion && !toldReload) { toldReload = true; reloadNotice(status.version); }
   }
+  updateNotice();
+  appNotice();
   const dot = $("#sync-dot"), text = $("#sync-text");
   if (!status) { dot.className = "dot warn"; text.textContent = "Not reachable"; return; }
   if (status.retired) retiredNotice();
@@ -2376,6 +2386,7 @@ const SETTING_ROWS = [
     ["cache_mode", "Read cache", "Disk keeps opened files for faster reopening; memory stores nothing on disk.", ["disk", "memory"]],
     ["hidden_folders", "Hidden folders", "Folders this computer doesn't show, e.g. /Movies. Separate with commas.", "list"],
     ["lock_timeout_minutes", "Lock folders again after (minutes)", "Password-locked folders close this long after they were last used. 0: only when you lock them or the drive restarts.", "num"],
+    ["update_check", "Tell me about new versions", "Twice a day DDrive asks GitHub which version is the newest (nothing about this drive is sent), and the dashboard says when there is a newer one.", "bool"],
   ]],
 ];
 
@@ -4289,7 +4300,7 @@ function retiredDialog() {
 function retiredNotice() {
   if (retiredTold) return;
   retiredTold = true;
-  document.body.append(h("div", { class: "reload-bar", role: "status" }, "This account isn't end-to-end encrypted and can only be read now. ",
+  bars().append(h("div", { class: "reload-bar", role: "status" }, "This account isn't end-to-end encrypted and can only be read now. ",
     h("button", { class: "btn small", onclick: retiredDialog }, "Move it")));
   retiredDialog();
 }
@@ -4738,9 +4749,13 @@ document.addEventListener("paste", (e) => {
 async function whatsNew() {
   const data = await attempt(() => api("/api/changelog"));
   if (!data) return;
+  modal(`What's new · version ${data.version}`, changelogBody(data.text));
+}
+/** A changelog (markdown, as CHANGELOG.md has it) as the page shows it. */
+function changelogBody(text) {
   const body = h("div", { class: "changelog" });
   let list = null;
-  for (const line of (data.text || "No changelog found.").split("\n")) {
+  for (const line of (text || "No changelog found.").split("\n")) {
     const t = line.trim();
     if (!t || t.startsWith("# ")) { list = null; continue; }
     if (t.startsWith("## ")) { list = null; body.append(h("h4", {}, t.slice(3))); }
@@ -4748,7 +4763,80 @@ async function whatsNew() {
     else if (list && line.startsWith("  ")) list.lastChild && list.lastChild.append(" " + t);
     else { list = null; body.append(h("p", { class: "muted" }, t)); }
   }
-  modal(`What's new · version ${data.version}`, body);
+  return body;
+}
+
+// ------------------------------------------------------------------ updates (updates.py)
+// The owner is told when a newer DDrive is out, once per version (until it is dismissed), with what is new
+// and how to get it: "Update now" for a copy installed with git, a download otherwise. While the drive
+// restarts, the page says so and waits for it; after an update it loads itself again.
+const newer = (a, b) => {
+  const x = String(a || "").split(".").map(Number), y = String(b || "").split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); }
+  return false;
+};
+let updateBar = null, updateShown = "", updatingNow = false;
+function dismissedUpdate() { try { return localStorage.getItem("dd-update-seen") || ""; } catch { return ""; } }
+function updateNotice() {
+  const u = status && !isAccount() && status.update;
+  const want = u && (u.updating ? "updating:" + u.updating.state : u.latest && u.latest !== dismissedUpdate() ? "new:" + u.latest : "");
+  if (want === updateShown) return;
+  updateShown = want || "";
+  if (updateBar) { updateBar.remove(); updateBar = null; }
+  if (!want) return;
+  if (u.updating) {
+    const failed = u.updating.state === "failed" || u.updating.state === "done";
+    updateBar = h("div", { class: "reload-bar", role: "status" }, u.updating.message,
+      failed && h("button", { class: "btn ghost small", onclick: () => { updateBar.remove(); updateBar = null; } }, "OK"));
+  } else {
+    const git = u.kind === "git";
+    updateBar = h("div", { class: "reload-bar", role: "status" }, `DDrive ${u.latest} is out (this is ${u.current}).`,
+      u.notes && h("button", { class: "btn ghost small", onclick: () => modal(`What's new in ${u.latest}`, changelogBody(u.notes)) }, "What's new"),
+      git ? h("button", { class: "btn small", onclick: installUpdate }, "Update now")
+          : h("a", { class: "btn small", href: u.download, target: "_blank", rel: "noopener" }, "Download"),
+      h("button", { class: "icon-btn", "aria-label": "Not now", title: "Not now (until the next version)",
+                    onclick: () => { try { localStorage.setItem("dd-update-seen", u.latest); } catch { /* this visit */ } updateNotice(); } }, icon("close")));
+  }
+  bars().append(updateBar);
+}
+async function installUpdate() {
+  const ok = await ask({ title: "Update DDrive now?", ok: "Update now", text: "DDrive downloads the new version, then stops the way it always does (what is uploading is finished first) "
+    + "and starts again with it. The drive is away for a minute or so; this page waits for it and loads itself again." });
+  if (!ok) return;
+  const r = await attempt(() => api("/api/update/install", {}));
+  if (!r) return;
+  updatingNow = true;
+  await refreshStatus();
+}
+async function checkForUpdate() {
+  const r = await attempt(() => api("/api/update/check", {}));
+  if (!r) return;
+  toast(r.latest ? `DDrive ${r.latest} is out` : `This is the newest DDrive (${r.current})`);
+  try { localStorage.removeItem("dd-update-seen"); } catch { /* ignore */ }
+  await refreshStatus();
+}
+// The drive not answering: an update restarting it, usually. Said once, quietly, and gone when it is back.
+let downBar = null;
+function downNotice(down) {
+  if (down && !downBar) {
+    downBar = h("div", { class: "reload-bar", role: "status" },
+      updatingNow ? "DDrive is restarting with the new version. This page loads itself again when it is back…"
+                  : "DDrive isn't answering: it may be restarting (an update), or this device lost its connection. Trying again…");
+    bars().append(downBar);
+  } else if (!down && downBar) { downBar.remove(); downBar = null; }
+}
+// The DDrive app for Android, shown this page: told when a newer one is published (and where it is).
+function appNotice() {
+  const apps = status && (status.update || status.apps);
+  if (!PHONE_APP || appNotice.done || !apps || !apps.app || typeof PHONE_APP.version !== "function") return;
+  const mine = PHONE_APP.version();
+  if (!newer(apps.app, mine)) return;
+  appNotice.done = true;
+  const url = apps.app_apk || "https://github.com/xo907/ddrive/raw/main/android/release/DDrive.apk";
+  const bar = h("div", { class: "reload-bar", role: "status" }, `A newer DDrive app is out (${apps.app}; this phone has ${mine}).`,
+    h("a", { class: "btn small", href: url, target: "_blank", rel: "noopener" }, "Get it"),
+    h("button", { class: "icon-btn", "aria-label": "Not now", onclick: () => bar.remove() }, icon("close")));
+  bars().append(bar);
 }
 
 // ------------------------------------------------------------------ Discord messages
@@ -5250,6 +5338,7 @@ $("#account").addEventListener("click", (e) => {
     !SERVER && { label: "Don't trust, verify", icon: "shield", current: route.name === "verify", run: () => go("#/verify") },
     !SERVER && { label: "Find anything", icon: "open", run: openPalette },
     { label: "What's new", icon: "info", run: whatsNew },
+    !isAccount() && { label: "Check for updates", icon: "refresh", run: checkForUpdate },
     PHONE_APP && { label: "This phone", icon: "sync", run: () => PHONE_APP.settings() },
     { label: "Sign out", icon: "signout", run: signOut },
   ], r.right - 240, r.bottom + 6, who);

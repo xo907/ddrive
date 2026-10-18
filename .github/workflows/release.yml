@@ -77,8 +77,18 @@ jobs:
           python -m pip install cryptography
           mkdir -p ../dist
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::No signing key in this repository's secrets: the release has no Android app."
+            # No key here: the app is built and signed on the maintainer's computer and kept in the repository
+            # (android/release/DDrive.apk). That one goes into the release when it is this version.
             ./gradlew --console=plain :core:test :app:assembleDebug
+            want="${GITHUB_REF_NAME#v}"
+            aapt="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)aapt"
+            have="$("$aapt" dump badging release/DDrive.apk 2>/dev/null | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+            if [ -n "$want" ] && [ "$have" = "$want" ]; then
+              cp release/DDrive.apk ../dist/DDrive.apk
+              echo "::notice::The release has the signed DDrive.apk $have from the repository."
+            else
+              echo "::warning::No signing key in this repository's secrets, and android/release/DDrive.apk is ${have:-missing}, not $want: the release has no Android app."
+            fi
             exit 0
           fi
           # Pasted secrets often carry a line break or spaces: neither belongs to the key or its password.

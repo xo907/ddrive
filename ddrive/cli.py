@@ -1133,7 +1133,20 @@ def cmd_mount(args):
         log.error("%s", e)
         print(f"\n[ERROR] {e}")
         return 1
+    restart_if_asked(drive)
     return 0
+
+
+def restart_if_asked(drive):
+    """Updated from the dashboard (updates.py): the drive has stopped the usual way; it starts again with
+    the new code in this same process, so whatever runs it (systemd, a terminal) carries on as it was."""
+    if not getattr(drive, "restart_requested", False):
+        return
+    from .updates import restart_command
+    cmd = restart_command()
+    print("Restarting with the new version: " + " ".join(cmd))
+    sys.stdout.flush()
+    os.execv(cmd[0], cmd)
 
 
 def cmd_stop(args):

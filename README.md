@@ -1548,7 +1548,21 @@ The repository moved too. **Update DDrive** in the menu points your copy at the 
 itself; if you update with `git pull`, do it once by hand:
 `git remote set-url origin https://github.com/xo907/ddrive.git`.
 
-In the menu choose **4 (Update DDrive)**. It stops the drive, downloads the latest version,
+**From the dashboard.** Twice a day the drive asks GitHub which version is the newest (nothing about
+the drive is sent; Settings › This computer › *Tell me about new versions* turns it off, and the
+account menu has *Check for updates*). When there is a newer one, the owner's dashboard says so, with
+what is new, and:
+
+- a copy installed with git (run.bat / run.sh) has **Update now**: it downloads the new version, stops
+  the drive the usual way (what is uploading is finished first) and starts it again with it, in the
+  same process, so a systemd service or a terminal window carries on as it was (on Windows it
+  downloads it and asks you to restart DDrive from the menu);
+- DDrive.exe and the .deb package get a link to the new release, to download and install over it.
+
+While the drive restarts the dashboard says "DDrive isn't answering… trying again", and loads itself
+again when it is back. The phone apps are told the same way when a newer DDrive app or FindX is out.
+
+**From the menu**, choose **4 (Update DDrive)**. It stops the drive, downloads the latest version,
 starts the drive again and reopens the menu. Your settings, key and data are stored outside the
 program folder, so updating never touches them. (`git pull` alone isn't enough: a running drive
 keeps using the old version until it is restarted.)

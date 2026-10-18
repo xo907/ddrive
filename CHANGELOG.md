@@ -3,6 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.11.0 (2026-10-18)
+
+- **DDrive tells you when there is a new version, and updates itself.** Twice a day the drive asks GitHub
+  which version is the newest (nothing about your drive is sent; it can be turned off in Settings › This
+  computer). When a newer one is out, the owner's dashboard says so at the top, with what is new. A copy
+  installed with git (run.bat / run.sh) has **Update now**: it downloads the new version, stops the drive the
+  usual way (uploads finished first) and starts again with the new code, so a systemd service carries on as
+  it was. DDrive.exe and the .deb package get a link to the download. *Check for updates* is in the account
+  menu.
+- **While the drive is restarting** (an update), the dashboard says "DDrive isn't answering… trying again"
+  instead of failing, and loads itself again when it is back.
+- **The DDrive app for Android is told when a newer app is out**, with a link to it.
+- Notices at the top of the page stack instead of covering each other.
+- Releases: the Android app built and signed on the maintainer's computer goes into the GitHub release
+  when the repository has no signing key of its own.
+
 ## 3.10.1 (2026-10-18)
 
 - **FindX after an update: your phones are there at once.** The FindX tab said "No devices yet" after every

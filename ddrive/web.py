@@ -27,6 +27,7 @@ import posixpath
 import re
 import secrets
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -45,6 +46,7 @@ from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
 from .findx import Relay as FindXRelay
+from . import updates
 from .findxcircles import Circles as FindXCircles
 from .findxweb import FindXHandlers
 from .logbuf import QUIET
@@ -111,7 +113,7 @@ OWNER_ONLY = frozenset(("/api/signin/passkey/options", "/api/signin/passkey/regi
 # Not here, so not an admin's: the owner's files and everything that lists or opens them, and how the
 # owner signs in (with that it could make itself a sign-in that switching it off doesn't end).
 ADMIN_GET = frozenset("""status signin settings accounts accounts/moves log check changelog""".split())
-ADMIN_POST = frozenset("""logout settings accounts/create accounts/admin accounts/invite accounts/invite/revoke
+ADMIN_POST = frozenset("""logout settings update/check update/install accounts/create accounts/admin accounts/invite accounts/invite/revoke
     accounts/disable accounts/delete accounts/restore accounts/moves/cancel log/clear
     repair repair/recheck resources/clean check/start check/stop check/remove""".split())
 
@@ -223,11 +225,14 @@ class WebServer:
         self.monitor_cache = (0.0, None)  # /api/monitor, worked out at most every 2 seconds
         self.findx = FindXRelay(path=os.path.join(self.cfg.resolved_data_dir, "findx-relay.json"))   # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
         self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
+        self.updates = updates.Updates(self.cfg)    # whether a newer DDrive is out, and updating to it (updates.py)
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
         self._thread = threading.Thread(target=self.httpd.serve_forever, name="WebDashboard", daemon=True)
         self._thread.start()
+        if not getattr(self.drive, "local_test_dir", None):        # (a test drive asks nobody)
+            self.updates.start()
         threading.Thread(target=self._clean_thumbs, name="Thumbs", daemon=True).start()
         self.accounts.start()
         self.moves.start()
@@ -258,6 +263,7 @@ class WebServer:
         threading.Thread(target=bye, name="EraseDone", daemon=True).start()
 
     def stop(self):
+        self.updates.stop()
         self.findx.close()                # (kept for the next start: the dashboard shows the phones at once)
         self.findx_circles.close()
         self.lite.close()
@@ -1209,6 +1215,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                 "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
                 "fetches": self._fetch_list(), "public": self.public_base(),
                 "thumbs": self._thumbs_rule(),
+                "apps": self.server.app.updates.apps(),                # the newest phone apps (DDrive, FindX)
             }, fresh=True)
         devices = []
         for dev, info in sorted(d.index.devices().items(), key=lambda kv: -kv[1].get("seen", 0)):
@@ -1256,6 +1263,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             "locks": {"count": d.locks.count(), "open": len(d.fs.scope.unlocked)},
             "fetches": [] if self._admin else self._fetch_list(),
             "thumbs": self._thumbs_rule(),
+            "update": self.server.app.updates.status(),     # a newer DDrive (and FindX), and how to get it
         }
         # What the computer is using right now is different every time it is asked: it is only given to
         # the page that shows it (?res=1), so that every other page's status can be "the same as before".
@@ -3297,6 +3305,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         "cache_mode": (str, True, lambda v: v in ("disk", "memory")),
         "hidden_folders": (list, False, None),
         "lock_timeout_minutes": (float, False, lambda v: 0 <= v <= 100000),
+        "update_check": (bool, False, None),
         "webdav_enabled": (bool, False, None),
         "chat_pace": (str, False, lambda v: v in ("gentle", "normal")),
         "thumbs_store": (str, False, lambda v: v in ("server", "browser")),
@@ -3308,6 +3317,45 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         "operator_contact": (str, False, lambda v: len(v) <= 200),
         "legal_region": (str, False, lambda v: len(v) <= 200),
     }
+
+    # ------------------------------------------------------------ updates (updates.py)
+    def _post_api_update_check(self):
+        if self._acct is not None and not self._admin:
+            raise ApiError(403, "Only the drive's owner updates it")
+        self.server.app.updates.check()
+        self._json(self.server.app.updates.status())
+
+    def _post_api_update_install(self):
+        """Update now: git pull, then the drive stops as it always does and starts again with the new code."""
+        if self._acct is not None and not self._admin:
+            raise ApiError(403, "Only the drive's owner updates it")
+        up = self.server.app.updates
+        if getattr(self.drive, "local_test_dir", None):
+            raise ApiError(400, "A test drive isn't updated")
+        if updates.install_kind() != "git":
+            raise ApiError(400, "This copy of DDrive wasn't installed with git: download the new version from the releases page.")
+        if up.updating and up.updating.get("state") in ("pulling", "restarting"):
+            return self._json({"ok": True, "updating": up.updating})
+        up.updating = {"state": "pulling", "message": "Downloading the new version…"}
+        drive = self.drive
+
+        def run():
+            ok, said = up.pull()
+            if not ok:
+                up.updating = {"state": "failed", "message": "It couldn't be updated: " + (said.splitlines()[-1] if said else "git failed")}
+                return
+            if sys.platform == "win32":
+                # (on Windows a program can't stop itself the gentle way from here: the menu does it)
+                up.updating = {"state": "done", "message": "Downloaded. Restart DDrive to use it (the menu: Stop, then Start)."}
+                return
+            up.updating = {"state": "restarting", "message": "Restarting with the new version…"}
+            log.info("Updated with git; restarting with the new version")
+            drive.restart_requested = True
+            time.sleep(1.0)                      # (the page hears "restarting" first)
+            import signal
+            os.kill(os.getpid(), signal.SIGTERM)  # the usual way down; cli.cmd_mount starts it again (os.execv)
+        threading.Thread(target=run, name="Update", daemon=True).start()
+        self._json({"ok": True, "updating": up.updating})
 
     def _get_api_settings(self):
         cfg = self.drive.cfg

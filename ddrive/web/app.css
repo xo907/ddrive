@@ -309,7 +309,9 @@ dialog input[hidden] { display: none; }
          padding: 10px 14px; border-radius: var(--radius); background: var(--ink); color: var(--bg); font-size: 13px;
          opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 40; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
-.reload-bar { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center;
+#bars { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column;
+        align-items: center; gap: 8px; max-width: calc(100vw - 32px); }
+.reload-bar { display: flex; align-items: center; flex-wrap: wrap;
               gap: 12px; padding: 8px 10px 8px 14px; border: 1px solid var(--line); border-radius: var(--radius);
               background: var(--panel); box-shadow: var(--shadow); font-size: 13px; max-width: calc(100vw - 32px); }
 .sync-note { margin-top: 8px; }
