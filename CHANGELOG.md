@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.10.1 (2026-10-18)
+
+- **FindX after an update: your phones are there at once.** The FindX tab said "No devices yet" after every
+  update or restart of the drive, for up to six hours, and ringing a phone didn't work meanwhile: the drive
+  kept what the phones had told it in memory only, and a phone tells it its name and card only every few
+  hours. Now it keeps it (sealed as it came, like everything of FindX's) in `findx-relay.json` in the drive's
+  data folder, and circles keep their people the same way, so the map, live links, ringing and "arrived at
+  Home" all go on right after a restart. A phone the drive knows nothing of is asked to say hello again.
+- After a restart, rings and circle messages could also be taken by the phones for old ones (their numbers
+  started again from 1): numbering goes on now.
+- The FindX app (0.1.1) tells "DDrive isn't answering (it may be restarting)" apart from other problems, and
+  tries again within two minutes rather than up to fifteen; a drive being restarted no longer makes it check
+  for commands more often (and use more battery) from then on.
+
 ## 3.10.0 (2026-10-18)
 
 - **Choose what is in the menu.** Settings › This browser › **In the menu** (on an account's page: under Your

@@ -1262,7 +1262,7 @@ sends is sealed on the phone with keys made from your 24 words.
   the day). The map follows day and night where the phone is. From there you can **Ring** a phone
   (loud even on silent and Do Not Disturb), **Pin it down** (its most precise position, which
   tightens on the map as you watch), watch it **Live**, or turn on **Lost mode**. In between, the
-  drive only keeps each phone's latest sealed report in memory and passes sealed commands on
+  drive only keeps each phone's latest sealed report (and its card) and passes sealed commands on
   (`/api/findx/…`, findx.py); a phone waits for commands with one request the drive holds open for
   four minutes, so it hears a "ring" at once at almost no battery cost. A phone sends every few
   seconds only while somebody has its map open.
@@ -1279,7 +1279,7 @@ sends is sealed on the phone with keys made from your 24 words.
   (`/j/<circle>#<key>`), from any drive or none. Its key is its own (not anybody's words) and only in
   the invitation, after the `#`: the drive keeps a hash of the token it makes, the circle's sealed name
   and places (in `findx-circles.json`, in the drive's data folder, so circles survive a restart) and,
-  in memory, each member's latest sealed report. Members are random ids to it. Your circles' people
+  each member's latest sealed report. Members are random ids to it. Your circles' people
   are on the FindX tab too, with their own coloured faces, and **Ring** works from there.
 - **Manage from here.** A phone's **Manage** button has what the app has: its battery and what FindX
   used it on (today and the last two weeks), its settings (name, history and its detail, the Bluetooth
@@ -1297,9 +1297,10 @@ account, no cookies): the FindX pages are allowed to fetch from there and nowher
 
 **Behind a reverse proxy**, let a request take up to five minutes for `/api/findx/wait` (Nginx Proxy
 Manager: Advanced, `proxy_read_timeout 300s;`). Most proxies cut requests off after a minute; FindX
-notices and then asks every 50 seconds instead, which works too but wakes the phone's radio more often. What's live
-is kept in memory only, so a restart of the drive loses nothing that matters: phones say hello
-again within minutes and history is in files.
+notices and then asks every 50 seconds instead, which works too but wakes the phone's radio more often. What's live is
+kept in memory and, sealed as it came, in `findx-relay.json` and `findx-circles.json` in the drive's
+data folder, so a restart (an update) loses nothing: the FindX tab shows your phones at once, and
+history is in files.
 
 ## Password-locked folders
 

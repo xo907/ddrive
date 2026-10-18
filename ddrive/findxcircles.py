@@ -61,7 +61,11 @@ class Circles:
         self._cv = threading.Condition()
         self._circles = {}
         self._waiters = {}        # member -> newest wait's number
+        self._dirty = False
+        self._stop = threading.Event()
         self._load()
+        if self._path:
+            threading.Thread(target=self._saver, name="FindXCirclesSave", daemon=True).start()
 
     # ------------------------------------------------------------ kept on disk
 
@@ -72,19 +76,45 @@ class Circles:
             with open(self._path, encoding="utf-8") as f:
                 data = json.load(f)
             for cid, c in (data.get("circles") or {}).items():
-                self._circles[cid] = _Circle(c["auth"], c.get("who", ""), c.get("info"), c.get("made", 0))
+                x = self._circles[cid] = _Circle(c["auth"], c.get("who", ""), c.get("info"), c.get("made", 0))
+                x.seq = int(c.get("seq") or 0)
+                for mid, m in (c.get("members") or {}).items():      # (each one's latest sealed report: the map has them at once)
+                    y = x.members[mid] = _Member()
+                    y.blob, y.at, y.seen = m.get("blob"), float(m.get("at") or 0), float(m.get("seen") or 0)
         except (OSError, ValueError, KeyError, TypeError):
             pass                  # a damaged file: circles are made again by their members' phones
 
     def _save(self):
         if not self._path:
             return
-        data = {"circles": {cid: {"auth": c.auth, "who": c.who, "info": c.info, "made": c.made} for cid, c in self._circles.items()}}
+        self._dirty = False
+        data = {"circles": {cid: {"auth": c.auth, "who": c.who, "info": c.info, "made": c.made, "seq": c.seq,
+                                  "members": {mid: {"blob": m.blob, "at": m.at, "seen": m.seen} for mid, m in c.members.items()}}
+                            for cid, c in self._circles.items()}}
         tmp = self._path + ".tmp"
         os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, self._path)
+
+    def _saver(self):
+        """What changes often (members' reports, command numbers) is written at most every 15 seconds."""
+        while not self._stop.wait(15.0):
+            with self._cv:
+                if self._dirty:
+                    try:
+                        self._save()
+                    except OSError:
+                        self._dirty = True
+
+    def close(self):
+        self._stop.set()
+        with self._cv:
+            if self._dirty:
+                try:
+                    self._save()
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------ inside
 
@@ -158,6 +188,7 @@ class Circles:
                     raise RelayError(429, "This circle is full")
                 m = c.members[member] = _Member()
             m.blob, m.at, m.seen = blob, now, now
+            self._dirty = True
             self._cv.notify_all()
             return c.watched > now
 
@@ -188,6 +219,7 @@ class Circles:
                 raise RelayError(404, "Nobody with that id is in this circle")
             c.seq += 1
             c.commands.append((c.seq, to, sender, blob, now))
+            self._dirty = True
             if len(c.commands) > COMMANDS_MAX:
                 c.commands = c.commands[-COMMANDS_MAX:]
             self._cv.notify_all()
@@ -218,6 +250,11 @@ class Circles:
                 m = c.members.get(member)
                 if m is not None:
                     m.seen = now
+                if after > c.seq:
+                    # The phone has had commands numbered further than this drive has got (an earlier version
+                    # forgot them over a restart): numbers go on from there, or new ones would look old to it.
+                    c.seq = after
+                    self._dirty = True
                 mine.append((circle, c, after))
             self._waiters[member] = me = self._waiters.get(member, 0) + 1
             end = time.monotonic() + wait

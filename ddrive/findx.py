@@ -3,9 +3,11 @@
 FindX (the Android app) seals everything before it sends it, with keys made from the 24 words that
 only the phones and your browser have. So this relay never reads anything: it keeps the latest
 sealed report and card of each device, hands sealed commands to the device they are for, and
-passes a link's sealed report to whoever opens that link. It is all kept in memory: a restart loses
-only what was live, the phones say hello again within minutes, and history is kept in files
-(/FindX on the drive, written by the phones themselves). FindX's PROTOCOL.md describes the formats.
+passes a link's sealed report to whoever opens that link. It is kept in memory and, as sealed as it
+came, in a file in the drive's data folder (findx-relay.json), so that a restart (an update) loses
+nothing: the dashboard shows your phones at once, links go on working and a "ring" still reaches the
+phone. History is kept in files (/FindX on the drive, written by the phones themselves). FindX's
+PROTOCOL.md describes the formats.
 
 Everything is kept apart by who is signed in (the owner, or an account) and the group a phone names
 (made from the words, the same on all of one person's devices): one account can't see another's
@@ -18,9 +20,14 @@ commands are answered with whether anybody is watching.
 
 import base64
 import binascii
+import json
+import logging
+import os
 import re
 import threading
 import time
+
+log = logging.getLogger(__name__)
 
 WAIT_MAX = 240            # seconds a phone's wait for commands is held open at most
 WATCH_S = 60.0            # a map or a link counts as open this long after it last asked
@@ -33,6 +40,7 @@ SHARES_MAX = 50           # live links per device
 SHARES_TOTAL = 20000      # live links on this drive
 ENDED_KEEP_S = 7 * 86400  # an ended link answers "ended" (410) this long, then "not found"
 DEVICE_KEEP_S = 30 * 86400  # a device not heard from in this long is forgotten
+SAVE_EVERY_S = 15.0       # what changed is written to the file at most this often (and when the drive stops)
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
@@ -97,13 +105,88 @@ class _Share:
 
 
 class Relay:
-    def __init__(self, clock=time.time):
+    def __init__(self, clock=time.time, path=None):
         self._clock = clock
         self._cv = threading.Condition()
         self._groups = {}         # (who, group) -> _Group
         self._shares = {}         # share id -> _Share
         self._ended = {}          # share id -> when it ended
         self._swept = 0.0
+        self._path = path         # where it is kept between restarts (None: memory only)
+        self._dirty = False
+        self._saved = 0.0
+        self._stop = threading.Event()
+        self._load()
+        if path:
+            threading.Thread(target=self._saver, name="FindXRelaySave", daemon=True).start()
+
+    # ------------------------------------------------------------ kept on disk (everything in it is sealed)
+
+    def _load(self):
+        if not self._path or not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                data = json.load(f)
+            for g in data.get("groups") or []:
+                grp = _Group()
+                grp.seq = int(g.get("seq") or 0)
+                for dev, d in (g.get("devices") or {}).items():
+                    x = grp.devices[dev] = _Device()
+                    x.card, x.report = d.get("card"), d.get("report")
+                    x.at, x.seen = float(d.get("at") or 0), float(d.get("seen") or 0)
+                self._groups[(g["who"], g["group"])] = grp
+            for sid, x in (data.get("shares") or {}).items():
+                sh = self._shares[sid] = _Share(x["who"], x["group"], x["device"], int(x.get("until") or 0))
+                sh.blob, sh.at = x.get("blob"), float(x.get("at") or 0)
+            self._ended = {sid: float(at) for sid, at in (data.get("ended") or {}).items()}
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            log.warning("FindX: the relay's file couldn't be read (%s); the phones fill it again", e)
+            self._groups, self._shares, self._ended = {}, {}, {}
+
+    def _changed(self):
+        """(Under the lock.) Something worth keeping changed: written soon, by the saver."""
+        self._dirty = True
+
+    def _snapshot(self):
+        return {
+            "v": 1,
+            "groups": [{"who": who, "group": group, "seq": g.seq,
+                        "devices": {dev: {"card": d.card, "report": d.report, "at": d.at, "seen": d.seen} for dev, d in g.devices.items()}}
+                       for (who, group), g in self._groups.items()],
+            "shares": {sid: {"who": x.who, "group": x.group, "device": x.device, "until": x.until, "blob": x.blob, "at": x.at}
+                       for sid, x in self._shares.items()},
+            "ended": self._ended,
+        }
+
+    def save(self):
+        """Write what changed (now). Called by the saver, and when the drive stops."""
+        if not self._path:
+            return
+        with self._cv:
+            if not self._dirty:
+                return
+            data = self._snapshot()
+            self._dirty = False
+        try:
+            tmp = self._path + ".tmp"
+            os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, separators=(",", ":"))
+            os.replace(tmp, self._path)
+            self._saved = time.time()
+        except OSError as e:
+            with self._cv:
+                self._dirty = True
+            log.warning("FindX: the relay's file couldn't be written: %s", e)
+
+    def _saver(self):
+        while not self._stop.wait(SAVE_EVERY_S):
+            self.save()
+
+    def close(self):
+        self._stop.set()
+        self.save()
 
     # ------------------------------------------------------------ inside
 
@@ -144,6 +227,7 @@ class Relay:
                     del g.devices[dev]
             if not g.devices and not g.commands:
                 del self._groups[key]
+        self._dirty = True        # (what ran out is gone from the file too)
 
     def _watching(self, g, device, now):
         d = g.devices.get(device)
@@ -158,6 +242,7 @@ class Relay:
             self._sweep(now)
             d = self._device(self._group(who, group), device)
             d.card, d.seen = card, now
+            self._changed()
 
     def report(self, who, group, device, blob, shares=None):
         """A device's latest report, and one sealed for each of its live links. Returns
@@ -174,6 +259,7 @@ class Relay:
             device = _id(device, "device")
             d = self._device(g, device)
             d.report, d.at, d.seen = blob, now, now
+            self._changed()
             open_links = []
             for sid, b in sealed.items():
                 s = self._shares.get(sid)
@@ -200,6 +286,12 @@ class Relay:
             g = self._group(who, group)
             d = self._device(g, device)
             d.seen = now
+            if after > g.seq:
+                # The phone has had commands numbered further than this relay has got (it was emptied: an
+                # earlier version kept nothing over a restart). Numbers go on from there, or new ones
+                # would look old to the phone.
+                g.seq = after
+                self._changed()
             d.waiter += 1
             me = d.waiter
             end = time.monotonic() + wait
@@ -227,6 +319,7 @@ class Relay:
                 raise RelayError(404, "No device with that id has said hello here")
             g.seq += 1
             g.commands.append((g.seq, to, blob, now))
+            self._changed()
             if len(g.commands) > COMMANDS_MAX:
                 g.commands = g.commands[-COMMANDS_MAX:]
             self._cv.notify_all()
@@ -283,6 +376,7 @@ class Relay:
                     raise RelayError(429, "Too many live links")
                 s = self._shares[share] = _Share(who, group, device, until)
             s.until = until
+            self._changed()
 
     def unshare(self, who, group, share):
         with self._cv:
@@ -295,6 +389,7 @@ class Relay:
                 raise RelayError(404, "No such link")
             del self._shares[share]
             self._ended[share] = self._clock()
+            self._changed()
 
     # ------------------------------------------------------------ a link's page (nobody signed in)
 
@@ -331,6 +426,13 @@ class Relay:
             if s.blob is not None:
                 out["blob"] = s.blob
             return out
+
+    def knows(self, who, group, device):
+        """True when the relay has this device's card (else the phone is asked to say hello again)."""
+        with self._cv:
+            g = self._groups.get((who, _id(group, "group")))
+            d = g.devices.get(_id(device, "device")) if g else None
+            return bool(d and d.card is not None)
 
     def stats(self):
         with self._cv:

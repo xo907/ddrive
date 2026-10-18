@@ -221,7 +221,7 @@ class WebServer:
         self.sealed = SealedDevices()     # the same for end-to-end encrypted accounts: sealed messages, passed on unread
         self.monitor_lock = threading.Lock()
         self.monitor_cache = (0.0, None)  # /api/monitor, worked out at most every 2 seconds
-        self.findx = FindXRelay()         # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
+        self.findx = FindXRelay(path=os.path.join(self.cfg.resolved_data_dir, "findx-relay.json"))   # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
         self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
 
     # ------------------------------------------------------------ lifecycle
@@ -258,6 +258,8 @@ class WebServer:
         threading.Thread(target=bye, name="EraseDone", daemon=True).start()
 
     def stop(self):
+        self.findx.close()                # (kept for the next start: the dashboard shows the phones at once)
+        self.findx_circles.close()
         self.lite.close()
         self.sealed.close()
         try:

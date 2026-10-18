@@ -161,7 +161,9 @@ class FindXHandlers:
                 if route == "/api/findx/wait":
                     commands, watching = relay.wait(who, q.get("group"), q.get("device"), q.get("after", 0),
                                                     min(float(q.get("wait", WAIT_MAX) or 0), WAIT_MAX))
-                    return self._json({"commands": commands, "watching": watching})
+                    # "hello": the relay doesn't have this phone's card (it was emptied): the phone sends it again now.
+                    return self._json({"commands": commands, "watching": watching,
+                                       "hello": not relay.knows(who, q.get("group"), q.get("device"))})
                 if route == "/api/findx/devices":
                     return self._json({"devices": relay.devices(who, q.get("group"), q.get("watch") or None)})
                 return self._error(404, "not found")

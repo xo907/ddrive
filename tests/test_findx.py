@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+import tempfile
 import unittest
 
 import helpers
@@ -56,6 +57,38 @@ class RelayTest(unittest.TestCase):
         with self.assertRaises(RelayError) as e:
             self.r.command("acct1", G, D1, sealed())
         self.assertEqual(e.exception.status, 404)
+
+    def test_a_restart_loses_nothing(self):
+        # An update restarts the drive: the phones, their links and the numbering of commands are all there again.
+        path = os.path.join(tempfile.mkdtemp(prefix="dd-relay-"), "findx-relay.json")
+        r = Relay(clock=self.clock, path=path)
+        card, rep, shared = sealed(), sealed(), sealed()
+        r.hello("", G, D1, card)
+        r.share("", G, D1, S1, 0)
+        r.report("", G, D1, rep, {S1: shared})
+        seq = r.command("", G, D1, sealed())
+        r.close()
+        again = Relay(clock=self.clock, path=path)
+        self.assertEqual([(d["device"], d["card"], d["report"]) for d in again.devices("", G)], [(D1, card, rep)])
+        self.assertEqual(again.shared(S1)["blob"], shared)
+        self.assertTrue(again.knows("", G, D1))
+        self.assertGreater(again.command("", G, D1, sealed()), seq)
+        again.close()
+        # A damaged file is no reason not to start.
+        with open(path, "w") as f:
+            f.write("{nonsense")
+        self.assertEqual(Relay(clock=self.clock, path=path).devices("", G), [])
+
+    def test_a_phone_that_knows_later_commands_than_the_relay(self):
+        # The relay was emptied (a version that kept nothing): the phone waits "after 57", and new commands
+        # must be numbered after that, or the phone would take them for old ones.
+        self.r.hello("", G, D1, sealed())
+        out, _ = self.r.wait("", G, D1, 57, 0)
+        self.assertEqual(out, [])
+        self.assertEqual(self.r.command("", G, D1, sealed()), 58)
+        # A phone only waiting (no card yet) is asked to say hello.
+        self.r.wait("", G, D2, 0, 0)
+        self.assertFalse(self.r.knows("", G, D2))
 
     def test_a_device_without_a_card_is_not_listed(self):
         self.r.report("", G, D1, sealed())
@@ -226,14 +259,23 @@ class CirclesTest(unittest.TestCase):
         self.assertEqual(e.exception.status, 404)          # (a wrong token and no circle look the same)
         self.assertEqual([m["member"] for m in self.c.members(C1, A1)], [M1])
 
-    def test_circles_survive_a_restart_but_not_whats_live(self):
-        info = sealed()
+    def test_circles_survive_a_restart_with_their_people(self):
+        info, rep = sealed(), sealed()
         self.c.set_info(C1, A1, info)
-        self.c.report(C1, A1, M1, sealed())
+        self.c.report(C1, A1, M1, rep)
+        self.c.report(C1, A1, M2, sealed())
+        seq = self.c.command(C1, A1, M1, M2, sealed())
+        self.c.close()                                      # (the drive stops: an update)
         again = Circles(self.tmp, clock=self.clock)
-        self.assertEqual(again.info(C1, A1), {"info": info, "members": 0})
+        self.assertEqual(again.info(C1, A1), {"info": info, "members": 2})
+        self.assertIn({"member": M1, "blob": rep, "at": int(self.clock.t * 1000)}, again.members(C1, A1))
+        self.assertGreater(again.command(C1, A1, M2, M1, sealed()), seq)     # (ringing works at once, numbered on)
         with open(self.tmp) as f:
             self.assertNotIn(A1, f.read())                  # only a hash of the token is kept
+        # A phone that has had later numbers than the drive (one that forgot them) moves the numbering on.
+        out, _ = again.wait(M1, [{"circle": C1, "auth": A1, "after": 90}], 0)
+        self.assertEqual(again.command(C1, A1, M2, M1, sealed()), 91)
+        again.close()
 
     def test_ring_a_friend_and_tell_everybody(self):
         for m in (M1, M2, M3):
@@ -352,6 +394,9 @@ class FindXWebTest(helpers.DriveTest):
         got = json.loads(data)
         self.assertEqual(len(got["commands"]), 1)
         self.assertTrue(got["watching"])
+        self.assertFalse(got["hello"])                     # (the relay has its card)
+        st, _, data = self.get(f"/api/findx/wait?group={G}&device={D2}&after=0&wait=0")
+        self.assertTrue(json.loads(data)["hello"])         # one it has no card of is asked to say hello
         # A POST without the dashboard's header (another site's form) is refused.
         self.assertEqual(self.req("POST", "/api/findx/hello", {"group": G, "device": D1, "card": card}, headers={"X-DD": "0"})[0], 403)
         self.assertEqual(self.post("/api/findx/report", {"group": "x", "device": D1, "blob": rep})[0], 400)
@@ -417,11 +462,13 @@ class FindXWebTest(helpers.DriveTest):
         st, h, data = self.get("/j/" + C1, auth=False)
         self.assertEqual(st, 200)
         self.assertIn(b"findx-join.js", data)
-        # The circle is still there after the drive restarts (where its members are isn't).
+        # The circle is still there after the drive restarts (an update), and so are its people: the map has them at once.
         self.web.stop()
         self.web = self.d.start_web(port=0)
         st, got = self.post("/api/findx/c/info", {"circle": C1, "auth": A1})
-        self.assertEqual((st, got["members"]), (200, 0))
+        self.assertEqual((st, got["members"]), (200, 1))
+        st, got = self.post("/api/findx/c/members", {"circle": C1, "auth": A1})
+        self.assertEqual([m["member"] for m in got["members"]], [M1])
 
     def test_the_public_page_is_paced(self):
         old = findxweb_pace().per_min
