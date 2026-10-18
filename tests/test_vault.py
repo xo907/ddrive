@@ -535,6 +535,73 @@ class VaultTest(helpers.DriveTest):
         self.assertEqual(sorted(n["name"] for n in self.new_device().list("/")), ["f0.txt", "f1.txt", "f2.txt"])
 
 
+    def test_a_folder_two_devices_made_at_once_is_one(self):
+        a, b = self.device, self.new_device()
+        a.name, b.name = "windows", "pi"
+        # as versions before 3.6.1 did: each makes "/pi" (a new id) before it has heard of the other's
+        # (a device's own sync tidies at once: held back here, so that both are there as they were)
+        with mock.patch.object(vault.Vault, "tidy", lambda self: None):
+            for v in (a, b):
+                v._send({"op": "put", "id": vault.new_id(), "parent": "", "name": "pi", "dir": True, "size": 0, "mtime": 1.0})
+            a._pull(); b._pull()
+            ids = [n["id"] for n in a.nodes.values() if n["name"] == "pi"]
+            self.assertEqual(len(ids), 2)
+            first, second = sorted(ids)
+            for v, folder, files in ((a, second, {"a.txt": b"from windows", "same.txt": b"same"}),
+                                     (b, first, {"b.txt": b"from pi", "same.txt": b"same", "x.txt": b"pi's x"})):
+                sub = vault.new_id()
+                ops = [{"op": "put", "id": sub, "parent": folder, "name": "Photos", "dir": True, "size": 0, "mtime": 1.0}]
+                v._send(*ops)
+                for name, data in files.items():
+                    v.put("/x", data, mtime=5.0)                  # (stored, then moved where the old version put it)
+                    n = v.resolve("/x")
+                    v._send({"op": "move", "id": n["id"], "parent": folder, "name": name})
+                v.put("/y", b"in photos " + v.name.encode(), mtime=7.0)
+                v._send({"op": "move", "id": v.resolve("/y")["id"], "parent": sub, "name": v.name + ".jpg"})
+            a.put("/z", b"fro", mtime=1.0)                         # an older x.txt in the other one
+            a._send({"op": "move", "id": a.resolve("/z")["id"], "parent": second, "name": "x.txt"})
+            a._pull()
+            # shown as one folder already, with what is in both, on every device
+            self.assertEqual([n["name"] for n in a.list("/")], ["pi"])
+            self.assertEqual(sorted(n["name"] for n in a.list("/pi")), ["Photos", "a.txt", "b.txt", "same.txt", "x.txt"])
+            self.assertEqual(sorted(n["name"] for n in a.list("/pi/Photos")), ["pi.jpg", "windows.jpg"])
+            self.assertEqual(a.read("/pi/x.txt"), b"pi's x")               # (the newer of the two)
+        # and tidied: what is in the second is moved into the first, which every device (old ones too) shows
+        a.sync()
+        b.sync()
+        self.assertEqual(a.nodes, b.nodes)
+        live = [n for n in a.nodes.values() if not n.get("trash")]
+        self.assertEqual(sorted(n["name"] for n in live if n["parent"] == ""), ["pi"])
+        self.assertEqual(sorted(n["name"] for n in live if n["parent"] == first),
+                         ["Photos", "a.txt", "b.txt", "same.txt", "x (2).txt", "x.txt"])
+        self.assertEqual(a.read("/pi/x (2).txt"), b"fro")
+        self.assertEqual(sorted(n["name"] for n in a.list("/pi/Photos")), ["pi.jpg", "windows.jpg"])
+        self.assertEqual(len([n for n in live if n["name"] == "Photos"]), 1)
+        self.assertEqual(a.read("/pi/same.txt"), b"same")
+        gone = [n for n in a.nodes.values() if n.get("trash")]
+        self.assertEqual(sorted((n["name"], n["trash"]["path"]) for n in gone),
+                         [("Photos", "/pi/Photos"), ("pi", "/pi"), ("same.txt", "/pi/same.txt")])
+        # something a device that hadn't heard yet puts into the one left behind still shows
+        a.put("/late.txt", b"late")
+        a._send({"op": "move", "id": a.resolve("/late.txt")["id"], "parent": second, "name": "late.txt"})
+        self.assertEqual(b.sync().read("/pi/late.txt"), b"late")
+        self.assertEqual(b.resolve("/pi/late.txt")["parent"], first)
+
+    def test_devices_making_the_same_folder_make_one(self):
+        a, b = self.device, self.new_device()
+        a.mkdir("/pi")
+        b._pull = lambda: None                                          # b hasn't heard of it yet
+        b.mkdir("/pi")
+        del b._pull
+        b.sync()
+        a.sync()
+        self.assertEqual(len([n for n in a.nodes.values() if n["name"] == "pi"]), 1)
+        a.delete("/pi")
+        a.mkdir("/pi")                                                  # once deleted, a new one is another folder
+        self.assertEqual(len([n for n in a.nodes.values() if n["name"] == "pi"]), 2)
+        self.assertEqual([n["name"] for n in b.sync().list("/")], ["pi"])
+
+
 class VaultSyncTest(VaultTest):
     """Folder syncing on a device of an end-to-end encrypted account: the files go sealed, and so does
     everything said about them between the device and the account's page in a browser."""

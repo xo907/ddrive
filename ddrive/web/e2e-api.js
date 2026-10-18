@@ -51,12 +51,8 @@
   /** Work out paths and folder sizes again when the list changed. */
   function index() {
     if (seen === v.seq && touched === v.since) return;
-    kids = new Map(); pathOf = new Map(); byPath = new Map(); sizes = new Map();
-    for (const n of v.nodes.values()) {
-      if (n.trash) continue;                               // deleted: kept, but not there
-      if (!kids.has(n.parent)) kids.set(n.parent, []);
-      kids.get(n.parent).push(n);
-    }
+    // (deleted entries are kept, but not there; a folder two devices made at once shows as one)
+    kids = DDV.view(v.nodes); pathOf = new Map(); byPath = new Map(); sizes = new Map();
     const walk = (id, path) => {
       let bytes = 0, files = 0;
       for (const n of kids.get(id) || []) {
@@ -401,7 +397,7 @@
       return { folder: "/Notes", items };
     },
     async deleted() {
-      const items = [...v.nodes.values()].filter((n) => n.trash).map((n) => ({ uid: n.id, path: n.trash.path, at: n.trash.at,
+      const items = [...v.nodes.values()].filter((n) => n.trash && !n.into).map((n) => ({ uid: n.id, path: n.trash.path, at: n.trash.at,
         size: n.dir ? under(n.id).reduce((s, id) => s + ((v.nodes.get(id) || {}).dir ? 0 : (v.nodes.get(id) || {}).size || 0), 0) : n.size }));
       return { items: items.sort((a, b) => b.at - a.at).slice(0, 5000) };
     },
@@ -429,7 +425,7 @@
                duplicates_open: same.open.length,          // files that may have a copy and weren't compared yet (E.findCopies)
                copies_whole: true,                         // (here every copy is stored in full)
                versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: spare, saved: {},
-               deleted: { count: [...v.nodes.values()].filter((n) => n.trash).length, bytes: 0 }, quota: (E.status || {}).quota || null };
+               deleted: { count: [...v.nodes.values()].filter((n) => n.trash && !n.into).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
     async locks() { return { count: 0, open: [], minutes: 0, mount: "", host: "" }; },
     async sync() {
@@ -472,7 +468,9 @@
       const path = clean(b.path), cut = path.lastIndexOf("/");
       const up = at(path.slice(0, cut) || "/", "dir");
       if (byPath.has(path)) throw new Fail(409, "Something with that name already exists");
-      await v._send({ op: "put", id: DDV.newId(), parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now(), at: now(), by: ME });
+      let id = await DDV.folderId(up.id, path.slice(cut + 1));
+      if (v.nodes.has(id)) id = DDV.newId();             // (that folder was there once, and was deleted or moved)
+      await v._send({ op: "put", id, parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now(), at: now(), by: ME });
       return { ok: true, path };
     },
     async move(b) {
@@ -506,7 +504,7 @@
     async undelete(b) {
       index();
       const want = b.uids ? new Set(b.uids.map(String)) : null, path = clean(b.path);
-      const rows = [...v.nodes.values()].filter((n) => n.trash && (want ? want.has(n.id) : n.trash.path.toLowerCase() === path.toLowerCase())).slice(0, want ? undefined : 1);
+      const rows = [...v.nodes.values()].filter((n) => n.trash && !n.into && (want ? want.has(n.id) : n.trash.path.toLowerCase() === path.toLowerCase())).slice(0, want ? undefined : 1);
       if (!rows.length) throw new Fail(404, "Those files are no longer kept");
       const ops = [];
       for (const n of rows) {
@@ -520,7 +518,7 @@
     },
     async purge(b) {
       const want = b.uids ? new Set(b.uids.map(String)) : null, path = clean(b.path);
-      const rows = [...v.nodes.values()].filter((n) => n.trash && (want ? want.has(n.id) : n.trash.path.toLowerCase() === path.toLowerCase()));
+      const rows = [...v.nodes.values()].filter((n) => n.trash && !n.into && (want ? want.has(n.id) : n.trash.path.toLowerCase() === path.toLowerCase()));
       const objects = rows.flatMap((n) => under(n.id).flatMap((id) => objectsOf(v.nodes.get(id) || {})));
       if (rows.length) { await v._send(...rows.map((n) => ({ op: "del", id: n.id }))); await drop(objects); }
       return { ok: true, count: rows.length };

@@ -180,6 +180,65 @@ def new_id() -> str:
     return secrets.token_hex(16)
 
 
+def folder_id(parent: str, name: str) -> str:
+    """The id a new folder gets: the same on every device for the same name in the same folder, so
+    two devices that make it at once (two computers syncing into the account) make one folder, not
+    two. (A folder that had that id and was deleted or moved meanwhile: a new id, see Vault.mkdir.)"""
+    return hashlib.sha256(f"ddrive folder v1\n{parent}\n{name}".encode("utf-8")).hexdigest()[:32]
+
+
+def view(nodes):
+    """The list as it is shown: {folder id: {name: entry}}, and what doesn't fit in it.
+
+    Two devices that make the same folder at once (each before it has heard of the other's) leave
+    two entries of that name side by side. They are one folder: the one with the smallest id shows,
+    with what is in all of them, and the others are `merged` into it. An entry that says it went
+    `into` another folder (what Vault.tidy leaves behind) has what is in it shown there. Of two
+    files of one name (or a file and a folder) the folder, else the newest file, shows; the others
+    are `hidden` until tidy gives them a name of their own. Every device shows the same list.
+
+    merged: [(entry, the folder it is one with)], hidden: [(entry, folder id, folder path, the entry shown)],
+    strays: [(entry, the folder it shows in)] for what shows in a folder it isn't in."""
+    raw, went = {}, {}
+    for n in nodes.values():
+        raw.setdefault(n.get("parent"), []).append(n)
+        if n.get("into") and n.get("into") in nodes and n.get("into") != n["id"]:
+            went.setdefault(n["into"], []).append(n["id"])
+    kids, merged, hidden, strays, done = {}, [], [], [], set()
+    todo = [("", "/", [""])]
+    while todo:
+        fid, path, members = todo.pop()
+        if fid in done:
+            continue
+        done.add(fid)
+        group, seen = [], set()
+        while members:
+            m = members.pop()
+            if m not in seen:
+                seen.add(m)
+                group.append(m)
+                members.extend(went.get(m, ()))
+        by_name = {}
+        for m in group:
+            for c in raw.get(m, ()):
+                if not c.get("trash") and not c.get("into") and c["id"] not in done:
+                    by_name.setdefault(c.get("name") or "", []).append(c)
+        out = {}
+        for name, cs in by_name.items():
+            dirs = sorted((c for c in cs if c.get("dir")), key=lambda c: c["id"])
+            files = sorted((c for c in cs if not c.get("dir")), key=lambda c: (-(c.get("mtime") or 0), c["id"]))
+            shown = dirs[0] if dirs else files[0]
+            out[name] = shown
+            merged.extend((d, shown) for d in dirs[1:])
+            hidden.extend((f, fid, path, shown) for f in files if f is not shown)
+            if shown.get("parent") != fid:
+                strays.append((shown, fid))
+            if dirs:
+                todo.append((shown["id"], posixpath.join(path, name), [d["id"] for d in dirs]))
+        kids[fid] = out
+    return kids, merged, hidden, strays
+
+
 # ------------------------------------------------------------ moving one account into another (transfer.py)
 # The account that moves out (S) and the one that receives (T) agree on a key with ECDH (P-256):
 #
@@ -239,10 +298,17 @@ class Vault:
         self._kids = None                # folder id -> {name: node}, made when asked for
         self.name = ""                   # this device, for the account's list of what happened
         self._snaps = {}                 # a snapshot's object -> the objects that snapshot refers to
+        self._view = None                # (merged, hidden, strays) as view() found them, with _kids
+        self._tidying = False
 
     # ------------------------------------------------------------ the list of files
     def sync(self):
-        """Bring the list up to date with what the host has."""
+        """Bring the list up to date with what the host has (and tidy it, see tidy)."""
+        self._pull()
+        self.tidy()
+        return self
+
+    def _pull(self):
         while True:
             got = self.client._json(f"/api/vault/log?after={self.seq}")
             snap = got.get("snapshot")
@@ -259,7 +325,7 @@ class Vault:
                     self.since_snapshot += 1
                 self.seq = seq
             if not got.get("more"):
-                return self
+                return
 
     def _apply(self, op):
         self._kids = None
@@ -292,7 +358,8 @@ class Vault:
         """Seal changes, hand them to the host, and take them (and what others did meanwhile) into the list."""
         batch = pack(seal(self.meta, json.dumps(op, separators=(",", ":")).encode("utf-8"), AAD_OP) for op in ops)
         self.client.request("POST", "/api/vault/log", batch, {"Content-Type": "application/octet-stream"})
-        self.sync()
+        self._pull()
+        self.tidy()
         if self.since_snapshot >= SNAPSHOT_EVERY:
             self.snapshot()
 
@@ -306,13 +373,59 @@ class Vault:
 
     # ------------------------------------------------------------ paths
     def _by_folder(self):
-        if self._kids is None:
-            kids = {}
-            for n in self.nodes.values():
-                if not n.get("trash"):               # deleted: kept, but not there
-                    kids.setdefault(n["parent"], {})[n["name"]] = n
-            self._kids = kids
+        if self._kids is None:                   # (deleted entries are kept, but not there)
+            self._kids, *self._view = view(self.nodes)
         return self._kids
+
+    def tidy(self):
+        """Make the list say what view() shows, also for devices that don't know of merging: what is
+        in a folder that was made twice is moved into the one that shows, and the other is left
+        behind deleted, saying where it went (so that what a device that hadn't heard yet puts into
+        it still shows). A file that lost its name to another is kept under a name of its own
+        ("x (2).txt"), or deleted (it can be brought back) when it is the same file: same size and
+        date. Every device that sees it does the same, so it doesn't matter which one does."""
+        if self._tidying:
+            return
+        self._tidying = True
+        try:
+            for _ in range(10):                  # each round may bring folders of one name together a level down
+                self._by_folder()
+                merged, hidden, strays = self._view
+                if not merged and not hidden and not strays:
+                    return
+                now, ops, taken = time.time(), {}, {}
+                for c, fid in strays:
+                    ops[c["id"]] = {"op": "move", "id": c["id"], "parent": fid, "name": c.get("name") or ""}
+                for d, into in merged:
+                    ops[d["id"]] = {"op": "set", "id": d["id"], "fields": {
+                        "into": into["id"], "trash": {"at": now, "path": self._path_of(into["id"])}}}
+                for f, fid, path, shown in hidden:
+                    name = f.get("name") or ""
+                    if not shown.get("dir") and shown.get("size") == f.get("size") and shown.get("mtime") == f.get("mtime"):
+                        ops[f["id"]] = {"op": "set", "id": f["id"], "fields": {"trash": {"at": now, "path": posixpath.join(path, name)}}}
+                        continue
+                    names = taken.setdefault(fid, set(self._kids.get(fid, {})))
+                    stem, ext = posixpath.splitext(name)
+                    if not stem:
+                        stem, ext = name, ""
+                    i = 2
+                    while f"{stem} ({i}){ext}" in names:
+                        i += 1
+                    names.add(f"{stem} ({i}){ext}")
+                    ops[f["id"]] = {"op": "move", "id": f["id"], "parent": fid, "name": f"{stem} ({i}){ext}"}
+                self._send(*ops.values())
+        finally:
+            self._tidying = False
+
+    def _path_of(self, nid):
+        names = []
+        for _ in range(256):
+            n = self.nodes.get(nid)
+            if n is None or not nid:
+                break
+            names.append(n.get("name") or "")
+            nid = n.get("parent")
+        return "/" + "/".join(reversed(names))
 
     def _children(self, parent):
         return list(self._by_folder().get(parent, {}).values())
@@ -353,7 +466,10 @@ class Vault:
             raise VaultError(f"Not found: {parent}")
         if self.resolve(path) is not None:
             raise VaultError("Something with that name already exists")
-        self._send({"op": "put", "id": new_id(), "parent": up["id"], "name": name, "dir": True, "size": 0, "mtime": time.time(),
+        nid = folder_id(up["id"], name)
+        if nid in self.nodes:                    # (that folder was there once, and was deleted or moved)
+            nid = new_id()
+        self._send({"op": "put", "id": nid, "parent": up["id"], "name": name, "dir": True, "size": 0, "mtime": time.time(),
                     "at": time.time(), "by": self.name})
 
     def move(self, src, dst):

@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.6.2 (2026-10-17)
+
+- **A folder two computers made at once is one folder again.** On an end-to-end account, when two computers
+  synced into the account at the same time (a PC and a Raspberry Pi, say), each could make the same folder
+  before hearing of the other's, and you got two folders of one name: selecting one selected the other, and
+  only one of them showed what was in it. They are now shown as one, with what is in both, and the next
+  computer that syncs tidies it up for good: everything is moved into the one, and the empty twin goes. A file
+  that was in both under one name is kept once when it is the same file, and otherwise also as "name (2)".
+- It doesn't happen again: every computer gives a new folder the same id for the same name in the same place,
+  so two of them making it at once make one folder.
+
 ## 3.6.1 (2026-10-17)
 
 - **How much battery FindX uses, on the FindX page.** Each phone's sheet says "FindX used 0.4% battery today": FindX

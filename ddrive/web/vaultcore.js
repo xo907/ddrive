@@ -19,6 +19,44 @@
   const b64 = (b) => { let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
   const unb64 = (s) => { const t = atob(s), b = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i); return b; };
   const newId = () => hex(crypto.getRandomValues(new Uint8Array(16)));
+  /** The id a new folder gets: the same on every device for the same name in the same folder, so two
+   *  devices that make it at once make one folder (vault.folder_id). */
+  const folderId = async (parent, name) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`ddrive folder v1\n${parent}\n${name}`)))).slice(0, 32);
+  /** The list as it is shown, the same on every device (vault.view): folders that two devices made at
+   *  once are one (the smallest id shows, with what is in all of them), what went `into` another folder
+   *  shows there, and of two files of one name the folder, else the newest, shows. folder id -> [entry]. */
+  function view(nodes) {
+    const raw = new Map(), went = new Map(), kids = new Map(), done = new Set();
+    for (const n of nodes.values()) {
+      if (!raw.has(n.parent)) raw.set(n.parent, []);
+      raw.get(n.parent).push(n);
+      if (n.into && n.into !== n.id && nodes.has(n.into)) { if (!went.has(n.into)) went.set(n.into, []); went.get(n.into).push(n.id); }
+    }
+    const todo = [["", [""]]];
+    while (todo.length) {
+      const [fid, members] = todo.pop();
+      if (done.has(fid)) continue;
+      done.add(fid);
+      const group = new Set();
+      while (members.length) { const m = members.pop(); if (!group.has(m)) { group.add(m); members.push(...(went.get(m) || [])); } }
+      const byName = new Map();
+      for (const m of group) for (const c of raw.get(m) || []) {
+        if (c.trash || c.into || done.has(c.id)) continue;
+        const name = c.name || "";
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name).push(c);
+      }
+      const out = [];
+      for (const cs of byName.values()) {
+        const dirs = cs.filter((c) => c.dir).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        const files = cs.filter((c) => !c.dir).sort((a, b) => ((b.mtime || 0) - (a.mtime || 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        out.push(dirs.length ? dirs[0] : files[0]);
+        if (dirs.length) todo.push([dirs[0].id, dirs.map((d) => d.id)]);
+      }
+      kids.set(fid, out);
+    }
+    return kids;
+  }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ------------------------------------------------------------ the 24 words (as words.py: BIP39)
@@ -372,7 +410,8 @@
     // ---------- changing things
     async mkdir(parent, name) {
       if (this.taken(parent, name)) throw new Error("Something with that name already exists");
-      const id = newId();
+      let id = await folderId(parent, name);
+      if (this.nodes.has(id)) id = newId();          // (that folder was there once, and was deleted or moved)
       await this._send({ op: "put", id, parent, name, dir: true, size: 0, mtime: Date.now() / 1000 });
       return id;
     }
@@ -592,7 +631,7 @@ ${Math.round((mtime || 0) * 1000)}`)));
   }
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
-                 newId, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64, pieceSum, prints, steady, reconnect, patient,
+                 newId, folderId, view, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64, pieceSum, prints, steady, reconnect, patient,
                  /** Do what follows as this account (a session the server handed out), next to who the page is signed in as. */
                  as: (session) => { also = String(session || ""); },
                  /** Seal a file and send it as an object to an address that takes them (a file request's). */
