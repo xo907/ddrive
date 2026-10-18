@@ -150,6 +150,7 @@
     if (r.still) bits.push('Still since ' + FX.time(r.still));
     else if ((r.fix.spd || 0) > 0.8) bits.push(Math.round(r.fix.spd * 3.6) + ' km/h');
     bits.push(r.fix.lat.toFixed(6) + ', ' + r.fix.lon.toFixed(6));
+    if (r.use && r.use.pct != null) bits.push('FindX used ' + (r.use.pct < 0.01 ? 'under 0.01' : r.use.pct < 1 ? r.use.pct.toFixed(2) : r.use.pct.toFixed(1)) + '% battery today');
     if (r.until !== undefined) bits.push(r.until ? 'Shared until ' + FX.day(r.until) + ' ' + FX.time(r.until) : 'Shared until they stop it');
     $('detail').textContent = bits.join(' · ');
     const acc = $('acc');

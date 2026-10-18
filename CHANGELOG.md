@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.6.1 (2026-10-17)
+
+- **How much battery FindX uses, on the FindX page.** Each phone's sheet says "FindX used 0.4% battery today": FindX
+  now measures its own use (processing time and network from the phone's kernel, satellites, Bluetooth, sensors and
+  ringing timed as they're on, turned into charge with the phone's own power profile) and sends today's total along
+  with where it is (sealed, like the rest). The app has the full picture under Battery use. Shared links don't carry it.
+- The map's "always light" setting lights the 3D buildings like an afternoon, not by where the sun really is.
+
 ## 3.6.0 (2026-10-17)
 
 - **FindX circles: family and friends, as in Life360.** People in a circle see where each other are, live,
