@@ -48,6 +48,9 @@ function h(tag, attrs, ...children) {
 }
 
 const ICONS = {
+  home: '<path d="M3.5 9.5 10 4l6.5 5.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-4V17H4.500a1 1 0 0 1-1-1z"/>',
+  place: '<path d="M10 17.5s5.5-5.2 5.5-9.5a5.5 5.5 0 0 0-11 0c0 4.3 5.5 9.5 5.5 9.5z"/><circle cx="10" cy="8" r="2"/>',
+  queue: '<path d="M6.5 16V4.5M3.5 7.5l3-3 3 3M13.5 4v11.5M10.5 12.5l3 3 3-3"/>',
   folder: '<path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.6 1.8H16a1.5 1.5 0 0 1 1.5 1.5v7.7A1.5 1.5 0 0 1 16 16.5H4a1.5 1.5 0 0 1-1.5-1.5z"/>',
   file: '<path d="M5 2.5h6.5L15 6v11.5H5z"/><path d="M11.5 2.5V6H15"/>',
   image: '<rect x="3" y="3.5" width="14" height="13" rx="1.5"/><circle cx="7.5" cy="8" r="1.4"/><path d="m3.5 14.5 4-4 3 3 2-2 4 3.5"/>',
@@ -565,8 +568,7 @@ async function refreshStatus() {
   if (acct && status.user) { acct.textContent = status.user.slice(0, 1).toUpperCase(); acct.title = `Signed in as ${status.user}`; }
   else if (acct && isAccount()) { if (!acct.firstChild) acct.append(icon("user")); acct.title = `Your account (${status.account})`; }
   else if (acct && SERVER) { if (!acct.firstChild) acct.append(icon("shield")); acct.title = `Admin account ${status.admin}`; }
-  for (const a of document.querySelectorAll("#nav a[data-nav]")) a.hidden = notHere(a.dataset.nav);
-  $("#apps").hidden = !TOOL_PAGES.some(([name]) => !notHere(name));
+  showNav();
   $("#sync").setAttribute("href", isAccount() ? "#/storage" : "#/health");
   if ((route.name === "health" || route.name === "resources") && !$("#sheet").classList.contains("open")) {
     keepScroll = true;
@@ -585,11 +587,38 @@ const pageItems = (list) => list.filter(([name]) => !notHere(name)).map(([name, 
   label, icon: ic, current: route.name === name || (also || []).includes(route.name), run: () => go("#/" + name) }));
 const inMenu = (list) => list.some(([name, , , also]) => route.name === name || (also || []).includes(route.name));
 const navState = (() => { try { return JSON.parse(localStorage.getItem("dd-nav") || "{}") || {}; } catch { return {}; } })();
+// The menu's pages. Any but Files can be left out of it (Settings › This browser), for a menu of only what
+// is used; what is left out is in the Tools menu instead (the squares at the top), and its address works as ever.
+const NAV_PAGES = [["home", "Home", "home"], ["files", "Files", "folder"], ["gallery", "Gallery", "gallery"], ["starred", "Starred", "star"],
+                   ["shared", "Shared", "link"], ["findx", "FindX", "place"], ["queue", "Queue", "queue"], ["deleted", "Deleted", "trash"]];
+const navOff = (name) => name !== "files" && (navState.hidden || []).includes(name);
+const navLeftOut = () => NAV_PAGES.filter(([name]) => navOff(name) && !notHere(name));
+function showNav() {
+  for (const a of document.querySelectorAll("#nav a[data-nav]")) a.hidden = notHere(a.dataset.nav) || navOff(a.dataset.nav);
+  $("#apps").hidden = !TOOL_PAGES.some(([name]) => !notHere(name)) && !navLeftOut().length;
+}
+function setNavOff(name, off) {
+  const hidden = new Set(navState.hidden || []);
+  if (off) hidden.add(name); else hidden.delete(name);
+  navState.hidden = [...hidden];
+  applyNav(true);
+}
+/** Settings › This browser: which pages are in the menu. */
+const navRow = () => h("div", { class: "set-row" },
+  h("div", { class: "set-text" }, h("div", { class: "t" }, "In the menu"),
+    h("div", { class: "s" }, "Leave out the pages you don't use, for a cleaner menu (on a phone, the bar at the bottom). "
+      + "What is left out is in the Tools menu (the squares at the top) instead. This is kept in this browser."),
+    h("div", { class: "nav-picks" }, NAV_PAGES.filter(([name]) => !notHere(name)).map(([name, label, ic]) => {
+      const box = h("input", { type: "checkbox", checked: !navOff(name), disabled: name === "files",
+                                onchange: (e) => setNavOff(name, !e.target.checked) });
+      return h("label", { class: "nav-pick", title: name === "files" ? "Files is always in the menu" : "" }, box, icon(ic), h("span", {}, label));
+    }))));
 function applyNav(save) {
   document.querySelector(".app").classList.toggle("rail", !!navState.rail);
   const t = $("#nav-toggle");
   t.setAttribute("aria-pressed", String(!!navState.rail));
   t.title = navState.rail ? "Show the menu" : "Shrink the menu to icons";
+  showNav();
   if (save) { try { localStorage.setItem("dd-nav", JSON.stringify(navState)); } catch { /* private mode */ } }
 }
 $("#nav-toggle").addEventListener("click", () => { navState.rail = !navState.rail; applyNav(true); });
@@ -2374,7 +2403,7 @@ async function renderSettings() {
   page(h("h1", {}, SERVER ? "The drive's settings" : "Settings"),
        h("p", { class: "lede" }, SERVER ? "You manage this drive as an admin. Changes are saved as you make them, for the computer that runs it. “My files” in the menu leads back to your own files."
                                         : "Changes are saved as you make them, for this computer's drive."),
-       !SERVER && [h("h2", {}, "This browser"), h("div", { class: "settings" }, liveRow())],
+       !SERVER && [h("h2", {}, "This browser"), h("div", { class: "settings" }, navRow(), liveRow())],
        SETTING_ROWS.map(([title, rows]) => [h("h2", {}, title), h("div", { class: "settings" }, rows.map(([key, label, hint, type]) =>
          h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hint),
            data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
@@ -4283,6 +4312,7 @@ async function renderAccount() {
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
          a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         navRow(),
          liveRow(),
          !(status && status.retired) && row("Previews of Discord attachments", "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself. Remove all of those copies, everywhere in this account; the attachments stay.",
              h("button", { class: "btn ghost small", onclick: async () => { if (await deletePreviews()) render(); } }, "Delete previews…")),
@@ -5226,7 +5256,9 @@ $("#account").addEventListener("click", (e) => {
 });
 $("#apps").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
-  openMenu([{ head: "Tools" }, ...pageItems(TOOL_PAGES)], r.right - 220, r.bottom + 6, "Tools");
+  const left = navLeftOut();
+  openMenu([{ head: "Tools" }, ...pageItems(TOOL_PAGES), ...(left.length ? ["-", { head: "Left out of the menu" }, ...pageItems(left)] : [])],
+           r.right - 220, r.bottom + 6, "Tools");
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
 

@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.10.0 (2026-10-18)
+
+- **Choose what is in the menu.** Settings › This browser › **In the menu** (on an account's page: under Your
+  account) has a switch for each page of the menu: leave out Gallery, FindX, Queue or whatever you don't use,
+  for a cleaner menu, and on a phone a bottom bar with only what you use. What is left out is in the Tools
+  menu (the squares at the top) instead, and its address works as ever. Files always stays. It is kept in
+  the browser (and in the phone app), so a phone and a computer can each have their own.
+
 ## 3.9.0 (2026-10-18)
 
 - **DDrive for Android: the whole dashboard as an app.** The phone app (until now DDrive Lite, which only

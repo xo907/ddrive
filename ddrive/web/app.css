@@ -1389,3 +1389,12 @@ body.server #locks, body.server #apps, body.server .usage, body.server .drop { d
 .ex-l { color: var(--muted); }
 .ex-all { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; cursor: pointer; }
 @media (max-width: 480px) { .ex-row { flex-direction: column; gap: 2px; } }
+
+/* Settings › This browser › In the menu: a chip per page, on or off. */
+.nav-picks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.nav-pick { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 6px 8px; border: 1px solid var(--line); border-radius: 999px;
+  cursor: pointer; font-size: 13px; user-select: none; }
+.nav-pick input { margin: 0; accent-color: var(--accent); }
+.nav-pick .ico { width: 16px; height: 16px; }
+.nav-pick:has(input:not(:checked)) { color: var(--muted); }
+.nav-pick:has(input:disabled) { cursor: default; opacity: .7; }
