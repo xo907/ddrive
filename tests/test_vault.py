@@ -665,7 +665,9 @@ const DDV = ctx.DDV;
         self.assertEqual(d.list("/Public"), [])
         kept = json.dumps(d.nodes)
         for word in ("Private", "a.txt", "b.txt", "c.txt", "new.txt", "Made inside", "sub"):
-            self.assertNotIn(word, kept)
+            self.assertNotIn(json.dumps(word), kept)                    # (as a name: "sub" turns up in sealed text by chance)
+        for secret in (b"SECRET", b"Made inside", b"Private"):
+            self.assertNotIn(secret, kept.encode())
         boxed = [n for n in d.nodes.values() if n.get("box")]
         self.assertEqual(len(boxed), 7)                                 # Private, a, sub, b, Made inside, new.txt, and c.txt (moved in)
         self.assertTrue(all(n.get("objs") is not None for n in boxed))
