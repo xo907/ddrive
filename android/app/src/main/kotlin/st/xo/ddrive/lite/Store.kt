@@ -37,6 +37,16 @@ class Store(context: Context) {
         get() = prefs.getBoolean("wifi_only", true)
         set(v) = prefs.edit().putBoolean("wifi_only", v).apply()
 
+    /** Whether the phone was asked once (by "Save to DDrive") if DDrive may show notifications. */
+    var askedNotify: Boolean
+        get() = prefs.getBoolean("asked_notify", false)
+        set(v) = prefs.edit().putBoolean("asked_notify", v).apply()
+
+    /** The folder of the drive that what is shared to DDrive goes into (the last one chosen). */
+    var shareFolder: String
+        get() = prefs.getString("share_folder", "/From phone") ?: "/From phone"
+        set(v) = prefs.edit().putString("share_folder", v).apply()
+
     /** What the host knows this phone by; made once. */
     val device: String
         get() = prefs.getString("device", null) ?: ByteArray(8).also { SecureRandom().nextBytes(it) }

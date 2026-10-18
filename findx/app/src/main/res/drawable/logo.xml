@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The FX logo as the app icon shows it (black rounded square, white F, red X), for use inside the app. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp" android:height="128dp"
+    android:viewportWidth="128" android:viewportHeight="128">
+    <path android:pathData="M28,0 h72 a28,28 0 0 1 28,28 v72 a28,28 0 0 1 -28,28 h-72 a28,28 0 0 1 -28,-28 v-72 a28,28 0 0 1 28,-28 z"
+        android:fillColor="#000000" />
+    <path android:pathData="M58,41 L32,41 L32,87 M32,63 L52,63"
+        android:strokeColor="#FFFFFF" android:strokeWidth="12" android:strokeLineJoin="miter" android:fillColor="#00000000" />
+    <path android:pathData="M74,41 L106,87 M106,41 L74,87"
+        android:strokeColor="#FF0000" android:strokeWidth="13" android:strokeLineCap="square" android:fillColor="#00000000" />
+</vector>

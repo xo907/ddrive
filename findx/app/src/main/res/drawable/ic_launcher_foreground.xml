@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The FX logo (white F, red X), drawn like GalleryX's GX: the same 128-unit artwork, stroke weights and
+     letter height, centred in the adaptive icon's safe zone (66 of 108 dp) so launchers can mask it to any shape. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="209.45" android:viewportHeight="209.45">
+    <group android:translateX="40.73" android:translateY="40.73">
+        <path android:pathData="M58,41 L32,41 L32,87 M32,63 L52,63"
+            android:strokeColor="#FFFFFF" android:strokeWidth="12" android:strokeLineJoin="miter" android:strokeLineCap="butt" android:fillColor="#00000000" />
+        <path android:pathData="M74,41 L106,87 M106,41 L74,87"
+            android:strokeColor="#FF0000" android:strokeWidth="13" android:strokeLineCap="square" android:fillColor="#00000000" />
+    </group>
+</vector>

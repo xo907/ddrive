@@ -198,6 +198,19 @@
 
   // ------------------------------------------------------------ overview: status, health, actions
 
+  /** The newest published phone apps, as DDrive knows them (its status: "update" for the owner, "apps" for an account). */
+  let appsAsked = null;
+  function newestApps() {
+    if (!appsAsked) appsAsked = fetch("/api/status", { credentials: "same-origin" }).then((r) => r.json())
+      .then((st) => st.update || st.apps || {}).catch(() => ({}));
+    return appsAsked;
+  }
+  function newerThan(a, b) {
+    const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false;
+  }
+
   async function renderOverview(id, d, r) {
     const out = h("div");
     if (!r) { out.append(h("div", { class: "m-empty" }, "This phone hasn't reported to this DDrive yet. Open FindX on it and check it's linked here.")); return out; }
@@ -205,6 +218,14 @@
     if (probs.length) {
       out.append(sec("Needs attention on the phone"), h("div", { class: "m-card" }, probs.map((p) => row(h("span", { class: "m-warn" }, PROBLEMS[p][0]), PROBLEMS[p][1]))));
       out.append(h("div", { class: "m-note" }, "These are fixed on the phone: FindX › Settings › Permissions."));
+    }
+    // A newer FindX is out (DDrive knows: it asks GitHub now and then): the phone is told too, on its home screen.
+    const apps = await newestApps();
+    if (r.cfg && r.cfg.v && apps.findx && newerThan(apps.findx, r.cfg.v)) {
+      out.append(h("div", { class: "m-card", style: "padding:12px 14px;margin-top:12px" },
+        h("div", { class: "m-row", style: "padding:0" }, h("div", { class: "t" }, h("div", { class: "n" }, `FindX ${apps.findx} is out`),
+          h("div", { class: "s" }, `This phone has ${r.cfg.v}. Open the download on the phone, then open it to update.`)),
+          apps.findx_apk && h("a", { class: "m-btn small", href: apps.findx_apk, target: "_blank", rel: "noopener" }, "Download"))));
     }
     const fix = r.fix;
     out.append(sec("Now"));

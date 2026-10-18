@@ -12,6 +12,9 @@ How it is updated depends on how it was installed:
   a scheduled task or a terminal window carries on as it was;
 * DDrive.exe or the .deb package: the dashboard links to the release to download;
 * anything else (pip, a copy of the folder): the same link.
+
+The phone apps are published next to the code (android/release/DDrive.apk, findx/release/FindX.apk), each
+with a VERSION file, which is what is compared with the version an app says it is.
 """
 
 import logging

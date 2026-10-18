@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FindX" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowBackground">@color/window</item>
+        <item name="android:colorAccent">#FF0000</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- The logo is white and red on black (as the launcher shows it): keep its black behind it on a light screen too. -->
+        <item name="android:windowSplashScreenIconBackgroundColor">#000000</item>
+    </style>
+</resources>

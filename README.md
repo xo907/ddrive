@@ -1211,6 +1211,12 @@ Downloads go to Downloads/DDrive, uploads take files from anywhere on the phone,
 what is open and then goes back a page, and links to anywhere but your drive open in the phone's browser.
 **This phone** in the account menu (or a long press on the app's icon) has folder syncing and signing out.
 
+**Save to DDrive.** The app is in the phone's share sheet: share photos, videos, documents or a bit of
+text from any app to *Save to DDrive*, choose the folder (the last one is remembered; "/From phone" at
+first), and it goes there in the background, with a notification that opens the folder when it is done.
+A name that is taken gets "(2)", nothing is replaced, and an end-to-end account's files are sealed on the
+phone first.
+
 ### Folder syncing
 
 1. In the app, open **This phone** (account menu) and turn on **Folder syncing**.
@@ -1248,7 +1254,8 @@ what is open and then goes back a page, and links to anywhere but your drive ope
 
 ## FindX
 
-**FindX** is an Android app that finds your phone, down to the spot it's lying on, with this
+**FindX** ([FindX.apk](https://github.com/xo907/ddrive/raw/main/findx/release/FindX.apk); its source,
+README and PROTOCOL.md are in [findx/](findx/)) is an Android app that finds your phone, down to the spot it's lying on, with this
 drive as its only server. DDrive does three things for it, and reads none of them: everything FindX
 sends is sealed on the phone with keys made from your 24 words.
 

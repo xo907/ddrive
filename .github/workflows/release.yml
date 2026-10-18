@@ -112,6 +112,11 @@ jobs:
           fi
           cp app/build/outputs/apk/release/app-release.apk ../dist/DDrive.apk
           rm -f "$DDRIVE_KEYSTORE"
+      - name: FindX
+        # FindX (in findx/) is built and signed on the maintainer's computer too; the published one goes along.
+        run: |
+          mkdir -p dist
+          if [ -f findx/release/FindX.apk ]; then cp findx/release/FindX.apk dist/FindX.apk; fi
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -139,4 +144,4 @@ jobs:
             exit 0
           fi
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "DDrive $GITHUB_REF_NAME" \
-            --notes "Windows: DDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./ddrive_*.deb. Lite (uses a drive that runs on another computer): DDriveLite.exe, or sudo apt install ./ddrive-lite_*.deb. Android phones: DDrive.apk (your DDrive as an app, and backing up the phone's folders to it)"
+            --notes "Windows: DDrive.exe (also install WinFsp from https://winfsp.dev/rel/). Debian / Ubuntu / Raspberry Pi OS: sudo apt install ./ddrive_*.deb. Lite (uses a drive that runs on another computer): DDriveLite.exe, or sudo apt install ./ddrive-lite_*.deb. Android phones: DDrive.apk (your DDrive as an app, Save to DDrive from any app, and backing up the phone's folders to it); FindX.apk (find your phone; see the FindX section of the README)"

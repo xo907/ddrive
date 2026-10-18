@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What shows before the app has drawn (light: values; dark: values-night). -->
+    <color name="window">#F2F2F7</color>
+</resources>

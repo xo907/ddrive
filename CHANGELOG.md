@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.12.0 (2026-10-18)
+
+- **Save to DDrive from any app on your phone.** The DDrive app is in Android's share sheet: photos, videos,
+  documents or a bit of text from any app go into a folder of your DDrive ("/From phone" at first; it
+  remembers the last one), in the background, with a notification that says how far it is and opens the
+  folder when it is done. A name that is taken gets "(2)": nothing is replaced. For an end-to-end encrypted
+  account everything is sealed on the phone first.
+- **FindX lives here now**, in `findx/`: its source, its PROTOCOL.md, and the app itself
+  ([findx/release/FindX.apk](https://github.com/xo907/ddrive/raw/main/findx/release/FindX.apk), now 3 MB
+  instead of 28). Releases carry it too.
+- **FindX tells you when it is out of date**, on its home screen (it asks your own DDrive, which asks GitHub;
+  the phone asks nobody else), and so does its phone's Manage panel on the FindX tab, with the download.
+- The DDrive app for Android is 3.12.0.
+
 ## 3.11.0 (2026-10-18)
 
 - **DDrive tells you when there is a new version, and updates itself.** Twice a day the drive asks GitHub
