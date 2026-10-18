@@ -307,7 +307,7 @@
       h("label", { class: "m-field", style: "margin:0" }, h("span", {}, "Lost mode's lock-screen message"), msg)));
     out.append(sec("History"), h("div", { class: "m-card" },
       row("Keep history", "Where it has been, kept on this DDrive for good", toggle(history, (v) => { history = v; })),
-      h("div", { class: "m-row" }, h("div", { class: "t" }, h("div", { class: "n" }, "Detail while moving"), h("div", { class: "s" }, "Battery saver: Wi-Fi and mobile network only. Balanced: satellites on a bike or in a car. Detailed: satellites every few seconds while moving."), h("div", { style: "margin-top:8px" }, chips)))));
+      h("div", { class: "m-row" }, h("div", { class: "t" }, h("div", { class: "n" }, "Detail while moving"), h("div", { class: "s" }, "Battery saver: Wi-Fi and mobile network only. Balanced: satellites every 8 seconds or so while it moves, on foot too. Detailed: satellites every 3 seconds while moving."), h("div", { style: "margin-top:8px" }, chips)))));
     out.append(sec("Bluetooth"), h("div", { class: "m-card" },
       row("Findable nearby", "A Bluetooth beacon only your devices recognise, about 1% battery a day", toggle(beacon, (v) => { beacon = v; }))));
     const save = h("button", { class: "m-btn red wide", type: "button", style: "margin-top:16px;width:100%" }, "Save on the phone");

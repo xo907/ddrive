@@ -119,6 +119,81 @@
     return (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km';
   };
 
+  // ------------------------------------------------------------ a path from positions
+
+  /** Metres between two points. */
+  FX.dist = function (aLat, aLon, bLat, bLon) {
+    const r = Math.PI / 180;
+    const h = Math.sin((bLat - aLat) * r / 2) ** 2 + Math.cos(aLat * r) * Math.cos(bLat * r) * Math.sin((bLon - aLon) * r / 2) ** 2;
+    return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+  };
+
+  /**
+   * History points ([t, lat, lon, acc, until]) as the path really went: what the phone's PathFilter
+   * (Geo.kt) does as positions come, done again here for history kept before it did. Rough positions
+   * among good ones, spikes out and back, and jumps the path can't explain are left out; the rest is
+   * weighed by accuracy (a Kalman filter on position and speed). Stays (until > t) are kept as they are
+   * and start the path again: the phone was pinned down there.
+   */
+  FX.cleanPath = function (pts) {
+    pts = pts.filter((p) => p[3] > 0 && (p[3] <= 150 || p[4] > p[0]));
+    // Out and back: one far from both neighbours while they are close to each other.
+    for (let pass = 0; pass < 2; pass++) {
+      pts = pts.filter((b, i) => {
+        if (i === 0 || i === pts.length - 1 || b[4] > b[0]) return true;
+        const a = pts[i - 1], c = pts[i + 1];
+        const ab = FX.dist(a[1], a[2], b[1], b[2]), bc = FX.dist(b[1], b[2], c[1], c[2]), ac = FX.dist(a[1], a[2], c[1], c[2]);
+        return !(ab > 3 * ac + b[3] + 30 && bc > 3 * ac + b[3] + 30);
+      });
+    }
+    const out = [];
+    let o = null, t = 0, goodAt = 0, goodAcc = 0, doubted = [];
+    const ax = { p: 0, v: 0, a: 0, b: 0, c: 0 }, ay = { p: 0, v: 0, a: 0, b: 0, c: 0 };
+    const reset = (A, r) => { A.p = 0; A.v = 0; A.a = r; A.b = 0; A.c = 25; };
+    const predict = (A, dt, q) => {
+      const n = { ...A };
+      n.p += n.v * dt; n.a += 2 * dt * n.b + dt * dt * n.c + q * dt ** 4 / 4; n.b += dt * n.c + q * dt ** 3 / 2; n.c += q * dt * dt;
+      return n;
+    };
+    const update = (A, z, r) => {
+      const s = A.a + r, k0 = A.a / s, k1 = A.b / s, y = z - A.p, a0 = A.a, b0 = A.b;
+      A.p += k0 * y; A.v += k1 * y; A.a = (1 - k0) * a0; A.b = (1 - k0) * b0; A.c -= k1 * b0;
+    };
+    const local = (p) => [(p[2] - o[2]) * Math.PI / 180 * 6371008.8 * Math.cos(o[1] * Math.PI / 180), (p[1] - o[1]) * Math.PI / 180 * 6371008.8];
+    const start = (p) => {
+      o = p; t = p[0]; doubted = [];
+      reset(ax, p[3] * p[3]); reset(ay, p[3] * p[3]);
+      if (p[3] <= 25) { goodAt = p[0]; goodAcc = p[3]; }
+      out.push(p);
+    };
+    for (const p of pts) {
+      if (p[4] > p[0]) { start(p); t = Math.max(p[0], p[4]); continue; }
+      if (!o || p[0] - t > 90e3) { start(p); continue; }
+      if (p[0] <= t) continue;
+      if (goodAt && p[0] - goodAt < 60e3 && p[3] > Math.max(60, 4 * goodAcc)) continue;
+      const dt = (p[0] - t) / 1000, sp = Math.hypot(ax.v, ay.v), q = 0.05 + 0.02 * sp * sp, r = p[3] * p[3];
+      const [e, n] = local(p);
+      const px = predict(ax, dt, q), py = predict(ay, dt, q);
+      const ix = e - px.p, iy = n - py.p;
+      if ((ix * ix) / (px.a + r) + (iy * iy) / (py.a + r) > 13.8 && Math.hypot(ix, iy) > p[3] + 10) {
+        doubted.push(p);
+        const last3 = doubted.slice(-3);
+        if (last3.length === 3 && last3.every((d, i) => d[3] <= 60 && (i === 0 ||
+            FX.dist(last3[i - 1][1], last3[i - 1][2], d[1], d[2]) <= last3[i - 1][3] + d[3] + 50 * Math.max(1, (d[0] - last3[i - 1][0]) / 1000)))) start(p);
+        continue;
+      }
+      doubted = [];
+      Object.assign(ax, px); Object.assign(ay, py);
+      update(ax, e, r); update(ay, n, r);
+      t = p[0];
+      if (p[3] <= 25) { goodAt = p[0]; goodAcc = p[3]; }
+      const lat = o[1] + ay.p / 6371008.8 * 180 / Math.PI;
+      const lon = o[2] + ax.p / (6371008.8 * Math.cos(o[1] * Math.PI / 180)) * 180 / Math.PI;
+      out.push([p[0], lat, lon, Math.min(p[3], Math.sqrt(Math.max(ax.a, ay.a))), p[4] || 0]);
+    }
+    return out;
+  };
+
   FX.time = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   FX.day = (t) => new Date(t).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 

@@ -274,7 +274,7 @@
   async function loadHistory() {
     const [from, to] = spanRange(state.span);
     const pts = (await src.history(state.device, from, to)) || [];
-    state.history = pts.sort((a, b) => a[0] - b[0]);
+    state.history = FX.cleanPath(pts.sort((a, b) => a[0] - b[0]));
     drawHistory(state.history);
     const scrub = $('scrub');
     scrub.classList.toggle('show', state.span !== 'now' && pts.length > 1);
@@ -290,7 +290,9 @@
 
   function drawHistory(pts) {
     const line = pts.map((p) => [p[2], p[1]]);
-    if (state.report && state.report.fix && state.span === 'now') line.push([state.report.fix.lon, state.report.fix.lat]);
+    // The path ends where it is now, unless that is only a rough guess (it would draw a line to it).
+    const f = state.report && state.report.fix;
+    if (f && state.span === 'now' && (f.acc <= 60 || !pts.length)) line.push([f.lon, f.lat]);
     map.getSource('trail') && map.getSource('trail').setData(line.length > 1 ? { type: 'Feature', geometry: { type: 'LineString', coordinates: line } } : empty);
     const stays = pts.filter((p) => p[4] > p[0] && p[4] - p[0] > 5 * 60e3).map((p) => ({
       type: 'Feature', geometry: { type: 'Point', coordinates: [p[2], p[1]] }, properties: { t: p[0], until: p[4], mins: (p[4] - p[0]) / 60e3 },

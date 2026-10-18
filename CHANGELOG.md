@@ -3,6 +3,14 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.7.2 (2026-10-17)
+
+- **FindX draws the path you really took.** History on the FindX tab is cleaned as it is drawn: straight lines
+  to places never been (a jump to the wrong mobile mast, a reflection), rough positions among good ones and
+  zigzags are left out or smoothed, each position weighed by how accurate it is. This also cleans up walks
+  recorded before. (The app now does the same as it records, and uses satellites while you walk.)
+- The path no longer runs to the phone's current position when that is only a rough guess.
+
 ## 3.7.1 (2026-10-17)
 
 - **FindX is a tab of the dashboard.** It opens beside the menu, like Files and Gallery, instead of on a page of
