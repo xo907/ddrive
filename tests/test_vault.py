@@ -8,6 +8,8 @@ import http.client
 import io
 import json
 import os
+import shutil
+import subprocess
 import time
 from unittest import mock
 import urllib.parse
@@ -586,6 +588,122 @@ class VaultTest(helpers.DriveTest):
         a._send({"op": "move", "id": a.resolve("/late.txt")["id"], "parent": second, "name": "late.txt"})
         self.assertEqual(b.sync().read("/pi/late.txt"), b"late")
         self.assertEqual(b.resolve("/pi/late.txt")["parent"], first)
+
+    # ------------------------------------------------------------ password locks (made and opened by the page)
+    LOCK_PAGE = r"""
+const fs = require("fs"), vm = require("vm");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const base = input.address, cookie = "dd_session=" + input.cookie;
+const ctx = { crypto: globalThis.crypto, TextEncoder, TextDecoder, console, setTimeout, clearTimeout, Blob, Response, AbortController, URL, BigInt, atob, btoa,
+              fetch: (path, o = {}) => fetch(base + path, { ...o, headers: { ...(o.headers || {}), Cookie: cookie } }) };
+ctx.window = ctx; ctx.isSecureContext = true; ctx.navigator = {}; ctx.addEventListener = () => {}; ctx.removeEventListener = () => {};
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const DDV = ctx.DDV;
+(async () => {
+  const v = new DDV.Vault((await DDV.derive(Buffer.from(input.key, "hex"))).meta);
+  await v.sync();
+  const out = {};
+  const names = (parent) => v.children(parent).map((n) => n.name).sort();
+  const file = (text) => Object.assign(new Blob([text]), { lastModified: 1700000000000 });
+  if (input.phase === "lock") {
+    const priv = v.folderAt(["Private"]), pub = v.folderAt(["Public"]);
+    out.lockedId = await v.lock(priv, "correct horse");
+    out.inside = names(priv);                                        // (still open in this page)
+    const made = await v.mkdir(priv, "Made inside");
+    await v.upload(file("SECRET-made-in-a-locked-folder"), made, () => {}, undefined, "new.txt");
+    const c = v.children(pub).find((n) => n.name === "c.txt");
+    await v.move(c.id, priv, "c.txt");
+    await v._send({ op: "set", id: c.id, fields: { star: 1234 } });
+    out.count = v.lockCount();
+    try { await v.lock(made, "another"); out.nested = "allowed"; } catch (e) { out.nested = e.message; }
+  } else if (input.phase === "open") {
+    out.before = { count: v.lockCount(), top: names("") };
+    out.wrong = await v.unlock("wrong horse");
+    out.right = await v.unlock("correct horse");
+    const root = v.children("").find((n) => n.lockRoot);
+    out.top = names("");
+    out.root = root.name;
+    out.inside = names(root.id);
+    const c = v.children(root.id).find((n) => n.name === "c.txt");
+    out.star = c.star;
+    out.text = await (await v.blob(v.children(root.id).find((n) => n.name === "a.txt"))).text();
+    v.relock();
+    out.relocked = { count: v.lockCount(), top: names("") };
+    await v.unlock("correct horse");
+    try { await v.unprotect(root.id, "nope"); out.badRemove = "removed"; } catch (e) { out.badRemove = e.message; }
+    await v.unprotect(root.id, "correct horse");
+    out.after = { count: v.lockCount(), top: names("") };
+  }
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e.stack || e); process.exit(1); });
+"""
+
+    def run_page(self, phase):
+        page = os.path.join(helpers.ROOT, "ddrive", "web", "vaultcore.js")
+        out = subprocess.run(["node", "-e", self.LOCK_PAGE, page], capture_output=True, text=True, timeout=300,
+                             input=json.dumps({"address": self.address, "cookie": self.device.client.cookie, "key": self.key.hex(), "phase": phase}))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    @helpers.unittest.skipUnless(shutil.which("node"), "needs Node.js to run the page's code")
+    def test_a_password_lock_hides_and_seals_a_folder_from_every_device(self):
+        v = self.device
+        for folder in ("/Private", "/Private/sub", "/Public"):
+            v.mkdir(folder)
+        v.put("/Private/a.txt", b"SECRET-one")
+        v.put("/Private/sub/b.txt", b"SECRET-two")
+        v.put("/Public/c.txt", b"public")
+        r = self.run_page("lock")
+        self.assertEqual(r["inside"], ["a.txt", "sub"])
+        self.assertEqual(r["count"], {"count": 1, "open": 1})
+        self.assertIn("locked folder already", r["nested"])
+        # Another device (one that knows nothing of locks) sees none of it: not a name, not a key.
+        d = self.new_device()
+        self.assertIsNone(d.resolve("/Private"))
+        self.assertEqual([n["name"] for n in d.list("/")], ["Public"])
+        self.assertEqual(d.list("/Public"), [])
+        kept = json.dumps(d.nodes)
+        for word in ("Private", "a.txt", "b.txt", "c.txt", "new.txt", "Made inside", "sub"):
+            self.assertNotIn(word, kept)
+        boxed = [n for n in d.nodes.values() if n.get("box")]
+        self.assertEqual(len(boxed), 7)                                 # Private, a, sub, b, Made inside, new.txt, and c.txt (moved in)
+        self.assertTrue(all(n.get("objs") is not None for n in boxed))
+        self.assertTrue(any(n["parent"] == vault.LOCKED and n.get("home") == "" for n in boxed))
+        # That device makes a folder of the same name meanwhile, and the host still knows nothing.
+        d.mkdir("/Private")
+        d.put("/Private/from-the-phone.txt", b"phone")
+        r = self.run_page("open")
+        self.assertEqual(r["before"], {"count": {"count": 1, "open": 0}, "top": ["Private", "Public"]})
+        self.assertEqual((r["wrong"], r["right"]), (0, 1))
+        self.assertEqual(r["top"], ["Private", "Private (locked)", "Public"])
+        self.assertEqual(r["root"], "Private (locked)")
+        self.assertEqual(r["inside"], ["Made inside", "a.txt", "c.txt", "sub"])
+        self.assertEqual((r["star"], r["text"]), (1234, "SECRET-one"))
+        self.assertEqual(r["relocked"], {"count": {"count": 1, "open": 0}, "top": ["Private", "Public"]})
+        self.assertIn("isn't its password", r["badRemove"])
+        self.assertEqual(r["after"]["count"], {"count": 0, "open": 0})
+        # The lock is gone: everything is in the clear again, on every device (one Private, with both in it).
+        d.sync()
+        self.assertEqual(sorted(n["name"] for n in d.list("/Private")), ["Made inside", "a.txt", "c.txt", "from-the-phone.txt", "sub"])
+        self.assertEqual(d.read("/Private/sub/b.txt"), b"SECRET-two")
+        self.assertEqual(d.read("/Private/Made inside/new.txt"), b"SECRET-made-in-a-locked-folder")
+        self.assertFalse(any(n.get("box") or n.get("parent") in (vault.LOCKS, vault.LOCKED) for n in d.nodes.values()))
+
+    def test_a_locked_entry_moves_to_another_account_sealed(self):
+        nodes = {"L": {"id": "L", "parent": vault.LOCKS, "lock": {"v": 1}},
+                 "f": {"id": "f", "parent": vault.LOCKED, "home": "", "in": "L", "box": "x", "objs": ["o1"]},
+                 "g": {"id": "g", "parent": "f", "in": "L", "box": "y", "objs": ["o2"]},
+                 "d": {"id": "d", "parent": "", "name": "Docs", "dir": True},
+                 "h": {"id": "h", "parent": vault.LOCKED, "home": "d", "in": "L", "box": "z", "objs": []}}
+        ops = {o["id"]: o for o in vault.moved_ops("m", nodes, "From", 1.0)}
+        mid = lambda x: vault.moved_id("m", x)
+        top = vault.moved_folder("m")
+        self.assertEqual(ops[mid("L")]["parent"], vault.LOCKS)
+        self.assertEqual((ops[mid("f")]["parent"], ops[mid("f")]["home"], ops[mid("f")]["in"]), (vault.LOCKED, top, mid("L")))
+        self.assertEqual((ops[mid("g")]["parent"], ops[mid("g")]["in"]), (mid("f"), mid("L")))
+        self.assertEqual(ops[mid("h")]["home"], mid("d"))
+        self.assertEqual(vault.Vault._objects(nodes["f"]), ["o1"])
 
     def test_devices_making_the_same_folder_make_one(self):
         a, b = self.device, self.new_device()

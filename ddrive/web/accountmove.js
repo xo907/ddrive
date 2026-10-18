@@ -92,7 +92,11 @@
     const now = Date.now() / 1000;
     const ops = [{ op: "put", id: top, parent: "", name, dir: true, size: 0, mtime: now, at: now, by: "moved in" }];
     for (const [old, n] of Object.entries(data.nodes || {})) {
-      const e = { ...n, id: await movedId(m.id, old), parent: n.parent ? await movedId(m.id, n.parent) : top };
+      // (what is locked moves sealed as it is, under the same password: its lock and its folder are given their new ids)
+      const kept = n.parent === DDV.LOCKS || n.parent === DDV.LOCKED;
+      const e = { ...n, id: await movedId(m.id, old), parent: kept ? n.parent : n.parent ? await movedId(m.id, n.parent) : top };
+      if (n.in) e.in = await movedId(m.id, n.in);
+      if (n.parent === DDV.LOCKED) e.home = n.home ? await movedId(m.id, n.home) : top;
       if (e.trash && e.trash.path) e.trash = { ...e.trash, path: "/" + name + "/" + String(e.trash.path).replace(/^\/+/, "") };
       ops.push({ ...e, op: "put" });
     }
@@ -237,7 +241,7 @@
         await v.sync();
         const { priv, pub } = await keypair();
         const key = await agree(priv, tpub, tpub, pub);
-        const sealed = await DDV.seal(key, enc.encode(JSON.stringify({ v: 1, nodes: Object.fromEntries(v.nodes) })), LABEL);
+        const sealed = await DDV.seal(key, enc.encode(JSON.stringify({ v: 1, nodes: Object.fromEntries(v.raw) })), LABEL);
         const got = await DDV.call(`/api/vault/move/send?id=${peer.id}&pub=${encodeURIComponent(DDV.b64(pub))}`,
                                    { method: "POST", body: sealed, headers: { "Content-Type": "application/octet-stream" } });
         if (got.check !== await checkCode(tpub, pub)) throw new Error("The server's check code isn't the one these keys make. Cancel the move on the other account.");

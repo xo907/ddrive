@@ -44,6 +44,17 @@ The list is a set of entries, one per file or folder, each with an id of its own
     trash     {at, path}: it was deleted then, from there. It is kept (and can be brought back) until
               it is purged; meanwhile it and what is in it count as not there.
 
+Password locks (made in the dashboard, which is the only place that opens them): a folder or file
+locked with a password is kept sealed with a key of its own, with everything in it, so that the
+account's words alone don't open it. The lock's record is an entry under "~locks" whose `lock` is
+{v, salt, iter, wrap}: the key, sealed (label "ddv1 lock key") with PBKDF2-SHA256(password, salt,
+iter). A locked entry is {id, parent, in: the lock's id, box, objs}: `box` is the rest of the entry,
+sealed with the lock's key (label "ddv1 locked"); `objs` the objects it holds on to (so that they
+are not forgotten by a device that can't open it). The locked folder or file itself has the parent
+"~locked" and its folder in `home`; what is in it keeps its parent. No device shows anything under
+"~locks" or "~locked", so a device that doesn't know of locks never sees what is locked, and one
+that does sees it only after its password was typed there.
+
 and the changes are: "put" (an entry as it now is), "move" (id, parent, name), "set" (id, fields: the
 ones given replace the entry's, null removes one), "del" (id: the entry and what is in it are gone for
 good). An entry may carry fields a client doesn't know; it keeps them as they are.
@@ -66,6 +77,8 @@ INFO_AUTH = b"ddrive vault v1 auth"
 INFO_META = b"ddrive vault v1 meta"
 AAD_OP = b"ddv1 op"
 AAD_CHUNK = b"ddv1 chunk"
+LOCKS = "~locks"                  # password locks (see "Password locks" above): their records
+LOCKED = "~locked"                # what is locked
 MAGIC = b"DDV1"
 CHUNK_LOG = 20                    # a file is sealed in pieces of 1 MiB
 OVERHEAD = 28                     # nonce + tag of a sealed thing
@@ -276,7 +289,12 @@ def moved_ops(move: str, nodes: dict, folder_name: str, at: float, by: str = "")
     top = moved_folder(move)
     ops = [{"op": "put", "id": top, "parent": "", "name": folder_name, "dir": True, "size": 0, "mtime": at, "at": at, "by": by}]
     for old, n in nodes.items():
-        e = dict(n, id=moved_id(move, old), parent=top if not n.get("parent") else moved_id(move, n["parent"]))
+        kept = n.get("parent") in (LOCKS, LOCKED)        # (what is locked moves sealed as it is: its lock and folder get their new ids)
+        e = dict(n, id=moved_id(move, old), parent=n["parent"] if kept else top if not n.get("parent") else moved_id(move, n["parent"]))
+        if n.get("in"):
+            e["in"] = moved_id(move, n["in"])
+        if n.get("parent") == LOCKED:
+            e["home"] = moved_id(move, n["home"]) if n.get("home") else top
         if e.get("trash") and isinstance(e["trash"], dict) and e["trash"].get("path"):
             e["trash"] = dict(e["trash"], path="/" + folder_name + "/" + e["trash"]["path"].lstrip("/"))
         ops.append(dict(e, op="put"))
@@ -496,6 +514,7 @@ class Vault:
         out = [node.get("obj")] + [v.get("obj") for v in node.get("versions") or []]
         if isinstance(node.get("thumb"), dict):
             out.append(node["thumb"].get("obj"))
+        out += node.get("objs") or []           # (a locked entry's, which this device can't open)
         return [o for o in out if o]
 
     def _drop(self, objects):

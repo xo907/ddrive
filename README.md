@@ -1314,7 +1314,16 @@ files, snapshots, shared links, the log), on all your devices. Not even its name
   and a link you shared to a locked item itself keeps working (locked things *inside* a shared folder
   don't show).
 
-What it is and isn't: a lock is a gate, not a second layer of encryption. Locked files are encrypted
+**End-to-end encrypted accounts** have locks too (in the dashboard), and there a lock *is* a second
+layer of encryption: the locked folder or file and everything in it are sealed again with a key that
+only the password opens (PBKDF2-SHA256, 600,000 rounds), so the account's 24 words alone don't open
+it, on any device. Unlocking happens in the page and lasts until it is locked again, 15 minutes pass
+without using it, or the page is closed. Devices that sync the account (a computer, the phone app)
+never see what is locked; one that makes a folder of the same name meanwhile makes a new one, and the
+dashboard shows the locked one as "name (locked)" next to it. There is no way round a forgotten
+password: not the recovery phrase, not the server. (vault.py describes how locks are kept.)
+
+What it is and isn't (on a drive): a lock is a gate, not a second layer of encryption. Locked files are encrypted
 with the drive's key like all others. It keeps out anyone using your computer, the drive letter or the
 dashboard; it does not stop someone with technical skill who can run programs as you on that computer. While a
 folder is unlocked on the drive letter, every program on that computer can read it, and Windows may

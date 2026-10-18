@@ -10,6 +10,11 @@
   const AAD_OP = enc.encode("ddv1 op"), AAD_CHUNK = enc.encode("ddv1 chunk"), AAD_SYNC = enc.encode("ddv1 sync");
   const AAD_KEPT = enc.encode("ddv1 list kept in this browser");
   const AAD_UPLOAD = enc.encode("ddv1 upload kept in this browser"), UPLOAD_KEPT = 7 * 86400 * 1000;
+  const AAD_LOCKED = enc.encode("ddv1 locked"), AAD_LOCK_KEY = enc.encode("ddv1 lock key");
+  // Password-locked folders and files (vault.py says how they are kept): a lock's record sits under LOCKS,
+  // a locked folder or file under LOCKED (its own folder in `home`), and what is in it under it, as ever.
+  // None of these is under a folder any device shows, so a device that doesn't know of locks never sees them.
+  const LOCKS = "~locks", LOCKED = "~locked", LOCK_ITER = 600000;
   const MAGIC = enc.encode("DDV1"), CHUNK_LOG = 20, CHUNK = 1 << CHUNK_LOG, OVERHEAD = 28, HEAD = 5;
   const PART_CHUNKS = 8;                 // sealed pieces go to the server this many at a time
   const SNAPSHOT_EVERY = 400;
@@ -109,6 +114,13 @@
     return { auth: hex(auth), meta };
   }
   const fileKey = (raw) => crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  /** The key a lock's password makes (PBKDF2-SHA256: slow on purpose, so passwords can't be guessed quickly). */
+  async function passwordKey(password, salt, iterations) {
+    const base = await crypto.subtle.importKey("raw", enc.encode(String(password).normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  /** The objects an entry holds on to: its content, its earlier versions, its small picture. */
+  const objectsOf = (n) => [n.obj, ...(n.versions || []).map((x) => x.obj), n.thumb && n.thumb !== -1 ? n.thumb.obj : null].filter(Boolean);
 
   /** nonce + tag + ciphertext */
   async function seal(key, data, label) {
@@ -254,7 +266,11 @@
   class Vault {
     constructor(meta) {
       this.meta = meta;
-      this.nodes = new Map();            // id -> {id, parent, name, dir, size, mtime, obj, key}
+      this.raw = new Map();              // id -> the entry as it is kept: {id, parent, name, dir, size, mtime, obj, key}, or sealed by a lock
+      this.nodes = new Map();            // the same as this page shows it: what is locked left out, what is unlocked here opened
+      this.opened = new Map();           // lock id -> its key, for the locks unlocked in this page
+      this.boxes = new Map();            // a locked entry's sealed content -> what it says (for the locks that are open)
+      this.gen = 0;                      // goes up whenever `nodes` is made again
       this.seq = 0;
       this.since = 0;                    // changes since the last sealed whole list
     }
@@ -272,7 +288,7 @@
       for (;;) {
         const got = await call(`/api/vault/log?after=${this.seq}`);
         if (this.seq > (got.seq || 0)) {               // the server has less than this list knows of (it was
-          this.nodes = new Map();                      // brought back from a copy): what was kept here is no
+          this.raw = new Map();                        // brought back from a copy): what was kept here is no
           this.seq = 0; this.since = 0;                // good, and all of it is read again
           this.kept = -1;
           continue;
@@ -280,7 +296,7 @@
         const snap = got.snapshot;
         if (snap && snap.seq > this.seq) {             // behind the last sealed whole list: start from it
           const raw = await this._openAll(this.meta, snap.object, snap.size);
-          this.nodes = new Map(Object.entries(JSON.parse(dec.decode(raw)).nodes));
+          this.raw = new Map(Object.entries(JSON.parse(dec.decode(raw)).nodes));
           this.seq = snap.seq; this.since = 0;
           if (this.heard) this.heard(this);
           continue;
@@ -295,6 +311,7 @@
           }
           this.seq = seq;
         }
+        if (!got.more) { await this._openBoxes(); this._derive(); }
         if (this.heard) this.heard(this);          // (whoever shows the list being read: how far it is)
         if (!got.more) return this;
       }
@@ -311,12 +328,13 @@
         const kept = await store("readonly", (s) => s.get("list:" + who));
         if (!kept || !kept.sealed || !(kept.seq > 0)) return false;
         const raw = await unseal(this.meta, new Uint8Array(kept.sealed), AAD_KEPT);
-        this.nodes = new Map(Object.entries(JSON.parse(dec.decode(raw)).nodes));
+        this.raw = new Map(Object.entries(JSON.parse(dec.decode(raw)).nodes));
         this.seq = kept.seq; this.since = kept.since || 0;
         this.kept = kept.seq;
+        this._derive();
         return true;
       } catch (e) {                                    // another key, or damaged: read from the server as ever
-        this.nodes = new Map(); this.seq = 0; this.since = 0;
+        this.raw = new Map(); this.seq = 0; this.since = 0; this._derive();
         return false;
       }
     }
@@ -326,7 +344,7 @@
       this._keeping = true;
       try {
         const seq = this.seq, since = this.since;
-        const sealed = await seal(this.meta, enc.encode(JSON.stringify({ nodes: Object.fromEntries(this.nodes) })), AAD_KEPT);
+        const sealed = await seal(this.meta, enc.encode(JSON.stringify({ nodes: Object.fromEntries(this.raw) })), AAD_KEPT);
         await store("readwrite", (s) => s.put({ seq, since, sealed: sealed.buffer, at: Date.now() }, "list:" + who));
         this.kept = seq;
       } catch (e) { /* no room, or a private window: the next visit reads it from the server */ }
@@ -337,28 +355,191 @@
       if (op.op === "put") {
         const n = { ...op, dir: !!op.dir, size: op.size || 0, mtime: op.mtime || 0 };      // every field, also ones not known here
         delete n.op;
-        this.nodes.set(op.id, n);
+        this.raw.set(op.id, n);
       } else if (op.op === "set") {
-        const n = this.nodes.get(op.id);
+        const n = this.raw.get(op.id);
         if (n) for (const [k, val] of Object.entries(op.fields || {})) { if (val === null) delete n[k]; else if (k !== "id") n[k] = val; }
       } else if (op.op === "move") {
-        const n = this.nodes.get(op.id);
+        const n = this.raw.get(op.id);
         if (n) { n.parent = op.parent; n.name = op.name; }
       } else if (op.op === "del") {
-        for (const id of this._under(op.id)) this.nodes.delete(id);
+        for (const id of this._under(op.id)) this.raw.delete(id);
       }
     }
+    /** An entry and everything in it (also what is locked in it), by id. */
     _under(id) {
+      const out = [], todo = [id], seen = new Set();
+      while (todo.length) {
+        const cur = todo.pop();
+        if (!this.raw.has(cur) || seen.has(cur)) continue;
+        seen.add(cur); out.push(cur);
+        for (const n of this.raw.values()) if (n.parent === cur || (n.parent === LOCKED && n.home === cur)) todo.push(n.id);
+      }
+      return out;
+    }
+
+    // ---------- password locks
+    /** Open what is locked with the locks open here (once each: what it says is kept while they are open). */
+    async _openBoxes() {
+      if (!this.opened.size) return;
+      for (const n of this.raw.values()) {
+        if (!n.box || this.boxes.has(n.box) || !this.opened.has(n.in)) continue;
+        try { this.boxes.set(n.box, JSON.parse(dec.decode(await unseal(this.opened.get(n.in), unb64(n.box), AAD_LOCKED)))); }
+        catch (e) { /* damaged, or sealed with another key: it stays out of sight */ }
+      }
+    }
+    /** `nodes` from `raw`: locked entries left out, unless their lock is open here. */
+    _derive() {
+      const out = new Map(), roots = [];
+      for (const n of this.raw.values()) {
+        if (n.parent === LOCKS) continue;
+        if (!n.box) { out.set(n.id, n); continue; }
+        const inner = this.opened.has(n.in) && this.boxes.get(n.box);
+        if (!inner) continue;
+        const root = n.parent === LOCKED;
+        const e = { ...inner, id: n.id, parent: root ? n.home || "" : n.parent, lock: n.in };
+        if (root) { e.lockRoot = true; roots.push(e); }
+        out.set(n.id, e);
+      }
+      // A device that can't see a locked folder may make one of the same name next to it: this one shows as "name (locked)".
+      for (const r of roots) {
+        for (const n of out.values()) {
+          if (n !== r && !n.lockRoot && !n.trash && n.parent === r.parent && n.name === r.name) { r._name = r.name; r.name = `${r.name} (locked)`; break; }
+        }
+      }
+      this.nodes = out;
+      this.gen++;
+    }
+    /** The lock a new entry in this folder is sealed with (null: none). */
+    _lockIn(folder) { const f = this.nodes.get(folder); return (f && f.lock) || null; }
+    /** An entry as the change that keeps it sealed with lock `lock` (as the locked one itself, when `root`). */
+    async _boxed(e, lock, root) {
+      const inner = { ...e, name: e._name || e.name };
+      for (const k of ["id", "parent", "lock", "lockRoot", "_name", "op", "home", "in", "box", "objs"]) delete inner[k];
+      const key = this.opened.get(lock);
+      if (!key) throw new Error("That is locked: unlock it first.");
+      const op = { op: "put", id: e.id, parent: root ? LOCKED : e.parent, in: lock, objs: objectsOf(inner),
+                   box: b64(await seal(key, enc.encode(JSON.stringify(inner)), AAD_LOCKED)) };
+      if (root) op.home = e.parent || "";
+      return op;
+    }
+    /** An entry as the change that keeps it in the clear. */
+    _plain(e) {
+      const op = { ...e, op: "put", name: e._name || e.name };
+      for (const k of ["lock", "lockRoot", "_name", "home", "in", "box", "objs"]) delete op[k];
+      return op;
+    }
+    /** What is in an entry as this page shows it (it first), by id. */
+    _openUnder(id) {
       const out = [], todo = [id];
       while (todo.length) {
         const cur = todo.pop();
         if (!this.nodes.has(cur)) continue;
         out.push(cur);
-        for (const n of this.nodes.values()) if (n.parent === cur) todo.push(n.id);
+        for (const n of this.nodes.values()) if (n.parent === cur && !n.lockRoot) todo.push(n.id);
       }
       return out;
     }
-    async _send(...ops) {
+    /** Changes as they are to be kept: one that touches something locked here is the entry sealed again. */
+    async _seal(ops) {
+      const out = [];
+      for (const op of ops) {
+        if (op.op === "del" || String(op.parent || "").startsWith("~") || op.box) { out.push(op); continue; }
+        const n = this.nodes.get(op.id);
+        if (op.op === "put") {
+          if (n && n.lockRoot) out.push(await this._boxed(op, n.lock, true));
+          else {
+            const lock = this._lockIn(op.parent);
+            out.push(lock ? await this._boxed(op, lock, false) : op.lock ? this._plain(op) : op);
+          }
+        } else if (op.op === "set") {
+          if (!n || !n.lock) { out.push(op); continue; }
+          const e = { ...n };
+          for (const [k, val] of Object.entries(op.fields || {})) { if (val === null) delete e[k]; else if (k !== "id") e[k] = val; }
+          out.push(await this._boxed(e, n.lock, !!n.lockRoot));
+        } else if (op.op === "move") {
+          if (!n) { out.push(op); continue; }
+          const to = this._lockIn(op.parent);
+          if (n.lockRoot) {
+            if (to) throw new Error("A locked folder can't go into another locked folder.");
+            const e = { ...n, parent: op.parent, name: op.name };
+            delete e._name;
+            out.push(await this._boxed(e, n.lock, true));
+          } else if (n.lock === to) {
+            out.push(to ? await this._boxed({ ...n, parent: op.parent, name: op.name }, to, false) : op);
+          } else {                                 // into or out of a locked folder: it and what is in it are sealed, or opened, again
+            for (const id of this._openUnder(op.id)) {
+              const e = id === op.id ? { ...n, parent: op.parent, name: op.name } : this.nodes.get(id);
+              out.push(to ? await this._boxed(e, to, false) : this._plain(e));
+            }
+          }
+        } else out.push(op);
+      }
+      return out;
+    }
+    /** Lock an entry (and what is in it) with a password. It stays open in this page. */
+    async lock(id, password) {
+      const n = this.nodes.get(id);
+      if (!n) throw new Error("That isn't there.");
+      if (n.lockRoot) throw new Error("That has a lock already.");
+      if (n.lock) throw new Error("That is in a locked folder already.");
+      const all = this._openUnder(id);
+      if ([...this.raw.values()].some((r) => r.parent === LOCKED && all.includes(r.home)))
+        throw new Error("There is a locked folder in it. Remove that lock first, or lock something else.");
+      const raw = newKey(), salt = crypto.getRandomValues(new Uint8Array(16)), lock = newId();
+      const wrap = await seal(await passwordKey(password, salt, LOCK_ITER), raw, AAD_LOCK_KEY);
+      this.opened.set(lock, await fileKey(raw));
+      const ops = [{ op: "put", id: lock, parent: LOCKS, name: "", dir: false, size: 0, mtime: Date.now() / 1000,
+                     lock: { v: 1, salt: b64(salt), iter: LOCK_ITER, wrap: b64(wrap) } }];
+      for (const x of all) ops.push(await this._boxed(this.nodes.get(x), lock, x === id));
+      for (let i = 0; i < ops.length; i += 400) await this._post(...ops.slice(i, i + 400));
+      return lock;
+    }
+    /** The locks this password opens (every one of them): how many locked things are open now. */
+    async unlock(password) {
+      const recs = [...this.raw.values()].filter((n) => n.parent === LOCKS && n.lock && n.lock.wrap && !this.opened.has(n.id));
+      const got = await Promise.all(recs.map(async (r) => {
+        try {
+          const pk = await passwordKey(password, unb64(r.lock.salt), r.lock.iter || LOCK_ITER);
+          return [r.id, await fileKey(await unseal(pk, unb64(r.lock.wrap), AAD_LOCK_KEY))];
+        } catch (e) { return null; }
+      }));
+      const now = new Set();
+      for (const g of got) if (g) { this.opened.set(g[0], g[1]); now.add(g[0]); }
+      if (now.size) { await this._openBoxes(); this._derive(); }
+      return [...this.raw.values()].filter((n) => n.parent === LOCKED && now.has(n.in)).length;
+    }
+    /** Every lock closed again in this page. */
+    relock() { this.opened.clear(); this.boxes.clear(); this._derive(); }
+    /** Take the lock off a locked entry: it and what is in it are in the clear again, on every device. */
+    async unprotect(id, password) {
+      const n = this.nodes.get(id), rec = n && this.raw.get(n.lock);
+      if (!n || !n.lockRoot || !rec) throw new Error("That isn't locked.");
+      try { await unseal(await passwordKey(password, unb64(rec.lock.salt), rec.lock.iter || LOCK_ITER), unb64(rec.lock.wrap), AAD_LOCK_KEY); }
+      catch (e) { throw new Error("That isn't its password."); }
+      const ops = this._openUnder(id).map((x) => this._plain(this.nodes.get(x)));
+      const others = [...this.raw.values()].some((r) => r.in === n.lock && r.parent === LOCKED && r.id !== id);
+      if (!others) ops.push({ op: "del", id: n.lock });
+      for (let i = 0; i < ops.length; i += 400) await this._post(...ops.slice(i, i + 400));
+    }
+    /** {count: locked things, open: those open here}. */
+    lockCount() {
+      let count = 0, open = 0;
+      for (const n of this.raw.values()) {
+        if (n.parent !== LOCKED) continue;
+        count++;
+        const e = this.nodes.get(n.id);
+        if (e && !e.trash) open++;
+      }
+      return { count, open };
+    }
+    /** Locked things whose folder is gone for good (another device deleted it, which can't see them). */
+    strays() {
+      return [...this.raw.values()].filter((n) => n.parent === LOCKED && n.home && !this.raw.has(n.home));
+    }
+
+    async _send(...ops) { return this._post(...(await this._seal(ops))); }
+    async _post(...ops) {
       const blobs = [];
       let total = 0;
       for (const op of ops) { const b = await seal(this.meta, enc.encode(JSON.stringify(op)), AAD_OP); blobs.push(b); total += 4 + b.length; }
@@ -370,7 +551,7 @@
       if (this.since >= SNAPSHOT_EVERY) await this.snapshot().catch(() => null);
     }
     async snapshot() {
-      const state = enc.encode(JSON.stringify({ nodes: Object.fromEntries(this.nodes) }));
+      const state = enc.encode(JSON.stringify({ nodes: Object.fromEntries(this.raw) }));
       const id = newId();
       await this._store(id, this.meta, new Blob([state]));
       await call("/api/vault/snapshot", { method: "POST", json: { seq: this.seq, object: id, size: state.length } });
@@ -411,7 +592,7 @@
     async mkdir(parent, name) {
       if (this.taken(parent, name)) throw new Error("Something with that name already exists");
       let id = await folderId(parent, name);
-      if (this.nodes.has(id)) id = newId();          // (that folder was there once, and was deleted or moved)
+      if (this.raw.has(id)) id = newId();            // (that folder was there once, and was deleted or moved)
       await this._send({ op: "put", id, parent, name, dir: true, size: 0, mtime: Date.now() / 1000 });
       return id;
     }
@@ -422,7 +603,7 @@
     }
     async remove(ids) {
       const objects = [];
-      for (const id of ids) for (const sub of this._under(id)) { const n = this.nodes.get(sub); if (n && n.obj) objects.push(n.obj); }
+      for (const id of ids) for (const sub of this._under(id)) { const n = this.raw.get(sub); const o = n && (n.obj || (n.objs || [])[0]); if (o) objects.push(o); }
       await this._send(...ids.map((id) => ({ op: "del", id })));
       if (objects.length) await call("/api/vault/delete", { method: "POST", json: { ids: objects } }).catch(() => null);
     }
@@ -453,7 +634,7 @@ ${Math.round((mtime || 0) * 1000)}`)));
         if (!kept || !kept.sealed || Date.now() - (kept.at || 0) > UPLOAD_KEPT) return null;
         const rec = JSON.parse(dec.decode(await unseal(this.meta, new Uint8Array(kept.sealed), AAD_UPLOAD)));
         // (not the same content after all, or an object that became a file's meanwhile: a new upload)
-        const used = [...this.nodes.values()].some((n) => n.obj === rec.obj || (n.versions || []).some((x) => x.obj === rec.obj));
+        const used = [...this.raw.values()].some((n) => n.obj === rec.obj || (n.versions || []).some((x) => x.obj === rec.obj) || (n.objs || []).includes(rec.obj));
         if (rec.first !== first || rec.size !== blob.size || used) { await store("readwrite", (s) => s.delete(at)).catch(() => null); return null; }
         return { raw: unb64(rec.raw), obj: rec.obj };
       } catch (e) { return null; }               // (another key, a private window: a new upload)
@@ -631,7 +812,7 @@ ${Math.round((mtime || 0) * 1000)}`)));
   }
 
   window.DDV = { usable, wordlist, keyToPhrase, phraseToKey, newKey, derive, keys, call, Gone, Vault, CHUNK, OVERHEAD, HEAD, sealMessage, openMessage,
-                 newId, folderId, view, fileKey, seal, unseal, chunkLabel, chunksOf, b64, unb64, pieceSum, prints, steady, reconnect, patient,
+                 newId, folderId, view, fileKey, seal, unseal, objectsOf, passwordKey, LOCKS, LOCKED, chunkLabel, chunksOf, b64, unb64, pieceSum, prints, steady, reconnect, patient,
                  /** Do what follows as this account (a session the server handed out), next to who the page is signed in as. */
                  as: (session) => { also = String(session || ""); },
                  /** Seal a file and send it as an object to an address that takes them (a file request's). */

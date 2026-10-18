@@ -3,6 +3,20 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.8.0 (2026-10-18)
+
+- **Password-locked folders for end-to-end encrypted accounts.** Right-click a folder or file → **Lock with a
+  password…**, as on a drive: it disappears, with everything in it and its name, from Files, search, the
+  gallery, Deleted, Activity and snapshots, on every device of the account, until the password is typed
+  (the padlock at the top → **Unlock…**). Everything locked with that password opens, in that page only,
+  and locks again after 15 minutes without use, with **Lock again now**, or when the page is closed.
+- In an end-to-end account a lock is more than a gate: what is locked is sealed again, with a key only
+  its password opens (PBKDF2, 600,000 rounds). A computer or phone that syncs the account, or a page
+  signed in with the 24 words, can't see or open it without the password, and neither can the server.
+  So a forgotten password can't be got round, not even with the 24 words: the lock dialog says so.
+- Locked things can be added to, moved into and out of, renamed, starred and deleted while open; moving an
+  account into another takes them along, still locked with the same password.
+
 ## 3.7.2 (2026-10-17)
 
 - **FindX draws the path you really took.** History on the FindX tab is cleaned as it is drawn: straight lines

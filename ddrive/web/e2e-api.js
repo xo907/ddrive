@@ -47,10 +47,10 @@
                  ["archive", "zip rar 7z tar gz bz2 xz iso"]].map(([k, list]) => [k, new Set(list.split(" "))]);
   const kindOf = (name) => (KINDS.find(([, set]) => set.has(ext(name))) || ["file"])[0];
 
-  let seen = -1, touched = 0, kids, pathOf, byPath, sizes;
-  /** Work out paths and folder sizes again when the list changed. */
+  let seen = -1, touched = 0, made = -1, kids, pathOf, byPath, sizes;
+  /** Work out paths and folder sizes again when the list changed (or a lock was opened or closed). */
   function index() {
-    if (seen === v.seq && touched === v.since) return;
+    if (seen === v.seq && touched === v.since && made === v.gen) return;
     // (deleted entries are kept, but not there; a folder two devices made at once shows as one)
     kids = DDV.view(v.nodes); pathOf = new Map(); byPath = new Map(); sizes = new Map();
     const walk = (id, path) => {
@@ -64,7 +64,7 @@
       return [bytes, files];
     };
     walk("", "/");
-    seen = v.seq; touched = v.since;
+    seen = v.seq; touched = v.since; made = v.gen;
   }
   const clean = (path) => "/" + String(path || "").split("/").filter((x) => x && x !== ".").join("/");
   function at(path, want) {
@@ -74,6 +74,7 @@
     if (!n) throw new Fail(404, `Not found: ${path}`);
     if (want === "dir" && !n.dir) throw new Fail(400, `${path} is a file`);
     if (want === "file" && n.dir) throw new Fail(400, `${path} is a folder`);
+    if (n.lock) lockUsed = Date.now();
     return n;
   }
   const live = () => { index(); return [...byPath.entries()]; };
@@ -82,6 +83,7 @@
   function entry(path, n) {
     const e = { name: n.name, path, dir: !!n.dir, size: n.size || 0, mtime: n.mtime || 0, state: "synced", pinned: false };
     if (n.star) e.starred = true;
+    if (n.lockRoot) e.locked = true;
     if (n.dir) { const s = sizes.get(n.id) || [0, 0]; e.size = s[0]; e.files = s[1]; }
     else if (MEDIA.has(ext(n.name))) e.thumb = n.thumb ? (n.thumb === -1 ? -1 : 1) : null;
     return e;
@@ -90,7 +92,7 @@
   /** Have the server forget objects, except those something in the list still uses. */
   async function drop(objects) {
     const used = await snapKeeps();            // (what a snapshot still refers to stays)
-    for (const n of v.nodes.values()) for (const o of objectsOf(n)) used.add(o);
+    for (const n of v.raw.values()) for (const o of [...objectsOf(n), ...(n.objs || [])]) used.add(o);      // (also what is locked)
     const gone = [...new Set(objects)].filter((o) => o && !used.has(o));
     if (gone.length) await DDV.call("/api/vault/delete", { method: "POST", json: { ids: gone } }).catch(() => null);
   }
@@ -325,6 +327,7 @@
         s.uploads = s.uploads.map((u) => ({ ...u, path: "/" + (names.get(String(u.path || "").split("/").pop()) || "a sealed file") }));
       }
       s.e2e = true;
+      s.locks = { ...v.lockCount(), minutes: LOCK_MINUTES };
       s.rev = v.seq;                             // (goes up with every change to the list, from any device of the account)
       s.fetches = E.fetches || [];
       // (what the account's devices are fetching: asked often only while something is being fetched)
@@ -427,7 +430,7 @@
                versions: { count: s.versions, bytes: s.version_bytes }, spare_bytes: spare, saved: {},
                deleted: { count: [...v.nodes.values()].filter((n) => n.trash && !n.into).length, bytes: 0 }, quota: (E.status || {}).quota || null };
     },
-    async locks() { return { count: 0, open: [], minutes: 0, mount: "", host: "" }; },
+    async locks() { return { ...v.lockCount(), minutes: LOCK_MINUTES, mount: "", host: "" }; },
     async sync() {
       return { jobs: [], running: null, can_edit: false, local: false, remote_edit: false, host: "", mount: "", windows: false, home: "", account: true,
                devices: await devices(), modes: MODES.map(([id, label, direction, text]) => ({ id, label, direction, text })),
@@ -469,7 +472,7 @@
       const up = at(path.slice(0, cut) || "/", "dir");
       if (byPath.has(path)) throw new Fail(409, "Something with that name already exists");
       let id = await DDV.folderId(up.id, path.slice(cut + 1));
-      if (v.nodes.has(id)) id = DDV.newId();             // (that folder was there once, and was deleted or moved)
+      if (v.raw.has(id)) id = DDV.newId();               // (that folder was there once, and was deleted or moved)
       await v._send({ op: "put", id, parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now(), at: now(), by: ME });
       return { ok: true, path };
     },
@@ -902,7 +905,7 @@
   }
   async function takeSnapshot(label, keep) {
     index();
-    const entries = [...byPath.values()].map((n) => ({ id: n.id, parent: n.parent, name: n.name, dir: !!n.dir, size: n.size || 0, mtime: n.mtime || 0,
+    const entries = [...byPath.values()].filter((n) => !n.lock).map((n) => ({ id: n.id, parent: n.parent, name: n.name, dir: !!n.dir, size: n.size || 0, mtime: n.mtime || 0,
                                                        ...(n.dir ? {} : { obj: n.obj, key: n.key }) }));
     const files = entries.filter((e) => !e.dir), at = now();
     const blob = new Blob([JSON.stringify({ v: 1, at, entries })]);
@@ -1174,6 +1177,52 @@
     e.preventDefault();
     chatOpen(new URL(a.href, location.href).searchParams).catch((err) => E.say(err.message));
   }, true);
+
+  // ------------------------------------------------------------ password-locked folders and files
+  // Locking seals a folder (or file) and everything in it again, with a key only its password opens
+  // (vaultcore.js): on every device it is gone, name and all, and a device or a page that has the
+  // account's words but not the password can't open it either. Typing the password opens it in this
+  // page only, until it is locked again, the page is closed or LOCK_MINUTES pass without using it.
+  const LOCK_MINUTES = 15;
+  let lockUsed = 0, lockFails = 0;
+  setInterval(() => {
+    if (!v || !v.opened.size || Date.now() - lockUsed < LOCK_MINUTES * 60e3) return;
+    v.relock();
+    if (E.changed) E.changed();
+  }, 30e3);
+  POST["locks/add"] = async (b) => {
+    const n = at(b.path), pw = String(b.password || "");
+    if (!n.id) throw new Fail(400, "The whole account can't be locked");
+    if (pw.length < 4) throw new Fail(400, "Use at least 4 characters");
+    await v.lock(n.id, pw);
+    lockUsed = Date.now();
+    return { ok: true, minutes: LOCK_MINUTES };
+  };
+  POST["locks/unlock"] = async (b) => {
+    if (!v.lockCount().count) throw new Fail(404, "Nothing is locked in this account.");
+    if (lockFails) await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** lockFails)));      // (wrong passwords are slowed down)
+    const opened = await v.unlock(String(b.password || ""));
+    if (!opened) { lockFails++; throw new Fail(403, v.lockCount().open ? "Nothing else is locked with that password." : "Nothing is locked with that password."); }
+    lockFails = 0; lockUsed = Date.now();
+    await tidyLocks().catch(() => null);
+    return { ok: true, opened, minutes: LOCK_MINUTES };
+  };
+  POST["locks/lock"] = async () => { v.relock(); return { ok: true }; };
+  POST["locks/remove"] = async (b) => {
+    const n = at(b.path);
+    if (!n.lockRoot) throw new Fail(400, "That isn't locked");
+    try { await v.unprotect(n.id, String(b.password || "")); }
+    catch (e) { throw new Fail(403, e.message); }
+    return { ok: true };
+  };
+  /** A locked folder whose own folder another device deleted for good (it couldn't see it) goes too. */
+  async function tidyLocks() {
+    const gone = v.strays();
+    if (!gone.length) return;
+    const objects = gone.flatMap((n) => v._under(n.id).flatMap((id) => (v.raw.get(id) || {}).objs || []));
+    await v._post(...gone.map((n) => ({ op: "del", id: n.id })));
+    await drop(objects);
+  }
 
   const PASS = /^(account|account\/delete|changelog|vault(\/.*)?|findx(\/.*)?)$/;        // about the account itself (and FindX's sealed relay): the server's to answer
 

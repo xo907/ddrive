@@ -277,6 +277,7 @@ class Vault(val client: HostClient, key: ByteArray) {
         add(n.optString("obj"))
         n.optJSONArray("versions")?.let { v -> for (i in 0 until v.length()) add(v.optJSONObject(i)?.optString("obj")) }
         add(n.optJSONObject("thumb")?.optString("obj"))
+        n.optJSONArray("objs")?.let { o -> for (i in 0 until o.length()) add(o.optString(i)) }     // (a password-locked entry's, which can't be opened here)
         return out
     }
 

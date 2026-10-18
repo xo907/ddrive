@@ -3085,7 +3085,8 @@ function lockDialog(it) {
   } }, "Lock");
   const m = modal(`Lock “${it.name}”`,
     h("p", { class: "muted", style: "margin:0 0 16px" }, `${it.dir ? "This folder and everything in it" : "This file"} disappears from the drive and from this dashboard, on all your devices, until its password is typed. `
-      + "Keep the password somewhere: it can't be looked up."),
+      + (window.E2E && E2E.active ? "It is sealed with the password, so not even your 24 words open it: if the password is forgotten, so is what is locked. Keep it somewhere safe."
+                                 : "Keep the password somewhere: it can't be looked up.")),
     field("Password", a), field("Again", b, "Locked folders that share a password open together."),
     h("div", { class: "modal-actions" }, go));
   a.addEventListener("keydown", (e) => { if (e.key === "Enter") b.focus(); });
