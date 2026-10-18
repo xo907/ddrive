@@ -54,3 +54,38 @@ jobs:
       - name: Say what failed (shown on the run's summary page)
         if: failure()
         run: python .github/android_failures.py
+
+  # The dashboard in a real browser (tests/test_browser.py): signing in, uploads and downloads, an end-to-end
+  # account's password locks, the menu, the update notice. Playwright drives a headless Chromium.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the encryption library, Playwright and its Chromium
+        run: |
+          python -m pip install cryptography playwright
+          python -m playwright install --with-deps chromium
+      - name: Run the browser tests
+        working-directory: tests
+        run: python -m unittest test_browser -v
+
+  # FindX (findx/), the Android app that finds your phone: its unit tests (positions, keys, circles, battery).
+  findx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: The Android 36 platform (FindX uses Ultra-Wideband)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" > /dev/null
+      - name: Run FindX's unit tests
+        working-directory: findx
+        run: gradle --console=plain testDebugUnitTest
