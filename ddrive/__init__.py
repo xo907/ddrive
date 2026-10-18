@@ -1,3 +1,3 @@
 """DDrive - an encrypted virtual drive (Windows / Linux) backed by a private Discord channel."""
 
-__version__ = "3.5.0"
+__version__ = "3.6.0"

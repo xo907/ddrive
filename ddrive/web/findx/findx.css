@@ -105,6 +105,8 @@ body {
 .actions button svg { width: 22px; height: 22px; color: var(--red); }
 .actions button.busy { opacity: 0.6; }
 .actions.hidden { display: none; }
+.actions button[hidden] { display: none; }
+.actions:has(button[hidden]) { grid-template-columns: 1fr; }
 
 .when { display: flex; gap: 6px; margin-top: 16px; overflow-x: auto; scrollbar-width: none; }
 .when::-webkit-scrollbar { display: none; }
@@ -143,6 +145,20 @@ body.night .when button.on { background: #f2f2f7; color: #1c1c1e; }
 }
 .fx-marker.heading .cone { display: block; }
 @keyframes ring { 0% { transform: scale(0.45); opacity: 0.9; } 100% { transform: scale(1.5); opacity: 0; } }
+
+#theme svg { display: none; }
+#theme[data-theme="auto"] .i-auto, #theme[data-theme="light"] .i-light, #theme[data-theme="dark"] .i-dark { display: block; }
+
+.pick-group { font-size: 12px; font-weight: 650; color: var(--ink2); text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 10px 4px; }
+
+/* The others: a small round face each. */
+.fx-face {
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
+  background: #8e8e93; color: #fff; font: 700 13px/1 -apple-system, "Inter", Roboto, sans-serif; letter-spacing: -0.2px;
+  border: 3px solid #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28); transition: transform 0.15s;
+}
+.fx-face:hover { transform: scale(1.08); }
+.fx-face.stale { opacity: 0.6; filter: grayscale(0.5); }
 
 .fx-stay { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 3px solid var(--red); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25); cursor: pointer; }
 

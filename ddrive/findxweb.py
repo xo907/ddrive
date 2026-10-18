@@ -5,6 +5,9 @@
 - /findx/              the map of your devices (signed in)
 - /f/<link>            a live-location link's page (nobody signed in: the key is in the link after "#")
 - /api/findx/shared    what that page asks for (nobody signed in)
+- /api/findx/circle/…  making and deleting circles (signed in)
+- /api/findx/c/…       a circle's members (nobody signed in: the invite's token, findxcircles.py)
+- /j/<circle>          a circle's invite page ("Open in FindX")
 
 The pages are FindX's own map (web/findx/, the same files as in the app), with a policy of their own
 that lets them fetch map tiles from OpenFreeMap and nothing else.
@@ -19,7 +22,10 @@ from .findx import WAIT_MAX, RelayError
 
 _WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 _LINK = re.compile(r"^/f/([0-9a-f]{32})$")
+_JOIN = re.compile(r"^/j/([0-9a-f]{32})$")
 SHARED_PER_MIN = 240      # a link's page asks every few seconds; this is plenty for a few people on one address
+CIRCLE_PER_MIN = 600      # a family behind one address, each phone reporting and waiting, and a map or two open
+CIRCLE_ROUTES = ("info", "setinfo", "report", "members", "command", "wait", "leave")
 
 # The map draws in a worker it makes from a blob, and fetches tiles and letters from OpenFreeMap.
 FINDX_CSP = ("default-src 'self'; connect-src 'self' https://tiles.openfreemap.org; img-src 'self' blob: data:; "
@@ -61,6 +67,7 @@ class _Pace:
 
 
 _pace = _Pace(SHARED_PER_MIN)
+_circle_pace = _Pace(CIRCLE_PER_MIN)
 
 
 class FindXHandlers:
@@ -84,8 +91,14 @@ class FindXHandlers:
 
     def _findx_public(self, method, route):
         """FindX's routes that need nobody signed in. Returns True when it answered."""
+        if method == "POST" and route.startswith("/api/findx/c/") and route[13:] in CIRCLE_ROUTES:
+            self._findx_circle(route[13:])
+            return True
         if method != "GET":
             return False
+        if _JOIN.match(route):
+            self._findx_page("findx/join.html", {"X-Robots-Tag": "noindex, nofollow"})
+            return True
         if _LINK.match(route):
             self._findx_page("findx/share.html", {"X-Robots-Tag": "noindex, nofollow"})
             return True
@@ -102,6 +115,38 @@ class FindXHandlers:
                 self._error(e.status, str(e))
             return True
         return False
+
+    def _findx_circle(self, what):
+        """A circle's members at work (findxcircles.py). The token in the body is the proof of invitation."""
+        if not _circle_pace.ok(self._addr()):
+            return self._error(429, "Too many requests. Wait a minute.")
+        circles = self.server.app.findx_circles
+        try:
+            b = self._body_json()
+            if not isinstance(b, dict):
+                return self._error(400, "expected a JSON object")
+            if what == "info":
+                return self._json(circles.info(b.get("circle"), b.get("auth")))
+            if what == "setinfo":
+                circles.set_info(b.get("circle"), b.get("auth"), b.get("info"))
+                return self._json({"ok": True})
+            if what == "report":
+                return self._json({"ok": True, "watching": circles.report(b.get("circle"), b.get("auth"), b.get("member"), b.get("blob"))})
+            if what == "members":
+                return self._json({"members": circles.members(b.get("circle"), b.get("auth"), bool(b.get("watch")))})
+            if what == "command":
+                return self._json({"ok": True, "seq": circles.command(b.get("circle"), b.get("auth"), b.get("from"), b.get("to"), b.get("blob"))})
+            if what == "wait":
+                commands, watched = circles.wait(b.get("member"), b.get("circles"), min(float(b.get("wait", WAIT_MAX) or 0), WAIT_MAX))
+                return self._json({"commands": commands, "watching": watched})
+            if what == "leave":
+                circles.leave(b.get("circle"), b.get("auth"), b.get("member"))
+                return self._json({"ok": True})
+        except RelayError as e:
+            return self._error(e.status, str(e))
+        except (ValueError, TypeError):
+            return self._error(400, "bad request")
+        return self._error(404, "not found")
 
     def _findx(self, method, route, who):
         """The signed-in API and page. `who`: '' for the owner, else the account."""
@@ -134,6 +179,12 @@ class FindXHandlers:
                 return self._json({"ok": True})
             if route == "/api/findx/unshare":
                 relay.unshare(who, body.get("group"), body.get("share"))
+                return self._json({"ok": True})
+            if route == "/api/findx/circle/create":
+                self.server.app.findx_circles.create(who, body.get("circle"), body.get("auth"), body.get("info"))
+                return self._json({"ok": True})
+            if route == "/api/findx/circle/delete":
+                self.server.app.findx_circles.delete(who, body.get("circle"))
                 return self._json({"ok": True})
             return self._error(404, "not found")
         except RelayError as e:

@@ -10,6 +10,7 @@ import unittest
 import helpers
 from ddrive import findx
 from ddrive.findx import Relay, RelayError
+from ddrive.findxcircles import Circles
 import http.client
 import urllib.parse
 
@@ -202,6 +203,96 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(self.r.devices("", G), [])
 
 
+C1 = "c" * 32           # a circle
+A1 = "d" * 32           # its invite's token
+M1, M2, M3 = "e" * 32, "f" * 32, "0" * 32   # members
+
+
+class CirclesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_circles_test.json")
+        self.addCleanup(lambda: os.path.exists(self.tmp) and os.remove(self.tmp))
+        self.clock = Clock()
+        self.c = Circles(self.tmp, clock=self.clock)
+        self.c.create("", C1, A1, sealed())
+
+    def test_only_the_invited_get_in(self):
+        self.c.report(C1, A1, M1, sealed())
+        for circle, auth in ((C1, "9" * 32), ("9" * 32, A1), (C1, "short")):
+            with self.assertRaises(RelayError):
+                self.c.report(circle, auth, M2, sealed())
+        with self.assertRaises(RelayError) as e:
+            self.c.members(C1, "9" * 32)
+        self.assertEqual(e.exception.status, 404)          # (a wrong token and no circle look the same)
+        self.assertEqual([m["member"] for m in self.c.members(C1, A1)], [M1])
+
+    def test_circles_survive_a_restart_but_not_whats_live(self):
+        info = sealed()
+        self.c.set_info(C1, A1, info)
+        self.c.report(C1, A1, M1, sealed())
+        again = Circles(self.tmp, clock=self.clock)
+        self.assertEqual(again.info(C1, A1), {"info": info, "members": 0})
+        with open(self.tmp) as f:
+            self.assertNotIn(A1, f.read())                  # only a hash of the token is kept
+
+    def test_ring_a_friend_and_tell_everybody(self):
+        for m in (M1, M2, M3):
+            self.c.report(C1, A1, m, sealed())
+        ring, arrived = sealed(), sealed()
+        self.c.command(C1, A1, M1, M2, ring)                # M1 rings M2
+        self.c.command(C1, A1, M1, "*", arrived)            # M1 arrived somewhere: everybody hears it
+        got = {m: [x["blob"] for x in self.c.wait(m, [{"circle": C1, "auth": A1, "after": 0}], 0)[0]] for m in (M1, M2, M3)}
+        self.assertEqual(got[M2], [ring, arrived])
+        self.assertEqual(got[M3], [arrived])
+        self.assertEqual(got[M1], [])                       # not its own news
+        with self.assertRaises(RelayError):
+            self.c.command(C1, A1, M1, "9" * 32, sealed())
+
+    def test_one_wait_for_all_circles_wakes_on_a_command(self):
+        c2, a2 = "1" * 32, "2" * 32
+        self.c.create("", c2, a2, sealed())
+        self.c.report(c2, a2, M2, sealed())
+        out = {}
+        th = threading.Thread(target=lambda: out.setdefault("got", self.c.wait(M2, [{"circle": C1, "auth": A1}, {"circle": c2, "auth": a2}], 30)))
+        th.start()
+        time.sleep(0.3)
+        self.c.command(c2, a2, M1, M2, sealed())
+        th.join(5)
+        self.assertFalse(th.is_alive())
+        self.assertEqual([x["circle"] for x in out["got"][0]], [c2])
+
+    def test_a_map_of_the_circle_wakes_its_members(self):
+        self.c.report(C1, A1, M1, sealed())
+        out = {}
+        th = threading.Thread(target=lambda: out.setdefault("got", self.c.wait(M1, [{"circle": C1, "auth": A1}], 30)))
+        th.start()
+        time.sleep(0.3)
+        self.c.members(C1, A1, watch=True)
+        th.join(5)
+        self.assertEqual(out["got"], ([], [C1]))
+        self.assertTrue(self.c.report(C1, A1, M1, sealed()))   # and its reports hear it
+
+    def test_making_and_deleting(self):
+        with self.assertRaises(RelayError) as e:            # somebody else can't take the id
+            self.c.create("acct1", C1, "9" * 32, sealed())
+        self.assertEqual(e.exception.status, 409)
+        self.c.create("", C1, A1, sealed())                  # made again by the same phone: fine
+        with self.assertRaises(RelayError):
+            self.c.delete("acct1", C1)                       # only by who made it
+        self.c.delete("", C1)
+        with self.assertRaises(RelayError):
+            self.c.info(C1, A1)
+        self.assertEqual(Circles(self.tmp).stats()["circles"], 0)
+
+    def test_leaving_and_being_forgotten(self):
+        self.c.report(C1, A1, M1, sealed())
+        self.c.report(C1, A1, M2, sealed())
+        self.c.leave(C1, A1, M1)
+        self.assertEqual([m["member"] for m in self.c.members(C1, A1)], [M2])
+        self.clock.t += 91 * 86400
+        self.assertEqual(self.c.members(C1, A1), [])
+
+
 class FindXWebTest(helpers.DriveTest):
     """Against a real dashboard on a free local port (as test_web.py, whose tests aren't run again here)."""
 
@@ -303,6 +394,32 @@ class FindXWebTest(helpers.DriveTest):
         self.assertIn("worker-src blob:", h["Content-Security-Policy"])
         st, _, data = self.get("/")
         self.assertIn(b'href="/findx/"', data)              # in the dashboard's menu
+
+    def test_circles_over_http(self):
+        # Making one needs somebody signed in to this drive...
+        st, _ = self.post("/api/findx/circle/create", {"circle": C1, "auth": A1, "info": sealed()})
+        self.assertEqual(st, 401)
+        self.login()
+        self.assertEqual(self.post("/api/findx/circle/create", {"circle": C1, "auth": A1, "info": sealed()})[0], 200)
+        # ...being in one needs only the invite's token (a friend with no account here).
+        self.cookie = None
+        st, got = self.post("/api/findx/c/report", {"circle": C1, "auth": A1, "member": M1, "blob": sealed()})
+        self.assertEqual((st, got["ok"]), (200, True))
+        self.assertEqual(self.post("/api/findx/c/report", {"circle": C1, "auth": "9" * 32, "member": M1, "blob": sealed()})[0], 404)
+        st, got = self.post("/api/findx/c/members", {"circle": C1, "auth": A1, "watch": True})
+        self.assertEqual([m["member"] for m in got["members"]], [M1])
+        self.assertEqual(self.post("/api/findx/c/command", {"circle": C1, "auth": A1, "from": M2, "to": M1, "blob": sealed()})[0], 200)
+        st, got = self.post("/api/findx/c/wait", {"member": M1, "wait": 0, "circles": [{"circle": C1, "auth": A1, "after": 0}]})
+        self.assertEqual((len(got["commands"]), got["watching"]), (1, [C1]))
+        self.assertEqual(self.post("/api/findx/c/nothing", {})[0], 401)
+        st, h, data = self.get("/j/" + C1, auth=False)
+        self.assertEqual(st, 200)
+        self.assertIn(b"findx-join.js", data)
+        # The circle is still there after the drive restarts (where its members are isn't).
+        self.web.stop()
+        self.web = self.d.start_web(port=0)
+        st, got = self.post("/api/findx/c/info", {"circle": C1, "auth": A1})
+        self.assertEqual((st, got["members"]), (200, 0))
 
     def test_the_public_page_is_paced(self):
         old = findxweb_pace().per_min

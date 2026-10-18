@@ -9,6 +9,8 @@
  * - where your devices are now: the relay (/api/findx/devices), sealed reports opened here.
  * - where they have been: the hour files in /FindX/h, found by names made with the names key.
  * - "ring", "locate"...: sealed here with the command key, so only your phones can act on them.
+ * - the people in your circles (/FindX/circles.fxc, which your phones keep: each circle's key, sealed
+ *   with yours): their latest reports, opened with the circle's key, and "ring" for them.
  */
 (function () {
   const FX = (window.FX = window.FX || {});
@@ -17,6 +19,8 @@
   let keys = null;
   let devices = new Map();              // id -> {name, report, seen}
   let fetched = 0, watchingId = null, inflight = null;
+  let circles = null;                   // [{id, name, member, me, seal, auth}] of this drive's circles
+  const people = new Map();             // "c:<circle>:<member>" -> {name, group, report, seen}
 
   const post = (path, body) => fetch(path, {
     method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-DD": "1" }, body: JSON.stringify(body),
@@ -36,10 +40,52 @@
     return keys;
   }
 
+  /** Your circles that live on this drive (a circle on another drive can't be asked from this page). */
+  async function getCircles(k) {
+    if (circles) return circles;
+    circles = [];
+    const r = await fetch("/api/file?path=" + encodeURIComponent("/FindX/circles.fxc"), { credentials: "same-origin" });
+    if (!r.ok) return circles;
+    try {
+      const list = await FX.openJson(k.report, "findx circles", new Uint8Array(await r.arrayBuffer()));
+      for (const c of list.circles || []) {
+        if (c.host.replace(/\/+$/, "") !== location.origin) continue;
+        const ck = await FX.circleKeys(FX.b64.dec(c.key));
+        circles.push({ id: c.id, name: c.name || "Circle", member: c.member, me: c.myName || "", seal: ck.seal, auth: ck.auth });
+      }
+    } catch (e) { /* not opened: no circles */ }
+    return circles;
+  }
+
+  async function refreshPeople(k, watch) {
+    const got = new Map();
+    for (const c of await getCircles(k)) {
+      const watching = !!watch && watch.startsWith("c:" + c.id + ":");
+      const r = await post("/api/findx/c/members", { circle: c.id, auth: c.auth, watch: watching }).catch(() => null);
+      if (!r || !r.ok) continue;
+      for (const m of (await r.json()).members || []) {
+        if (m.member === c.member) continue;                 // that's you
+        try {
+          const rep = await FX.openJson(c.seal, "findx circle report", FX.b64.dec(m.blob));
+          if (rep.m !== m.member) continue;
+          const id = "c:" + c.id + ":" + m.member;
+          got.set(id, {
+            name: rep.p || rep.n || "Someone", group: c.name, seen: m.at, circle: c, member: m.member,
+            report: { d: id, n: rep.p || rep.n, t: rep.t, fix: rep.fix, bat: rep.bat, chg: rep.chg, mode: rep.mode, still: rep.since,
+                      spot: rep.place ? { name: rep.place.name } : undefined, ring: rep.ringing },
+          });
+        } catch (e) { /* not opened with this circle's key */ }
+      }
+    }
+    people.clear();
+    for (const [id, p] of got) people.set(id, p);
+  }
+
   async function refresh(watch) {
     const k = await getKeys();
+    await refreshPeople(k, watch).catch(() => null);
     const q = "/api/findx/devices?group=" + k.group + (watch ? "&watch=" + watch : "");
-    const r = await fetch(q, { credentials: "same-origin" });
+    const r = await fetch(q.replace(/&watch=c:[^&]*/, ""), { credentials: "same-origin" });
     if (!r.ok) throw new Error("DDrive answered " + r.status);
     const got = new Map();
     for (const d of (await r.json()).devices || []) {
@@ -119,6 +165,16 @@
 
   async function act(id, what, args) {
     const k = await getKeys();
+    if (id.startsWith("c:")) {
+      const p = people.get(id);
+      if (!p) return { error: "They aren't in the circle any more" };
+      if (what !== "ring" && what !== "stop") return { error: "Only ringing, for people in your circles" };
+      const cmd = { c: what, to: p.member, from: p.circle.member, fromName: p.circle.me || "DDrive", t: Date.now(), id: FX.hex(crypto.getRandomValues(new Uint8Array(8))), args: {} };
+      const blob = await FX.seal(p.circle.seal, "findx circle command", te.encode(JSON.stringify(cmd)));
+      const r = await post("/api/findx/c/command", { circle: p.circle.id, auth: p.circle.auth, from: p.circle.member, to: p.member, blob: FX.b64.enc(blob) });
+      if (!r.ok) return { error: "DDrive answered " + r.status };
+      return { said: what === "ring" ? "Ringing " + p.name + "'s phone (if they let the circle ring it)" : "Asked it to stop" };
+    }
     if (what === "lost") {
       const message = prompt("Lost mode: a message for its lock screen (a number to call?)", "");
       if (message === null) return { said: "" };
@@ -144,7 +200,8 @@
         if (e instanceof NoKeys) FX.noKeys = true;
         return [];
       }
-      return [...devices].map(([id, d]) => ({ id, name: d.name, seen: d.seen }));
+      return [...[...devices].map(([id, d]) => ({ id, name: d.name, seen: d.seen })),
+              ...[...people].map(([id, p]) => ({ id, name: p.name, seen: p.seen, kind: "person", group: p.group }))];
     },
     initial: async () => {
       const want = new URLSearchParams(location.search).get("device");
@@ -154,8 +211,13 @@
       for (const [id, d] of devices) { const t = (d.report && d.report.t) || d.seen || 0; if (t > at) { at = t; best = id; } }
       return best ? { id: best } : {};
     },
-    latest: async (id) => { await fresh(id).catch(() => null); const d = devices.get(id); return d ? d.report : null; },
-    history,
+    latest: async (id) => {
+      await fresh(id).catch(() => null);
+      if (id.startsWith("c:")) { const p = people.get(id); return p ? p.report : null; }
+      const d = devices.get(id);
+      return d ? d.report : null;
+    },
+    history: (id, from, to) => (id.startsWith("c:") ? Promise.resolve([]) : history(id, from, to)),
     act,
     watching: async (id, on) => { if (on) await fresh(id).catch(() => null); return {}; },
   };

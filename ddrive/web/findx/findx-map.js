@@ -1,7 +1,9 @@
 /*
  * The FindX map: where a phone is now (a dot that glides as it moves, inside a circle as wide as the
  * position is uncertain), where it has been (a trail that fades into the past, and the places it lay
- * still), and day or night as it is where the phone is.
+ * still), and day or night as it is where the phone is (or always light, or always dark: the theme
+ * button). Everybody else on the map (your other devices, the people in your circles) shows as a
+ * small round face; tap one to follow them instead.
  */
 (function () {
   const FX = window.FX;
@@ -18,8 +20,10 @@
   const state = {
     device: null, devices: [], report: null, span: 'now', history: [], follow: true, tilt: false,
     shown: null,             // [lat, lon] the dot is drawn at (moves smoothly toward the report)
-    daylight: null, timer: null, scrubT: null,
+    daylight: null, timer: null, scrubT: null, theme: 'auto', others: new Map(), othersAt: 0,
   };
+  try { state.theme = q.get('theme') || localStorage.getItem('fx-theme') || 'auto'; } catch (e) { /* no storage here: auto */ }
+  if (!['auto', 'light', 'dark'].includes(state.theme)) state.theme = 'auto';
 
   const map = (FX.map = new maplibregl.Map({
     container: 'map', style: FX.style(1), center: [0, 20], zoom: 1.6, pitch: 0, attributionControl: false,
@@ -81,14 +85,16 @@
 
   function sky(lat, lon) {
     const now = state.scrubT || Date.now();
-    let t = src.forceNight != null ? src.forceNight : FX.daylight(lat, lon, now);
+    state.skyAt = [lat, lon];
+    let t = src.forceNight != null ? src.forceNight : state.theme === 'light' ? 1 : state.theme === 'dark' ? 0 : FX.daylight(lat, lon, now);
     if (state.daylight != null && Math.abs(t - state.daylight) < 0.01) return;
     state.daylight = t;
     FX.restyle(map, t);
     map.once('idle', () => FX.restyle(map, state.daylight));   // again once drawn: a change made while the style settles can be lost
     document.body.classList.toggle('night', t < 0.5);
     // Light the 3D buildings from where the sun really is (or a soft moon-like light at night).
-    const s = FX.sun(lat, lon, now);
+    // (Always light: an afternoon sun from the south-west; always dark: the night's soft light.)
+    const s = state.theme === 'light' ? { azimuth: 220, altitude: 40 } : state.theme === 'dark' ? { azimuth: 200, altitude: -20 } : FX.sun(lat, lon, now);
     const polar = Math.max(20, Math.min(80, 90 - Math.max(5, s.altitude)));
     try {
       map.setLight({ anchor: 'map', position: [1.4, s.azimuth, polar], color: t > 0.5 ? '#fff6e8' : '#9fb4d6', intensity: t > 0.5 ? 0.42 : 0.25 });
@@ -107,9 +113,21 @@
 
   function initials(name) { return (name || '?').trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase(); }
 
+  const current = () => state.devices.find((d) => d.id === state.device) || {};
+  const colour = (d) => (d.kind === 'person' ? `hsl(${FX.hue(d.id)}, 62%, 52%)` : '');
+
+  /** People in your circles: only Ring (their history and the rest are theirs). */
+  function applyCaps() {
+    const d = current(), person = d.kind === 'person';
+    $('when').style.display = src.caps.history && !person ? '' : 'none';
+    if (person) $('scrub').classList.remove('show');
+    document.querySelectorAll('#actions button').forEach((b) => { b.hidden = person && b.dataset.act !== 'ring'; });
+    $('avatar').style.background = colour(d);
+  }
+
   function showReport(r) {
-    const dev = state.devices.find((d) => d.id === state.device) || {};
-    $('name').textContent = (r && r.n) || dev.name || 'Your phone';
+    const dev = current();
+    $('name').textContent = dev.kind === 'person' ? dev.name : (r && r.n) || dev.name || 'Your phone';
     $('avatar').textContent = initials((r && r.n) || dev.name);
     if (!r || !r.fix) {
       $('freshText').textContent = r ? 'No position yet' : 'Not heard from yet';
@@ -123,7 +141,8 @@
     const age = Date.now() - r.t;
     const live = r.mode === 'live' && age < 30e3;
     $('dot').classList.toggle('live', live || r.mode === 'locating');
-    $('freshText').textContent = r.mode === 'locating' ? 'Pinning it down…' : (live ? 'Live' : 'Seen ' + FX.ago(r.t)) + (r.ring ? ' · ringing' : '') + (r.lost ? ' · lost mode' : '');
+    $('freshText').textContent = (dev.group && dev.kind === 'person' ? dev.group + ' · ' : '') +
+      (r.mode === 'locating' ? 'Pinning it down…' : (live ? 'Live' : 'Seen ' + FX.ago(r.t)) + (r.ring ? ' · ringing' : '') + (r.lost ? ' · lost mode' : ''));
     if (r.bat >= 0) { $('bat').hidden = false; $('bat').textContent = (r.chg ? '⚡ ' : '') + r.bat + '%'; $('bat').classList.toggle('low', r.bat <= 15 && !r.chg); }
     const d = FX.describe(r);
     $('place').textContent = d || (r.mode === 'live' || (r.fix.spd || 0) > 1 ? 'On the move' : 'Here');
@@ -168,6 +187,34 @@
       else map.easeTo({ center: [lon, lat], zoom: Math.abs(want - z) > 1.5 ? want : z, duration: 900 });
     }
     sky(lat, lon);
+  }
+
+  // ------------------------------------------------------------ everybody else
+
+  /** A small round face for each of the others, where they last were; tapping one follows them. */
+  async function drawOthers() {
+    if (!src.caps.pick || state.scrubT) return;
+    const seen = new Set();
+    for (const d of state.devices) {
+      if (d.id === state.device) continue;
+      const r = await src.latest(d.id).catch(() => null);
+      if (!r || !r.fix) continue;
+      seen.add(d.id);
+      let o = state.others.get(d.id);
+      if (!o) {
+        const e = document.createElement('div');
+        e.className = 'fx-face' + (d.kind === 'person' ? ' person' : '');
+        e.title = d.name;
+        e.onclick = (ev) => { ev.stopPropagation(); choose(d.id); };
+        o = { el: e, marker: new maplibregl.Marker({ element: e }).setLngLat([r.fix.lon, r.fix.lat]).addTo(map) };
+        state.others.set(d.id, o);
+      }
+      o.el.textContent = initials(d.name);
+      o.el.style.background = colour(d) || '';
+      o.el.classList.toggle('stale', Date.now() - r.t > 60 * 60e3);
+      o.marker.setLngLat([r.fix.lon, r.fix.lat]);
+    }
+    for (const [id, o] of state.others) if (!seen.has(id)) { o.marker.remove(); state.others.delete(id); }
   }
 
   // ------------------------------------------------------------ history
@@ -249,7 +296,16 @@
     const r = state.report;
     // Asked often while it's live (the app answers from memory; nothing goes out for it), seldom otherwise.
     const ms = document.hidden ? 60e3 : r && (r.mode === 'live' || r.mode === 'locating') ? 1500 : 6000;
-    state.timer = setTimeout(async () => { await refresh(false).catch(() => {}); schedule(); }, ms);
+    state.timer = setTimeout(async () => {
+      await refresh(false).catch(() => {});
+      // The others, and who there is at all, less often.
+      if (Date.now() - state.othersAt > 12e3) {
+        state.othersAt = Date.now();
+        if (src.caps.pick) state.devices = (await src.devices().catch(() => null)) || state.devices;
+        await drawOthers().catch(() => {});
+      }
+      schedule();
+    }, ms);
   }
 
   document.addEventListener('visibilitychange', () => {
@@ -261,21 +317,36 @@
     state.device = id;
     state.report = null; state.daylight = state.daylight; state.scrubT = null;
     markerOn && marker.remove(); markerOn = false; state.shown = null;
+    const o = state.others.get(id);
+    if (o) { o.marker.remove(); state.others.delete(id); }
     renderPicker();
+    applyCaps();
     src.watching(id, true);
     await refresh(true);
-    await loadHistory();
+    if (current().kind === 'person') { state.history = []; drawHistory([]); } else await loadHistory();
+    state.othersAt = 0;
+    drawOthers().catch(() => {});
     schedule();
   }
 
   function renderPicker() {
     const p = $('picker');
     p.innerHTML = '';
+    let group = null;
+    const grouped = state.devices.some((x) => x.group);
     for (const d of state.devices) {
+      if (grouped && (d.group || '') !== group) {
+        group = d.group || '';
+        const g = document.createElement('div');
+        g.className = 'pick-group';
+        g.textContent = group || 'Your devices';
+        p.appendChild(g);
+      }
       const row = document.createElement('div');
       row.className = 'pick' + (d.id === state.device ? ' sel' : '');
       row.innerHTML = `<div class="a">${initials(d.name)}</div><div><div class="n"></div><div class="s">${d.me ? 'This phone' : d.seen ? 'Seen ' + FX.ago(d.seen) : ''}</div></div>`;
       row.querySelector('.n').textContent = d.name;
+      if (d.kind === 'person') { const a = row.querySelector('.a'); a.style.background = colour(d); a.style.color = '#fff'; }
       row.onclick = () => { p.classList.remove('open'); if (d.id !== state.device) choose(d.id); };
       p.appendChild(row);
     }
@@ -311,6 +382,21 @@
     if (r && r.fix) moveTo(r.fix.lat, r.fix.lon, r.fix.acc, r.fix.brg, true);
   };
   map.on('dragstart', () => { state.follow = false; $('follow').classList.remove('on'); });
+  const THEMES = { auto: 'Map follows day and night where they are', light: 'Map: always light', dark: 'Map: always dark' };
+  function showTheme() {
+    $('theme').dataset.theme = state.theme;
+    $('theme').title = THEMES[state.theme];
+  }
+  showTheme();
+  $('theme').onclick = () => {
+    state.theme = { auto: 'light', light: 'dark', dark: 'auto' }[state.theme];
+    try { localStorage.setItem('fx-theme', state.theme); } catch (e) { /* only for this visit */ }
+    showTheme();
+    toast(THEMES[state.theme]);
+    state.daylight = null;
+    const at = state.skyAt || [map.getCenter().lat, map.getCenter().lng];
+    sky(at[0], at[1]);
+  };
   $('tilt').onclick = () => {
     state.tilt = !state.tilt;
     $('tilt').classList.toggle('on', state.tilt);

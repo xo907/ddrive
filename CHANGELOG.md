@@ -3,6 +3,19 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.6.0 (2026-10-17)
+
+- **FindX circles: family and friends, as in Life360.** People in a circle see where each other are, live,
+  with their battery; they're told when somebody arrives at or leaves one of the circle's places ("Mom arrived
+  at Home"); and they can ring each other's phones to find them, from the app and from the FindX page here
+  (each person can switch that off for a circle). Make a circle in FindX (it lives on your drive) and send its
+  invitation (`/j/…`): friends join from any DDrive, or none. Each circle has a key of its own, only in the
+  invitation after the `#`, so this drive passes everything on without being able to read it.
+- The FindX page shows everybody at once: your devices and the people in your circles, each with a small
+  round face on the map, grouped by circle in the list. Tap one to follow them.
+- **Light or dark map.** The sun button on the map: follows day and night where the phone is (as before),
+  always light, or always dark. Remembered in the browser.
+
 ## 3.5.0 (2026-10-17)
 
 - **FindX.** The drive now works with FindX, an Android app that finds your phone down to the spot it's

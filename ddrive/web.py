@@ -45,6 +45,7 @@ from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
 from .findx import Relay as FindXRelay
+from .findxcircles import Circles as FindXCircles
 from .findxweb import FindXHandlers
 from .logbuf import QUIET
 from .webplus import ApiErrorProxy, Fetches, PlusHandlers, housekeeping
@@ -221,6 +222,7 @@ class WebServer:
         self.monitor_lock = threading.Lock()
         self.monitor_cache = (0.0, None)  # /api/monitor, worked out at most every 2 seconds
         self.findx = FindXRelay()         # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
+        self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
 
     # ------------------------------------------------------------ lifecycle
     def start(self):

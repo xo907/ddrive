@@ -60,6 +60,18 @@
   /** A file name that gives nothing away (FxKeys.name): HMAC-SHA256 with the names key, as hex. */
   FX.name = async (namesKey, text, n = 32) => FX.hex(await hmac(namesKey, te.encode(text))).slice(0, n);
 
+  /**
+   * A circle's keys, from the key in its invite link (Circles.kt): what its members seal with, and the
+   * token that shows the drive they were invited (the drive keeps only a hash of it).
+   */
+  FX.circleKeys = async (key) => ({
+    seal: await FX.hkdf(key, 'findx circle v1 seal'),
+    auth: FX.hex(await FX.hkdf(key, 'findx circle v1 auth')).slice(0, 32),
+  });
+
+  /** A soft colour of its own for each person, from their id. */
+  FX.hue = (id) => { let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % 360; };
+
   /** Opens a gzip (history segments are gzipped before they are sealed). */
   FX.gunzip = async (bytes) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
 

@@ -1264,6 +1264,18 @@ sends is sealed on the phone with keys made from your 24 words.
   without being able to read it; ended and stopped links say so. The page is asked at most a few
   hundred times a minute from one address.
 
+- **Circles: family and friends.** As in Life360: a circle's people see where each other are, live,
+  with their battery, are told when somebody arrives at or leaves one of the circle's places ("Mom
+  arrived at Home"), and can ring each other's phones (unless one switches that off for a circle).
+  A circle is made by somebody with an account on this drive and joined with an invitation link
+  (`/j/<circle>#<key>`), from any drive or none. Its key is its own (not anybody's words) and only in
+  the invitation, after the `#`: the drive keeps a hash of the token it makes, the circle's sealed name
+  and places (in `findx-circles.json`, in the drive's data folder, so circles survive a restart) and,
+  in memory, each member's latest sealed report. Members are random ids to it. Your circles' people
+  are on the FindX page too, with their own coloured faces, and **Ring** works from there.
+- **Light or dark.** The map follows day and night where the phone is, or is always light or always
+  dark: the sun button on the map. The app has the same choice for itself (Settings › Appearance).
+
 The map's pictures come from [OpenFreeMap](https://openfreemap.org) (OpenStreetMap data; no
 account, no cookies): the FindX pages are allowed to fetch from there and nowhere else.
 

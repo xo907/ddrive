@@ -1,0 +1,21 @@
+:root { --bg: #f2f1ec; --card: rgba(255, 255, 255, 0.86); --ink: #1c1c1e; --ink2: #6e6e73; --line: rgba(60, 60, 67, 0.14); color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111317; --card: rgba(30, 31, 36, 0.9); --ink: #f2f2f7; --ink2: #a1a1a6; --line: rgba(255, 255, 255, 0.1); color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, system-ui, sans-serif; color: var(--ink);
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(255, 42, 42, 0.16), transparent 60%), radial-gradient(900px 600px at 110% 110%, rgba(80, 140, 255, 0.14), transparent 60%), var(--bg);
+  display: grid; place-items: center; padding: 24px 16px; min-height: 100vh; -webkit-font-smoothing: antialiased;
+}
+.card { width: 100%; max-width: 420px; background: var(--card); border: 0.5px solid var(--line); border-radius: 28px; padding: 28px 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); text-align: center; }
+.logo { width: 64px; height: 64px; border-radius: 16px; }
+.kicker { color: #ff2a2a; font-weight: 650; font-size: 14px; margin: 18px 0 4px; }
+h1 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.muted { color: var(--ink2); line-height: 1.45; margin: 0 0 14px; }
+.small { font-size: 13.5px; margin-top: 18px; }
+.btn { display: block; width: 100%; border: 0; border-radius: 16px; padding: 15px; background: #ff2a2a; color: #fff; font: inherit; font-weight: 650;
+  font-size: 16px; text-decoration: none; cursor: pointer; margin-top: 10px; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.btn[hidden] { display: none; }
+.err { color: #ff2a2a; }
