@@ -3,6 +3,27 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.7.0 (2026-10-17)
+
+- **Everything FindX does, on the FindX page.** A phone's sheet has a new **Manage** button, and the map a
+  **People** button. Manage has what the app has, for a phone you're not holding:
+  - **Overview**: battery and charging, how it finds itself, when it last checked in, and what's wrong with it
+    ("Location is off", "Battery saver is limiting FindX") as the app sees it; ring, pin down, live, lost mode.
+  - **Settings**: rename it, your name in its circles, whether and in how much detail it keeps history, the Bluetooth beacon, lost mode's message; the phone
+    applies them at once and says so in its log.
+  - **Battery**: how much battery FindX used today and each day of the last two weeks, and what on (location,
+    network, processing, sensors, ringing), as the app's Battery use shows it.
+  - **Sharing**: make a live-location link for anybody, for 15 minutes up to "until I stop it", see the links
+    it has and stop them.
+  - **Activity**: what the phone has done lately.
+- **People**: your circles, their people and places, made and changed from here: make a circle, invite people
+  (copy the invitation), add places by tapping the map, say whether the circle may ring each of your phones,
+  have a phone join or leave a circle, and ring anybody in a circle.
+- Everything goes to the phone sealed with your words, as Ring does; the drive passes it on without reading it.
+  A phone can't be turned off, unlinked or erased from afar.
+- The FindX page needs https (or localhost): browsers only do its encryption there, and it now says so.
+- A browser that can't draw maps (WebGL off) still gets the FindX page, without the map.
+
 ## 3.6.2 (2026-10-17)
 
 - **A folder two computers made at once is one folder again.** On an end-to-end account, when two computers

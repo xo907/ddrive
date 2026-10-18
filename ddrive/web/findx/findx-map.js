@@ -25,10 +25,38 @@
   try { state.theme = q.get('theme') || localStorage.getItem('fx-theme') || 'auto'; } catch (e) { /* no storage here: auto */ }
   if (!['auto', 'light', 'dark'].includes(state.theme)) state.theme = 'auto';
 
-  const map = (FX.map = new maplibregl.Map({
-    container: 'map', style: FX.style(1), center: [0, 20], zoom: 1.6, pitch: 0, attributionControl: false,
-    maxPitch: 70, fadeDuration: 200, dragRotate: true,
-  }));
+  // A browser that can't draw the map (WebGL off: hardware acceleration disabled, some locked-down
+  // computers) still gets everything else: where it is in words, the actions, the Manage panel.
+  let noMap = false;
+  let map;
+  try {
+    map = new maplibregl.Map({
+      container: 'map', style: FX.style(1), center: [0, 20], zoom: 1.6, pitch: 0, attributionControl: false,
+      maxPitch: 70, fadeDuration: 200, dragRotate: true,
+    });
+  } catch (e) {
+    noMap = true;
+    map = noDrawing();
+    console.error('FindX map: no map in this browser: ' + e.message);
+  }
+  FX.map = map;
+
+  /** Stands in for the map where it can't be drawn: everything answers, nothing is drawn. */
+  function noDrawing() {
+    const nothing = () => stub;
+    const stub = {
+      on: nothing, once: nothing, off: nothing, addSource: nothing, addLayer: nothing, setPaintProperty: nothing, setSky: nothing, setLight: nothing,
+      flyTo: nothing, easeTo: nothing, fitBounds: nothing, addControl: nothing, getSource: () => null, getLayer: () => null,
+      getZoom: () => 14, getCenter: () => ({ lat: 0, lng: 0 }), getCanvas: () => ({ style: {} }), loaded: () => false, isStyleLoaded: () => false,
+    };
+    return stub;
+  }
+  if (noMap) {
+    // Markers need a real map: ones that keep their place but draw nothing.
+    maplibregl.Marker = class { constructor() {} setLngLat() { return this; } addTo() { return this; } remove() { return this; } setRotation() { return this; } };
+    maplibregl.Popup = class { constructor() {} setLngLat() { return this; } setHTML() { return this; } addTo() { return this; } };
+    document.getElementById('map').innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;padding:30px;text-align:center;color:#8e8e93;font-size:15px;line-height:1.45">This browser can\u2019t draw the map (WebGL is turned off).<br>Everything else works below.</div>';
+  }
 
   // ------------------------------------------------------------ the dot
 
@@ -80,6 +108,7 @@
   }
 
   map.on('load', () => { addOverlays(); start(); });
+  if (noMap) setTimeout(start, 0);
 
   // ------------------------------------------------------------ day and night where the phone is
 
@@ -285,6 +314,7 @@
     const prev = state.report;
     state.report = r;
     showReport(r);
+    emit('report');
     if (r && r.fix) {
       const moved = !prev || !prev.fix || prev.fix.lat !== r.fix.lat || prev.fix.lon !== r.fix.lon || prev.fix.acc !== r.fix.acc;
       if (moved || first) moveTo(r.fix.lat, r.fix.lon, r.fix.acc, r.fix.brg, first);
@@ -322,6 +352,7 @@
     if (o) { o.marker.remove(); state.others.delete(id); }
     renderPicker();
     applyCaps();
+    emit('device');
     src.watching(id, true);
     await refresh(true);
     if (current().kind === 'person') { state.history = []; drawHistory([]); } else await loadHistory();
@@ -359,10 +390,35 @@
     $('actions').classList.toggle('hidden', !src.caps.act);
     $('when').style.display = src.caps.history ? '' : 'none';
     const id = init.id || (state.devices.find((d) => d.me) || state.devices[0] || {}).id;
-    if (!id) { $('emptyTitle').textContent = 'No devices yet'; $('emptyText').textContent = 'Devices linked to your DDrive with FindX show up here.'; $('empty').classList.add('show'); return; }
+    if (!id) {
+      $('emptyTitle').textContent = src.emptyTitle || 'No devices yet';
+      $('emptyText').textContent = src.emptyText || 'Devices linked to your DDrive with FindX show up here.';
+      $('empty').classList.add('show');
+      return;
+    }
     if (init.span) { state.span = init.span; document.querySelectorAll('#when button').forEach((x) => x.classList.toggle('on', x.dataset.span === init.span)); }
     await choose(id, true);
   }
+
+  // ------------------------------------------------------------ for the dashboard's Manage panel (findx-panel.js)
+
+  const listeners = { report: [], device: [] };
+  function emit(what) { for (const f of listeners[what]) { try { f(); } catch (e) { console.error(e); } } }
+  let picking = null;
+  map.on('click', (e) => { if (picking) { const p = picking; picking = null; map.getCanvas().style.cursor = ''; p(e.lngLat); } });
+
+  FX.ui = {
+    map,
+    current: () => ({ id: state.device, device: current(), report: state.report }),
+    devices: () => state.devices,
+    choose: (id) => choose(id),
+    refresh: async () => { state.devices = (await src.devices().catch(() => null)) || state.devices; renderPicker(); await refresh(false); },
+    on: (what, f) => listeners[what].push(f),
+    toast,
+    /** The next tap on the map, as {lat, lng} (to put a place there). */
+    pick: () => new Promise((res) => { picking = res; map.getCanvas().style.cursor = 'crosshair'; }),
+    flyTo: (lat, lon, zoom) => { state.follow = false; $('follow').classList.remove('on'); map.flyTo({ center: [lon, lat], zoom: zoom || 16 }); },
+  };
 
   /** A shared link that has ended (or never was): say so instead of a map. */
   FX.ended = function (text) {

@@ -1273,6 +1273,13 @@ sends is sealed on the phone with keys made from your 24 words.
   and places (in `findx-circles.json`, in the drive's data folder, so circles survive a restart) and,
   in memory, each member's latest sealed report. Members are random ids to it. Your circles' people
   are on the FindX page too, with their own coloured faces, and **Ring** works from there.
+- **Manage from here.** A phone's **Manage** button has what the app has: its battery and what FindX
+  used it on (today and the last two weeks), its settings (name, history and its detail, the Bluetooth
+  beacon, lost-mode message), its live-location links (make and stop them), its recent activity and anything
+  that keeps it from being found. **People** has your circles: make one, invite people, add places,
+  let a circle ring a phone or not, have a phone join or leave, ring anybody. Changes go to the phone
+  sealed, like Ring; nothing on the drive can turn FindX off, unlink or erase a phone.
+- The FindX page needs **https** (or localhost): browsers only encrypt and decrypt there.
 - **Light or dark.** The map follows day and night where the phone is, or is always light or always
   dark: the sun button on the map. The app has the same choice for itself (Settings › Appearance).
 
