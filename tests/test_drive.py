@@ -76,6 +76,22 @@ class SyncTest(helpers.DriveTest):
         self.assertIsNone(a.index.resolve("/docs/report.bin"))
         self.assertEqual(len(a.index.deleted_files()), 1)
 
+    def test_own_upload_read_back_late_does_not_bring_back_the_old_content(self):
+        # A file written twice in a row (a phone's sync uploads it, then somebody replaces it on the
+        # dashboard): the drive reads its first upload back from the journal after the second was made.
+        # The old content must not come back meanwhile, or whatever reads it then gets the old file.
+        d, other = self.drive(), self.drive("bbbb")
+        self.write(d, "/x/both.txt", b"first")
+        d.uploader.run_now(d.index.resolve("/x/both.txt")["id"])
+        d.journal.flush()                        # the first upload is in the journal, not read back yet
+        self.write(d, "/x/both.txt", b"changed on the drive")
+        d.uploader.run_now(d.index.resolve("/x/both.txt")["id"])
+        d.journal.poll()                         # (the second one is still on its way out)
+        self.assertEqual(self.read(d, "/x/both.txt"), b"changed on the drive")
+        self.sync(d, other)
+        self.assertEqual(self.read(d, "/x/both.txt"), b"changed on the drive")
+        self.assertEqual(self.read(other, "/x/both.txt"), b"changed on the drive")
+
     def test_delete_forever_everywhere(self):
         a = self.drive("aaaa")
         b = self.drive("bbbb")

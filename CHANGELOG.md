@@ -3,6 +3,17 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.8.1 (2026-10-18)
+
+- **A file replaced twice in a row no longer shows its old content for a moment.** When a file was sent to the
+  drive and replaced again right after (a phone's folder sync uploads it, then it is changed on the dashboard),
+  the drive could read its own first upload back from the change journal after the second one and put the old
+  content back until the second was read too, about a second later. Whatever read the file in that second got
+  the old one: a phone's two-way sync then gave up on it ("it changed while it was being copied") and the file
+  was missing on the phone until the next run. A drive now never puts its own older upload over a newer one.
+- **The Android app (DDrive Lite) is released again**, as 3.8.1: it keeps what a password-locked entry of an
+  end-to-end account holds on to (it can't see or open those).
+
 ## 3.8.0 (2026-10-18)
 
 - **Password-locked folders for end-to-end encrypted accounts.** Right-click a folder or file → **Lock with a

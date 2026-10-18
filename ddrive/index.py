@@ -484,6 +484,7 @@ class Index:
                 "t": "put", "u": row["uid"], "p": self._uid(db, row["parent"]), "n": row["name"],
                 "s": size, "m": row["mtime"],
                 "c": [list(t) for t in triples],
+                "v": version,            # (which of this device's writes it is: read back after a newer one, it changes nothing)
             }
             if parity:
                 op["x"] = parity
@@ -1275,6 +1276,7 @@ class Index:
                 try:
                     # what other devices did goes into the activity list (ours is noted when we do it)
                     note = self._act_before(db, t, op) if device and device != self.device and not extras_only else None
+                    self._from = device or ""
                     fn(db, op, busy, changed)
                     if note:
                         self._act_after(db, note, op, device)
@@ -1366,6 +1368,11 @@ class Index:
             if row["is_dir"]:
                 return
             db.execute("UPDATE nodes SET jstate=2 WHERE id=? AND jstate<2", (nid,))
+            if (op.get("v") is not None and self.device and getattr(self, "_from", "") == self.device
+                    and int(op["v"]) < int(row["version"] or 0)):
+                # This device's own upload, read back after it had already written the file again (and
+                # perhaps sent that too): it is not put back over what is newer, not even for a moment.
+                return
             old = self._chunk_list(db, nid)
             local_edit = row["state"] != "synced" or busy(nid)
             if [c[0] for c in old] == [c[0] for c in chunks]:
