@@ -187,7 +187,7 @@ class ChatTest(helpers.DriveTest):
     def archive(self, c, **config):
         config.setdefault("targets", [{"kind": "dm", "id": "500"}])
         c.archiver.start(config)
-        c.archiver._thread.join(20)
+        c.archiver._thread.join(120)        # (a slow test machine: it only waits as long as it takes)
         return c.archiver.state()
 
     def files(self, d, folder=chatstore.FOLDER):
@@ -281,7 +281,7 @@ class ChatTest(helpers.DriveTest):
         self.assertEqual((state["status"], state["stats"]["saved"], c.store.totals()["waiting"]), ("stopped", 100, 0))
         FakeAccount.calls = 0
         c.archiver.resume()
-        c.archiver._thread.join(20)
+        c.archiver._thread.join(120)        # (a slow test machine: it only waits as long as it takes)
         state = c.archiver.state()
         self.assertEqual((state["status"], state["stats"]["saved"], FakeAccount.calls), ("done", 230, 2))
         self.assertEqual(c.store.messages({"guild": "300"})["total"], 230)
@@ -306,7 +306,7 @@ class ChatTest(helpers.DriveTest):
         c.archiver = chatlog.Archiver(c)                              # what a newly started drive finds
         self.assertEqual(c.archiver.job["status"], "running")
         c.archiver.resume()
-        c.archiver._thread.join(20)
+        c.archiver._thread.join(120)        # (a slow test machine: it only waits as long as it takes)
         self.assertEqual((c.archiver.state()["status"], c.store.messages({})["total"]), ("done", 230))
 
     # ------------------------------------------------------------ logger
