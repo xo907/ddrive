@@ -69,8 +69,14 @@ jobs:
           python -m pip install cryptography playwright
           python -m playwright install --with-deps chromium
       - name: Run the browser tests
-        working-directory: tests
-        run: python -m unittest test_browser -v
+        shell: bash
+        run: |
+          set -o pipefail
+          cd tests && python -m unittest test_browser -v 2>&1 | tee ../test-output.txt
+      - name: Say which tests failed (shown on the run's summary page)
+        if: failure()
+        shell: bash
+        run: python .github/failures.py
 
   # FindX (findx/), the Android app that finds your phone: its unit tests (positions, keys, circles, battery).
   findx:
