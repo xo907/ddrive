@@ -7,6 +7,8 @@
     lite autostart on|off       show it by itself when this computer starts
     lite sync on|off            let folders of this computer be synced with the drive; which ones is
                                 chosen on the host's dashboard, on its Sync page (litesync.py)
+    lite autoupdate on|off      pull newer versions by itself (a git checkout); a running Lite always starts
+                                again with new code (a git pull) within a minute
     lite status | ls | get | put | disconnect, and lite menu for all of this as a menu
 
 Nothing of the drive lives on this computer: no bot token, no encryption key, no index, no cache on
@@ -955,6 +957,54 @@ def cmd_stop(args):
     return 0 if not _is_mounted(mp) else 1
 
 
+def cmd_renew(args):
+    """Started by a running Lite whose code was updated (litesync.Supervisor.renew_check): that program ends, and
+    starts again with the new code. Not one to type: it runs by itself, its output goes to lite.log."""
+    from . import litesync
+    time.sleep(2)
+    if _mount_pid():                         # the program showing the drive (folder syncing runs in it too)
+        cmd_stop(args)
+        for _ in range(60):
+            if not _mount_pid():
+                break
+            time.sleep(0.5)
+        return cmd_mount(argparse.Namespace(mount=None, background=True, verbose=False))
+    pid = litesync.running_pid()             # only the folder syncing (`lite sync run`)
+    if pid and pid != os.getpid():
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        else:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
+        for _ in range(60):
+            if not litesync.running_pid():
+                break
+            time.sleep(0.5)
+    if load_settings().get("sync"):
+        _sync_ensure()
+    return 0
+
+
+def cmd_autoupdate(args):
+    from . import updates
+    s = load_settings()
+    if args.state in ("on", "off"):
+        if args.state == "on" and updates.install_kind() != "git":
+            print("[ERROR] This copy wasn't installed with git, so it can't update itself: download the new version instead.")
+            return 1
+        s["autoupdate"] = args.state == "on"
+        save_settings(s)
+    on = bool(s.get("autoupdate"))
+    print(f"[OK] Updating by itself is {'ON' if on else 'OFF'}." + (
+        " Twice a day this computer asks GitHub for the newest DDrive and pulls it (git pull); the drive and the folder"
+        " syncing then start again with it, by themselves." if on else
+        f" '{me()} autoupdate on' turns it on. (A 'git pull' by hand is taken up by itself either way: a running Lite starts"
+        " again with the new code within a minute.)"))
+    return 0
+
+
 # ---------------------------------------------------------------------- folder syncing (litesync.py)
 def _sync_ensure():
     """Have something on this computer doing the folder syncing; True when it had to be started."""
@@ -1433,6 +1483,9 @@ def main(argv, verbose=False):
                                     "on, off, status, or run to do it in this window")
     p.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
     p.add_argument("-b", "--background", action="store_true", help="With run: in the background")
+    p = sub.add_parser("autoupdate", help="Update by itself (a git checkout): on, off or status")
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"])
+    sub.add_parser("renew", help=argparse.SUPPRESS)
     sub.add_parser("menu", help="All of this as a menu")
     args = parser.parse_args(argv)
     args.verbose = verbose
@@ -1442,7 +1495,7 @@ def main(argv, verbose=False):
     try:
         return {"connect": cmd_connect, "mount": cmd_mount, "stop": cmd_stop, "status": cmd_status, "ls": cmd_ls,
                 "get": cmd_get, "put": cmd_put, "import": cmd_import, "disconnect": cmd_disconnect, "autostart": cmd_autostart,
-                "sync": cmd_sync, "menu": cmd_menu}[args.action](args)
+                "sync": cmd_sync, "menu": cmd_menu, "autoupdate": cmd_autoupdate, "renew": cmd_renew}[args.action](args)
     except HostError as e:
         print(f"[ERROR] {e}")
         return 1

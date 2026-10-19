@@ -27,12 +27,13 @@ import json
 import logging
 import os
 import posixpath
+import re
 import sys
 import threading
 import time
 import types
 
-from . import sync, vault
+from . import __version__, sync, vault
 from .config import default_data_dir
 from .lite import HostError
 
@@ -802,6 +803,19 @@ def running_pid():
     return pid if alive(pid) else None
 
 
+RENEW_LOOK_S = 60                  # how often a running Lite looks whether its code was updated
+
+
+def version_on_disk():
+    """The version of the code now in the program's folder (newer than this process's after a git pull)."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "__init__.py"), encoding="utf-8") as f:
+            m = re.search(r'__version__\s*=\s*"([^"]+)"', f.read())
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
 class Supervisor:
     """Does the folder syncing for as long as it is turned on in the lite settings, in whichever
     program on this computer got to it first (the one showing the drive, or `lite sync run`)."""
@@ -812,6 +826,30 @@ class Supervisor:
         self._stop = threading.Event()
         self._thread = None
         self._told = None
+        self._renewing = False
+        self._looked = 0.0
+        self._pulled = time.time() - 12 * 3600 + 600        # (the first look for a newer version: 10 minutes after starting)
+
+    def renew_check(self):
+        """Keep this program up to date: with `lite autoupdate on` (a git checkout), pull a newer DDrive twice a day; and
+        when the code in the program's folder is newer than what runs (pulled by that, or by hand), start again with it
+        (`lite renew`, a program of its own: the drive is taken away and shown again, the syncing carries on)."""
+        from . import lite, updates
+        if self._renewing or getattr(sys, "frozen", False):
+            return
+        now = time.time()
+        if lite.load_settings().get("autoupdate") and now - self._pulled > 12 * 3600 and updates.install_kind() == "git":
+            self._pulled = now
+            up = updates.Updates(None)
+            latest = up.check()
+            if latest and updates.newer(latest, __version__):
+                ok, said = up.pull()
+                log.info("Updating to DDrive %s: %s", latest, "done" if ok else "git said: " + said)
+        disk = version_on_disk()
+        if disk and disk != __version__:
+            self._renewing = True
+            log.info("DDrive %s is in the program's folder now (this is %s): starting again with it", disk, __version__)
+            lite._spawn("renew")
 
     def _claim(self):
         other = running_pid()
@@ -864,6 +902,12 @@ class Supervisor:
                     self.check()
                 except Exception as e:
                     log.warning("Folder syncing: %s", e, exc_info=True)
+                if time.time() - self._looked > RENEW_LOOK_S:
+                    self._looked = time.time()
+                    try:
+                        self.renew_check()
+                    except Exception as e:
+                        log.warning("Looking for a newer DDrive: %s", e)
                 self._stop.wait(2.0)
             self._release()
         self._thread = threading.Thread(target=loop, name="SyncSupervisor", daemon=True)

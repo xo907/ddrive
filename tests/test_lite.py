@@ -6,6 +6,7 @@ import contextlib
 import errno
 import io
 import os
+import unittest
 
 import helpers
 from ddrive import lite, words
@@ -198,3 +199,18 @@ class RefusedWordsTest(helpers.unittest.TestCase):
         with self.assertRaises(HostError):
             client.request("GET", "/api/list")
         self.assertEqual(sent.count("/login"), 2)
+
+
+class RenewTest(unittest.TestCase):
+    def test_a_running_lite_starts_again_once_its_code_is_newer(self):
+        from unittest import mock
+        from ddrive import __version__, litesync
+        s = litesync.Supervisor()
+        with mock.patch.object(lite, "_spawn") as spawn, mock.patch.object(lite, "load_settings", return_value={}):
+            with mock.patch.object(litesync, "version_on_disk", return_value=__version__):
+                s.renew_check()
+            spawn.assert_not_called()                            # the same code: nothing to do
+            with mock.patch.object(litesync, "version_on_disk", return_value="99.0.0"):
+                s.renew_check()
+                s.renew_check()
+            self.assertEqual(spawn.call_args_list, [mock.call("renew")])     # once

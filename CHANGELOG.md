@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.14.0 (2026-10-18)
+
+- **DDrive Lite keeps itself up to date.** A running Lite (showing the drive, or only syncing folders) notices within a minute when the code in its folder is newer, after a `git pull`, and starts again with it by itself: no more `lite stop` and mounting again by hand to get a fix.
+- **`lite autoupdate on`** (a git checkout): twice a day Lite asks GitHub for the newest DDrive and pulls it, then starts again with it. Off by default; `lite autoupdate status` says how it is.
+
 ## 3.13.2 (2026-10-18)
 
 - **Folder syncing stopped with "Failed: 'name'"** on an end-to-end encrypted account that has a password lock: what is locked is stored sealed, without a name, and DDrive Lite's sync tripped over it. It now leaves sealed entries alone (they can't be opened without the password anyway).
