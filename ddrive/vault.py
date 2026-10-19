@@ -235,7 +235,8 @@ def view(nodes):
         by_name = {}
         for m in group:
             for c in raw.get(m, ()):
-                if not c.get("trash") and not c.get("into") and c["id"] not in done:
+                # (what is locked is sealed, with no name: only a page with its password shows it)
+                if not c.get("trash") and not c.get("into") and c["id"] not in done and not c.get("box") and c.get("name"):
                     by_name.setdefault(c.get("name") or "", []).append(c)
         out = {}
         for name, cs in by_name.items():

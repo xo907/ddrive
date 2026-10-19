@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.13.2 (2026-10-18)
+
+- **Folder syncing stopped with "Failed: 'name'"** on an end-to-end encrypted account that has a password lock: what is locked is stored sealed, without a name, and DDrive Lite's sync tripped over it. It now leaves sealed entries alone (they can't be opened without the password anyway).
+
 ## 3.13.1 (2026-10-18)
 
 - **Cinema mode for videos.** Clicking a video in a folder plays it over the whole page, on black: the bar at the top fades while it plays, and Space/K play and pause, J/L or the arrows go 10 seconds back or on, F is full screen, M the sound, Escape closes. Details, sharing and versions are one button away.

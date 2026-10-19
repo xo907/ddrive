@@ -300,6 +300,8 @@ class VaultDrive:
         while todo:
             nid, rel_dir = todo.pop()
             for n in self.v._children(nid):
+                if not n.get("name"):                # (sealed by a password lock: not for syncing)
+                    continue
                 rel = f"{rel_dir}/{n['name']}" if rel_dir else n["name"]
                 if excluded(rel):
                     continue
