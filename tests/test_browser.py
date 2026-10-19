@@ -155,7 +155,9 @@ class BrowserTest(helpers.DriveTest):
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)
         p.goto(self.base + "/signup")
         p.click("text=Get my 24 words")
+        p.wait_for_function("() => document.querySelectorAll('#words li').length === 24")     # (made in the page: not at once)
         phrase = " ".join(li.inner_text() for li in p.query_selector_all("#words li"))
+        self.assertEqual(len(phrase.split()), 24)
         for box in p.query_selector_all("main input[type=checkbox]"):
             box.check()
         p.click("text=Create my account")
