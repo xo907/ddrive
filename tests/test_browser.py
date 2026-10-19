@@ -82,6 +82,21 @@ class BrowserTest(helpers.DriveTest):
         p.click("text=Send the words and sign in")
         p.wait_for_selector("#nav a[data-nav=files]")
 
+    def sign_up_e2e(self):
+        """A new end-to-end encrypted account, signed in in the page. Returns its 24 words."""
+        p = self.page
+        p.goto(self.base + "/signup")
+        p.click("text=Get my 24 words")
+        p.wait_for_function("() => document.querySelectorAll('#words li').length === 24")     # (made in the page: not at once)
+        phrase = " ".join(li.inner_text() for li in p.query_selector_all("#words li"))
+        self.assertEqual(len(phrase.split()), 24)
+        for box in p.query_selector_all("main input[type=checkbox]"):
+            box.check()
+        p.click("text=Create my account")
+        p.wait_for_selector("#nav a[data-nav=files]")
+        p.wait_for_function("() => window.E2E && E2E.active")            # (the account's list is opened in the page)
+        return phrase
+
     def api(self, method, path, body=None):
         return self.page.evaluate("""async ([method, path, body]) => {
             const r = await fetch(path, method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/json', 'X-DD': '1' }, body: JSON.stringify(body || {}) });
@@ -162,16 +177,7 @@ class BrowserTest(helpers.DriveTest):
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)
-        p.goto(self.base + "/signup")
-        p.click("text=Get my 24 words")
-        p.wait_for_function("() => document.querySelectorAll('#words li').length === 24")     # (made in the page: not at once)
-        phrase = " ".join(li.inner_text() for li in p.query_selector_all("#words li"))
-        self.assertEqual(len(phrase.split()), 24)
-        for box in p.query_selector_all("main input[type=checkbox]"):
-            box.check()
-        p.click("text=Create my account")
-        p.wait_for_selector("#nav a[data-nav=files]")
-        p.wait_for_function("() => window.E2E && E2E.active")            # (the account's list is opened in the page)
+        phrase = self.sign_up_e2e()
         self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Private"})["status"], 200)
         self.upload_text("/Private/diary.txt", "Dear diary")
         self.upload_text("/note.txt", "in the open")
@@ -216,6 +222,29 @@ class BrowserTest(helpers.DriveTest):
         p.keyboard.press("Escape")
         p.evaluate("() => unlockDialog()")
         p.wait_for_selector("dialog[open] >> text=Forgot the password?")
+        self.assertEqual(self.errors, [])
+
+    def test_a_big_video_of_an_end_to_end_link_streams(self):
+        p = self.page
+        self.sign_up_e2e()
+        film = "".join("%08d" % i for i in range(1_300_000)).encode()          # 10.4 MB: more than one answer holds
+        self.upload_text("/film.mp4", film.decode())
+        link = self.api("POST", "/api/share", {"path": "/film.mp4", "download": True})
+        self.assertEqual(link["status"], 200, link)
+        viewer = self.ctx.new_page()
+        viewer.set_default_timeout(30000)
+        viewer.goto(self.base + link["json"]["path"])
+        src = viewer.wait_for_selector("video").get_attribute("src")
+        self.assertIn("/play/", src)                          # streamed, not fetched whole first
+        got = viewer.evaluate("""async (src) => {
+            const r = await fetch(src, { headers: { Range: 'bytes=9000000-9000099' } });
+            return { status: r.status, range: r.headers.get('Content-Range'), body: await r.text() };
+        }""", src)
+        self.assertEqual((got["status"], got["range"]), (206, f"bytes 9000000-9000099/{len(film)}"))
+        self.assertEqual(got["body"].encode(), film[9000000:9000100])
+        whole = viewer.evaluate("async (src) => { const r = await fetch(src); return [r.status, (await r.arrayBuffer()).byteLength]; }", src)
+        self.assertEqual(whole[0], 206)                        # (an answer of a few pieces: the player asks for more)
+        self.assertLess(whole[1], len(film))
         self.assertEqual(self.errors, [])
 
 

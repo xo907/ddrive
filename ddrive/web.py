@@ -3820,7 +3820,7 @@ def _kind(name):
 
 
 _VSHARE_HEADERS = {
-    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src blob:; "
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob:; "
                                "frame-src blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     "Referrer-Policy": "no-referrer",
     "X-Robots-Tag": "noindex, nofollow",

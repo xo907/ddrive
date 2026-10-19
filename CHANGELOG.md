@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.14.1 (2026-10-18)
+
+- **Big videos play from share links of end-to-end encrypted accounts.** The link's page used to fetch and decrypt the whole file before showing it, and refused anything over 200 MB. Videos and songs now stream: the player asks for the parts it needs, and only those are fetched and decrypted in the viewer's browser (the server still sees only sealed pieces). A film starts at once and can be skipped through, whatever its size. (Links of other drives already streamed.)
+
 ## 3.14.0 (2026-10-18)
 
 - **DDrive Lite keeps itself up to date.** A running Lite (showing the drive, or only syncing folders) notices within a minute when the code in its folder is newer, after a `git pull`, and starts again with it by itself: no more `lite stop` and mounting again by hand to get a fix.

@@ -151,8 +151,66 @@
     view.replaceChildren(box);
   }
 
+  // Videos and songs are streamed: the player asks for the parts it needs (/v/<link>/play/<n>), the service worker
+  // (sw.js) hands the question to this page, and only those parts are fetched and opened here. A big film starts
+  // at once and can be skipped through, without the whole of it being fetched first.
+  const streams = new Map();
+  let streamNo = 0;
+  async function streamWorker() {
+    if (!navigator.serviceWorker || !window.isSecureContext) return false;
+    try {
+      await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller)
+        await new Promise((res) => { navigator.serviceWorker.addEventListener("controllerchange", res, { once: true }); setTimeout(res, 3000); });
+      return !!navigator.serviceWorker.controller;
+    } catch (e) { return false; }
+  }
+  if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", async (e) => {
+    const q = e.data || {}, port = e.ports && e.ports[0];
+    if (q.type !== "vshare-get" || !port) return;
+    const s = streams.get(new URL(q.url).pathname.split("/")[4]);
+    if (!s) return port.postMessage({ status: 404, headers: { "Content-Type": "text/plain" } });
+    try {
+      const f = s.f, total = f.size, range = /bytes=(\d*)-(\d*)/.exec(q.range || "");
+      const headers = { "Content-Type": s.type, "Accept-Ranges": "bytes", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
+      let start = 0, end = total - 1, status = 200;
+      if (range && total) {
+        start = range[1] === "" ? Math.max(0, total - Number(range[2])) : Number(range[1]);
+        end = range[1] !== "" && range[2] ? Math.min(total - 1, Number(range[2])) : total - 1;
+        if (start >= total) return port.postMessage({ status: 416, headers: { "Content-Range": `bytes */${total}` } });
+        status = 206;
+      }
+      end = Math.min(end, start + 4 * DDV.CHUNK - 1);        // a few pieces at a time: the player asks for the next when it wants them
+      if (status === 206 || end < total - 1) { status = 206; headers["Content-Range"] = `bytes ${start}-${end}/${total}`; }
+      const data = await readRange(f, start, end, await s.key);
+      const body = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      port.postMessage({ status, headers, body }, [body]);
+    } catch (err) {
+      port.postMessage({ status: 502, headers: { "Content-Type": "text/plain" } });
+    }
+  });
+
   async function show(f, m) {
     const name = f.path.split("/").pop(), type = TYPES[ext(name)], view = $("view"), looking = m && m.download === false;
+    const media = type && /^(video|audio)\//.test(type);
+    if (media && await streamWorker()) {
+      const n = String(++streamNo);
+      streams.clear();                           // (one at a time: what was shown before stops)
+      streams.set(n, { f, type, key: DDV.fileKey(DDV.unb64(f.key)) });
+      const src = `/v/${sid}/play/${n}/${encodeURIComponent(name)}`;
+      const shown = type.startsWith("video/") ? el("video", { src, controls: true, autoplay: true, playsInline: true, preload: "auto" })
+                                              : el("audio", { src, controls: true, preload: "metadata" });
+      if (looking) {
+        shown.setAttribute("controlslist", "nodownload noremoteplayback noplaybackrate");
+        shown.setAttribute("disablepictureinpicture", "");
+        shown.setAttribute("disableremoteplayback", "");
+      }
+      shown.addEventListener("error", () => view.append(el("p", { className: "err", textContent:
+        "This browser can't play this file" + (looking ? "." : ": download it and open it in an app such as VLC.") })), { once: true });
+      view.replaceChildren(shown);
+      return;
+    }
     const bar = el("i"), line = el("div", { className: "muted", textContent: "Starting…" });
     view.replaceChildren(el("div", { className: "loading" }, el("div", { className: "spin" }), el("b", { textContent: `Opening ${name}` }), el("div", { className: "meter" }, bar), line));
     const began = Date.now();
@@ -237,7 +295,7 @@
       return el("div", { className: "row" }, el("span", { className: "name", textContent: f.path }), el("span", { className: "size", textContent: size(f.size) }), open, dl);
     }));
     if (!m.files.length) $("files").replaceChildren(el("p", { className: "muted", textContent: "This folder is empty." }));
-    if (!m.dir && m.files[0] && showable(m.files[0]) && m.files[0].size <= SHOW_MAX) show(m.files[0], m);
+    if (!m.dir && m.files[0] && showable(m.files[0]) && (m.files[0].size <= SHOW_MAX || /^(video|audio)\//.test(TYPES[ext(m.files[0].path)] || ""))) show(m.files[0], m);
   }
 
   async function start() {

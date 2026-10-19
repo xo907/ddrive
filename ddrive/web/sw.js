@@ -20,11 +20,13 @@ function ask(client, message) {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin || !event.clientId) return;
-  if (url.pathname !== "/api/file" && url.pathname !== "/api/thumb" && url.pathname !== "/api/chat/preview") return;
+  // (/v/<link>/play/<n>: a video or song of an end-to-end encrypted link, streamed: vshare.js opens the parts asked for)
+  const play = /^\/v\/[^/]+\/play\//.test(url.pathname);
+  if (!play && url.pathname !== "/api/file" && url.pathname !== "/api/thumb" && url.pathname !== "/api/chat/preview") return;
   event.respondWith((async () => {
     const client = await self.clients.get(event.clientId);
     if (!client) return fetch(event.request);
-    const got = await ask(client, { type: "e2e-get", url: url.href, range: event.request.headers.get("Range") || "" });
+    const got = await ask(client, { type: play ? "vshare-get" : "e2e-get", url: url.href, range: event.request.headers.get("Range") || "" });
     if (got.pass) return fetch(event.request);
     return new Response(got.body || null, { status: got.status || 200, headers: got.headers || {} });
   })());
