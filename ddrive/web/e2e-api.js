@@ -1142,12 +1142,12 @@
   const NO_COMPUTER = "Messages need one of your own computers to be on: DDrive or DDrive Lite, signed in to this account, with folder syncing turned on. " +
                       "It reads Discord and seals what it keeps; the server isn't allowed to see any of it.";
   let chatDevice = "";
-  async function chatCall(method, name, query, body) {
+  async function chatCall(method, name, query, body, device = null, wait = 55) {
     const ds = (await devices()).filter((d) => d.online && d.chat);
-    const d = ds.find((x) => x.id === chatDevice) || ds[0];
+    const d = device ? ds.find((x) => x.id === device) : ds.find((x) => x.id === chatDevice) || ds[0];
     if (!d) return null;
-    chatDevice = d.id;
-    const r = await DDV.call("/api/vault/sync/ask", { method: "POST", json: { device: d.id, wait: 55,
+    if (!device) chatDevice = d.id;
+    const r = await DDV.call("/api/vault/sync/ask", { method: "POST", json: { device: d.id, wait,
       sealed: await DDV.sealMessage(v.meta, { do: "chat", method, route: name, query: Object.fromEntries(query || []), body }) } });
     return DDV.openMessage(v.meta, r.sealed);
   }
@@ -1162,6 +1162,32 @@
     if (r.json !== undefined) return json(r.json, r.status || 200);
     return new Response(DDV.unb64(r.data || ""), { status: r.status || 200, headers: { "Content-Type": r.type || "application/octet-stream" } });
   }
+  /** The account's computers that can do Messages, and which of them are logged in to Discord (each keeps its
+   *  own token): asked of each one that is on. */
+  GET["chat/devices"] = async () => {
+    const ds = (await devices()).filter((d) => d.chat);
+    const items = await Promise.all(ds.map(async (d) => {
+      const out = { id: d.id, name: d.name, online: d.online, seen: d.seen || null, connected: null, user: null };
+      if (d.online) {
+        const r = await chatCall("GET", "chat", null, null, d.id, 20).catch(() => null);
+        if (r && r.json) { out.connected = !!r.json.connected; out.user = r.json.user || null; }
+      }
+      return out;
+    }));
+    const shown = items.find((d) => d.id === chatDevice && d.online) || items.find((d) => d.online);
+    for (const d of items) d.current = !!shown && d.id === shown.id;
+    return { items };
+  };
+  /** Log one computer out of Discord: its token is removed there, and its logging and archiving stop. */
+  POST["chat/devices/unlink"] = async (b) => {
+    const r = await chatCall("POST", "chat/disconnect", null, {}, String(b.device || ""));
+    if (!r) throw new Fail(409, "That computer isn't on right now: it can be unlinked once it is.");
+    if (r.status && r.status >= 400) throw new Fail(r.status, (r.json && r.json.error) || "That didn't work");
+    return { ok: true };
+  };
+  /** Which computer this page's Messages asks. */
+  POST["chat/devices/use"] = async (b) => { chatDevice = String(b.device || "") || null; return { ok: true }; };
+
   /** Opening an attachment: from Discord while it is still there, else the sealed copy in the account. */
   async function chatOpen(query) {
     const r = await chatCall("GET", "chat/open", query, null);

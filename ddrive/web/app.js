@@ -4999,7 +4999,40 @@ async function discordSection(into) {
               h("button", { class: "btn small", disabled: !!s.locked, onclick: () => discordLogin(redraw) }, "Log in")),
       (s.connected || (s.totals && s.totals.messages)) && row("Messages", s.locked ? `${s.folder} is locked in this browser. Unlock it with the padlock at the top.`
           : `${s.totals ? plural(s.totals.messages, "message") : "Nothing"} kept in ${s.folder} on your drive: encrypted, on every device, at no cost.`,
-          h("a", { class: "btn ghost small", href: "#/messages" }, "Open"))));
+          h("a", { class: "btn ghost small", href: "#/messages" }, "Open"))),
+    window.E2E && E2E.active && discordDevices());
+}
+
+/** An end-to-end account: each of its computers keeps its own Discord login. Which ones are logged in, and Unlink. */
+function discordDevices() {
+  const box = h("div", {}, h("h2", {}, "Computers logged in to Discord"), h("p", { class: "muted small" }, "Asking your computers…"));
+  const draw = async () => {
+    const r = await api("/api/chat/devices").catch((e) => ({ error: e.message }));
+    if (!box.isConnected && box.parentNode) return;
+    if (r.error) return box.replaceChildren(h("h2", {}, "Computers logged in to Discord"), h("p", { class: "muted small" }, r.error));
+    const items = r.items || [];
+    const rows = items.map((d) => {
+      const what = !d.online ? `Off${d.seen ? " · last seen " + when(d.seen) : ""}: whether it is logged in shows when it is on`
+        : d.connected === null ? "Didn't answer"
+        : d.connected ? `Logged in as ${d.user ? d.user.name + " (@" + d.user.username + ")" : "your Discord account"}${d.current ? " · this page's Messages come from here" : ""}`
+        : "Not logged in to Discord";
+      return h("div", { class: "set-row" },
+        h("div", { class: "set-text" }, h("div", { class: "t" }, d.name), h("div", { class: "s" }, what)),
+        h("div", { class: "set-ctl" },
+          d.online && d.connected && !d.current && h("button", { class: "btn ghost small", onclick: async () => {
+            await api("/api/chat/devices/use", { device: d.id }); chat = null; chatDir = null; draw(); } }, "Use this one"),
+          d.online && d.connected && h("button", { class: "btn ghost small danger", onclick: async () => {
+            if (!await ask({ title: `Unlink ${d.name} from Discord?`, ok: "Unlink", danger: true,
+                             text: "Its Discord token is removed and its logging and archiving stop. The messages already in your account stay." })) return;
+            if (await attempt(() => api("/api/chat/devices/unlink", { device: d.id }), `${d.name} is unlinked from Discord`)) { chat = null; chatDir = null; draw(); }
+          } }, "Unlink")));
+    });
+    box.replaceChildren(h("h2", {}, "Computers logged in to Discord"),
+      h("p", { class: "muted small" }, "Each of your computers that does Messages keeps its own Discord login. More than one logged in means the same messages are recorded more than once."),
+      items.length ? h("div", { class: "settings" }, ...rows) : h("p", { class: "muted small" }, "None of your computers does Messages yet."));
+  };
+  draw();
+  return box;
 }
 
 function msgRow(m) {

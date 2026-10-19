@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.15.0 (2026-10-19)
+
+- **Which computers are logged in to Discord, and Unlink.** For an end-to-end encrypted account each computer that does Messages keeps its own Discord login. Settings now lists those computers: logged in (as whom) or not, which one this page's Messages come from, and when an off one was last seen. **Unlink** logs one out (its token is removed there, its logging and archiving stop; the messages already kept stay), and **Use this one** switches which computer the page asks.
+
 ## 3.14.1 (2026-10-18)
 
 - **Big videos play from share links of end-to-end encrypted accounts.** The link's page used to fetch and decrypt the whole file before showing it, and refused anything over 200 MB. Videos and songs now stream: the player asks for the parts it needs, and only those are fetched and decrypted in the viewer's browser (the server still sees only sealed pieces). A film starts at once and can be skipped through, whatever its size. (Links of other drives already streamed.)

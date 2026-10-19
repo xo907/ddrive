@@ -245,6 +245,10 @@ class BrowserTest(helpers.DriveTest):
         whole = viewer.evaluate("async (src) => { const r = await fetch(src); return [r.status, (await r.arrayBuffer()).byteLength]; }", src)
         self.assertEqual(whole[0], 206)                        # (an answer of a few pieces: the player asks for more)
         self.assertLess(whole[1], len(film))
+        # The account's settings list its computers logged in to Discord (none here: no computer does Messages).
+        p.goto(self.base + "/#/settings")
+        p.wait_for_selector("text=Computers logged in to Discord")
+        p.wait_for_selector("text=None of your computers does Messages yet.")
         self.assertEqual(self.errors, [])
 
 
