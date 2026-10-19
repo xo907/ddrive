@@ -3115,11 +3115,17 @@ function pwInput(placeholder) {
 
 function lockDialog(it) {
   const a = pwInput("Password"), b = pwInput("The same password again");
+  // An end-to-end account: the password is the only way in, unless the account's words may open it too.
+  const e2e = !!(window.E2E && E2E.active);
+  const words = h("textarea", { rows: "3", autocomplete: "off", autocapitalize: "none", spellcheck: "false", placeholder: "Your 24 words", hidden: true });
+  const withWords = h("input", { type: "checkbox", onchange: () => { words.hidden = !withWords.checked; if (withWords.checked) words.focus(); } });
   const go = h("button", { class: "btn", type: "button", onclick: async () => {
     if (a.value.length < 4) return toast("Use at least 4 characters");
     if (a.value !== b.value) return toast("The two passwords are different");
     go.disabled = true;
-    const r = await attempt(() => api("/api/locks/add", { path: it.path, password: a.value }));
+    if (withWords.checked && !words.value.trim()) { words.focus(); return toast("Type your 24 words, or untick the box"); }
+    const r = await attempt(() => api("/api/locks/add", { path: it.path, password: a.value, words: withWords.checked ? words.value : undefined }));
+    words.value = "";
     go.disabled = false;
     if (r) { m.close(); toast(`Locked. It stays open in this browser until you lock it again${r.minutes ? ` or ${r.minutes} minutes pass without using it` : ""}.`); await refreshStatus(); render(); }
   } }, "Lock");
@@ -3128,6 +3134,9 @@ function lockDialog(it) {
       + (window.E2E && E2E.active ? "It is sealed with the password, so not even your 24 words open it: if the password is forgotten, so is what is locked. Keep it somewhere safe."
                                  : "Keep the password somewhere: it can't be looked up.")),
     field("Password", a), field("Again", b, "Locked folders that share a password open together."),
+    e2e && h("label", { class: "check-row" }, withWords, " Let my 24 words open it too, if the password is forgotten"),
+    e2e && words,
+    e2e && h("p", { class: "muted small" }, "The words are used once, here, to seal a second key; they aren't kept. Without this, a forgotten password can't be got round."),
     h("div", { class: "modal-actions" }, go));
   a.addEventListener("keydown", (e) => { if (e.key === "Enter") b.focus(); });
   b.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
@@ -3151,6 +3160,8 @@ async function unlockDialog() {
   const m = modal("Unlock",
     h("p", { class: "muted", style: "margin:0 0 16px" }, "Type the password of a locked folder or file. Everything locked with it shows up in this browser."),
     field("Password", pw),
+    window.E2E && E2E.active && h("p", { class: "muted small" }, h("button", { class: "link", type: "button", onclick: () => { m.close(); recoverDialog(); } },
+      "Forgot the password? Open with your 24 words")),
     info && !isAccount() && h("div", { class: "toggle" },
       h("div", {}, h("div", { class: "t" }, `Also show on the drive (${info.mount})`),
         h("div", { class: "s" }, `On ${info.host}, for every program there, for the same time`)),
@@ -3158,6 +3169,26 @@ async function unlockDialog() {
     h("div", { class: "modal-actions" }, go));
   pw.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
   pw.focus();
+}
+
+/** An end-to-end account's forgotten lock password: the 24 words open what was locked so that they would. */
+function recoverDialog() {
+  const words = h("textarea", { rows: "4", autocomplete: "off", autocapitalize: "none", spellcheck: "false", placeholder: "Your 24 words" });
+  const go = h("button", { class: "btn", type: "button", onclick: async () => {
+    go.disabled = true;
+    const r = await attempt(() => api("/api/locks/recover", { words: words.value }));
+    go.disabled = false;
+    words.value = "";
+    if (!r) return;
+    m.close();
+    toast(`${plural(r.opened, "locked item")} open. To give it a new password: remove the lock, then lock it again.`);
+    await refreshStatus();
+    render();
+  } }, "Open");
+  const m = modal("Open with your 24 words",
+    h("p", { class: "muted", style: "margin:0 0 16px" }, "What was locked with “Let my 24 words open it too” opens in this browser. The words are only used here."),
+    field("Your 24 words", words), h("div", { class: "modal-actions" }, go));
+  words.focus();
 }
 
 async function lockAllNow() {

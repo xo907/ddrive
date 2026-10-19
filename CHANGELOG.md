@@ -3,6 +3,21 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.13.0 (2026-10-18)
+
+- **A forgotten lock password can be got round, if you choose so.** Locking a folder or file of an end-to-end
+  encrypted account now offers "Let my 24 words open it too": typed once, the words seal a second key for the
+  lock (they aren't kept), and *Forgot the password? Open with your 24 words* in the unlock dialog opens it.
+  Without it, as before, only the password does. A browser that is merely signed in can't open either way.
+- **Fixed: a file of exactly 8, 16, 24… MB couldn't be uploaded into an end-to-end account** from a computer
+  (folder sync, DDrive Lite): after its last part the computer sent an empty one more, which the drive refused,
+  and the upload failed and was tried again for ever. The browser and the phone weren't affected.
+- **The DDrive app plays videos full screen over the whole screen**, the phone's bars hidden; Back leaves it.
+- Tested now on every change: the dashboard in a real browser (signing in, uploads and downloads, an end-to-end
+  account's locks, relocking after 15 minutes, the words opening a lock, the menu, the update notice, a drive
+  that is away) and FindX's unit tests.
+- The DDrive app for Android is 3.13.0.
+
 ## 3.12.0 (2026-10-18)
 
 - **Save to DDrive from any app on your phone.** The DDrive app is in Android's share sheet: photos, videos,

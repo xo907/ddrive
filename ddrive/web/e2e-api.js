@@ -1194,7 +1194,12 @@
     const n = at(b.path), pw = String(b.password || "");
     if (!n.id) throw new Fail(400, "The whole account can't be locked");
     if (pw.length < 4) throw new Fail(400, "Use at least 4 characters");
-    await v.lock(n.id, pw);
+    let wordsKey = null;
+    if (b.words) {                             // (the words open it too: they must be this account's)
+      try { wordsKey = await DDV.phraseToKey(b.words); } catch (e) { throw new Fail(400, `Those words aren't right: ${e.message}.`); }
+      if (!(await v.ownWords(wordsKey))) throw new Fail(400, "Those aren't this account's 24 words.");
+    }
+    await v.lock(n.id, pw, wordsKey);
     lockUsed = Date.now();
     return { ok: true, minutes: LOCK_MINUTES };
   };
@@ -1208,6 +1213,16 @@
     return { ok: true, opened, minutes: LOCK_MINUTES };
   };
   POST["locks/lock"] = async () => { v.relock(); return { ok: true }; };
+  /** A forgotten password: the account's 24 words open what was locked so that they would. */
+  POST["locks/recover"] = async (b) => {
+    if (lockFails) await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** lockFails)));
+    let key;
+    try { key = await DDV.phraseToKey(String(b.words || "")); } catch (e) { lockFails++; throw new Fail(400, `Those words aren't right: ${e.message}.`); }
+    const opened = await v.unlockWithWords(key);
+    if (!opened) { lockFails++; throw new Fail(403, "Nothing locked here can be opened with these words (only what was locked with “Let my 24 words open it too”)."); }
+    lockFails = 0; lockUsed = Date.now();
+    return { ok: true, opened, minutes: LOCK_MINUTES };
+  };
   POST["locks/remove"] = async (b) => {
     const n = at(b.path);
     if (!n.lockRoot) throw new Fail(400, "That isn't locked");

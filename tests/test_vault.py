@@ -162,6 +162,13 @@ class VaultTest(helpers.DriveTest):
             self.new_device(os.urandom(32))
         self.assertEqual(e.exception.status, 401)
 
+    def test_a_file_of_whole_parts_goes_up(self):
+        # 8 MiB: its sealed pieces fill a whole part, which is the last one. Nothing more is sent after it (an empty
+        # part sent after the end was answered "lost its place", and the upload failed).
+        data = os.urandom(vault.PART)
+        self.device.put("/whole.bin", data=data)
+        self.assertEqual(self.new_device().read("/whole.bin"), data)
+
     def test_the_host_sees_nothing(self):
         v = self.device
         v.mkdir("/Very private folder")

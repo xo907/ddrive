@@ -47,8 +47,9 @@ The list is a set of entries, one per file or folder, each with an id of its own
 Password locks (made in the dashboard, which is the only place that opens them): a folder or file
 locked with a password is kept sealed with a key of its own, with everything in it, so that the
 account's words alone don't open it. The lock's record is an entry under "~locks" whose `lock` is
-{v, salt, iter, wrap}: the key, sealed (label "ddv1 lock key") with PBKDF2-SHA256(password, salt,
-iter). A locked entry is {id, parent, in: the lock's id, box, objs}: `box` is the rest of the entry,
+{v, salt, iter, wrap, rec}: the key, sealed (label "ddv1 lock key") with PBKDF2-SHA256(password, salt,
+iter), and, when the account's words may open it too, sealed again (rec, label "ddv1 lock recovery") with
+HKDF-SHA256(the words' key, info "ddrive vault v1 lock recovery"). A locked entry is {id, parent, in: the lock's id, box, objs}: `box` is the rest of the entry,
 sealed with the lock's key (label "ddv1 locked"); `objs` the objects it holds on to (so that they
 are not forgotten by a device that can't open it). The locked folder or file itself has the parent
 "~locked" and its folder in `home`; what is in it keeps its parent. No device shows anything under
@@ -595,7 +596,8 @@ class Vault:
             if len(buf) >= PART:
                 post(buf, plain - sent)
                 sent, buf = plain, b""
-        post(buf, plain - sent)
+        if buf or offset < total:                # (a file that ended with a whole part is there already: nothing more is sent)
+            post(buf, plain - sent)
 
     def _fetch(self, oid, a, n):
         return self.client.request("GET", f"/api/vault/object?id={oid}", headers={"Range": f"bytes={a}-{a + n - 1}"})

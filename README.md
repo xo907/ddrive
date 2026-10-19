@@ -1336,8 +1336,9 @@ only the password opens (PBKDF2-SHA256, 600,000 rounds), so the account's 24 wor
 it, on any device. Unlocking happens in the page and lasts until it is locked again, 15 minutes pass
 without using it, or the page is closed. Devices that sync the account (a computer, the phone app)
 never see what is locked; one that makes a folder of the same name meanwhile makes a new one, and the
-dashboard shows the locked one as "name (locked)" next to it. There is no way round a forgotten
-password: not the recovery phrase, not the server. (vault.py describes how locks are kept.)
+dashboard shows the locked one as "name (locked)" next to it. A forgotten password can't be got
+round, unless "Let my 24 words open it too" was ticked when it was locked: the words (typed once, not
+kept) then open it too, from *Forgot the password?* in the unlock dialog. The server never can. (vault.py describes how locks are kept.)
 
 What it is and isn't (on a drive): a lock is a gate, not a second layer of encryption. Locked files are encrypted
 with the drive's key like all others. It keeps out anyone using your computer, the drive letter or the

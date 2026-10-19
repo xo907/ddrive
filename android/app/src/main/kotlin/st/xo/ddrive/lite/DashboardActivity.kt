@@ -161,6 +161,25 @@ class DashboardActivity : Activity() {
         window.decorView.systemUiVisibility = flags
     }
 
+    /** The status and navigation bars shown, or hidden (they come back with a swipe while hidden). */
+    @Suppress("DEPRECATION")
+    private fun bars(show: Boolean) {
+        root.fitsSystemWindows = show
+        if (Build.VERSION.SDK_INT >= 30) {
+            val c = window.insetsController ?: return
+            if (show) c.show(android.view.WindowInsets.Type.systemBars())
+            else {
+                c.hide(android.view.WindowInsets.Type.systemBars())
+                c.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.decorView.systemUiVisibility = if (show) 0
+                else View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        }
+        if (show) paintBars()
+        root.requestApplyInsets()
+    }
+
     private fun origin(url: String): String = try {
         val u = Uri.parse(url)
         val port = if (u.port == -1) "" else ":${u.port}"
@@ -240,6 +259,7 @@ class DashboardActivity : Activity() {
             fullScreenDone = callback
             root.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             web.visibility = View.GONE
+            bars(false)                          // (a video full screen: the whole screen, the phone's bars too)
         }
 
         override fun onHideCustomView() {
@@ -247,6 +267,7 @@ class DashboardActivity : Activity() {
             fullScreen = null
             fullScreenDone = null
             web.visibility = View.VISIBLE
+            bars(true)
         }
 
         override fun onPermissionRequest(request: PermissionRequest) = request.deny()      // (no camera or microphone for the page)

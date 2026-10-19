@@ -155,6 +155,7 @@ class BrowserTest(helpers.DriveTest):
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)
         p.goto(self.base + "/signup")
         p.click("text=Get my 24 words")
+        phrase = " ".join(li.inner_text() for li in p.query_selector_all("#words li"))
         for box in p.query_selector_all("main input[type=checkbox]"):
             box.check()
         p.click("text=Create my account")
@@ -179,11 +180,31 @@ class BrowserTest(helpers.DriveTest):
         p.clock.fast_forward("16:00")
         p.wait_for_function("() => true")
         self.assertEqual(self.names(), ["note.txt"])
+        # A forgotten password: what was locked so that the account's words open it too, they open.
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Taxes"})["status"], 200)
+        other = words.key_to_phrase(bytes(32))
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Taxes", "password": "red fox", "words": other})["status"], 400)
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Taxes", "password": "red fox", "words": phrase})["status"], 200)
+        self.api("POST", "/api/locks/lock")
+        self.assertNotIn("Taxes", self.names())
+        self.assertEqual(self.api("POST", "/api/locks/recover", {"words": other})["status"], 403)
+        got = self.api("POST", "/api/locks/recover", {"words": phrase})
+        self.assertEqual((got["status"], got["json"]["opened"]), (200, 1))          # (Private wasn't locked so: it stays shut)
+        self.assertEqual(self.names(), ["Taxes", "note.txt"])
+        self.api("POST", "/api/locks/lock")
         # The lock taken off: in the clear again.
         self.api("POST", "/api/locks/unlock", {"password": "blue whale"})
         self.assertEqual(self.api("POST", "/api/locks/remove", {"path": "/Private", "password": "blue whale"})["status"], 200)
         self.api("POST", "/api/locks/lock")
         self.assertEqual(self.names(), ["Private", "note.txt"])
+        # The dialogs: the lock one offers the words, the unlock one the way in with them.
+        p.goto(self.base + "/#/files/")
+        p.wait_for_selector("text=note.txt")
+        p.evaluate("() => lockDialog({ path: '/note.txt', name: 'note.txt', dir: false })")
+        p.wait_for_selector("dialog[open] >> text=Let my 24 words open it too")
+        p.keyboard.press("Escape")
+        p.evaluate("() => unlockDialog()")
+        p.wait_for_selector("dialog[open] >> text=Forgot the password?")
         self.assertEqual(self.errors, [])
 
 

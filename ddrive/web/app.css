@@ -1400,3 +1400,7 @@ body.server #locks, body.server #apps, body.server .usage, body.server .drop { d
 .nav-pick .ico { width: 16px; height: 16px; }
 .nav-pick:has(input:not(:checked)) { color: var(--muted); }
 .nav-pick:has(input:disabled) { cursor: default; opacity: .7; }
+
+/* The lock dialog: "let my 24 words open it too" (an end-to-end account). */
+.check-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 14px; cursor: pointer; }
+.modal textarea[placeholder="Your 24 words"] { width: 100%; margin: 0 0 8px; }

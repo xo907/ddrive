@@ -11,6 +11,9 @@
   const AAD_KEPT = enc.encode("ddv1 list kept in this browser");
   const AAD_UPLOAD = enc.encode("ddv1 upload kept in this browser"), UPLOAD_KEPT = 7 * 86400 * 1000;
   const AAD_LOCKED = enc.encode("ddv1 locked"), AAD_LOCK_KEY = enc.encode("ddv1 lock key");
+  // A lock may also be opened with the account's 24 words (when that was chosen as it was made): its key is
+  // sealed a second time, with a key made from the words alone (HKDF, "ddrive vault v1 lock recovery").
+  const AAD_LOCK_REC = enc.encode("ddv1 lock recovery"), INFO_LOCK_REC = enc.encode("ddrive vault v1 lock recovery");
   // Password-locked folders and files (vault.py says how they are kept): a lock's record sits under LOCKS,
   // a locked folder or file under LOCKED (its own folder in `home`), and what is in it under it, as ever.
   // None of these is under a folder any device shows, so a device that doesn't know of locks never sees them.
@@ -118,6 +121,12 @@
   async function passwordKey(password, salt, iterations) {
     const base = await crypto.subtle.importKey("raw", enc.encode(String(password).normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
     return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  /** The key that opens locks with the account's words (from the key the words stand for). */
+  async function recoveryKey(wordsKey) {
+    const base = await crypto.subtle.importKey("raw", wordsKey, "HKDF", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: INFO_LOCK_REC }, base,
+                                   { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
   /** The objects an entry holds on to: its content, its earlier versions, its small picture. */
   const objectsOf = (n) => [n.obj, ...(n.versions || []).map((x) => x.obj), n.thumb && n.thumb !== -1 ? n.thumb.obj : null].filter(Boolean);
@@ -477,8 +486,14 @@
       }
       return out;
     }
-    /** Lock an entry (and what is in it) with a password. It stays open in this page. */
-    async lock(id, password) {
+    /** Whether these are this account's words (what they seal, this page's key opens). */
+    async ownWords(wordsKey) {
+      const probe = await seal((await derive(wordsKey)).meta, enc.encode("ddrive"), AAD_SYNC);
+      try { await unseal(this.meta, probe, AAD_SYNC); return true; } catch (e) { return false; }
+    }
+    /** Lock an entry (and what is in it) with a password. It stays open in this page. `wordsKey`: the key the
+     *  account's words stand for, when they are to open it too (a forgotten password); otherwise only the password does. */
+    async lock(id, password, wordsKey = null) {
       const n = this.nodes.get(id);
       if (!n) throw new Error("That isn't there.");
       if (n.lockRoot) throw new Error("That has a lock already.");
@@ -489,8 +504,9 @@
       const raw = newKey(), salt = crypto.getRandomValues(new Uint8Array(16)), lock = newId();
       const wrap = await seal(await passwordKey(password, salt, LOCK_ITER), raw, AAD_LOCK_KEY);
       this.opened.set(lock, await fileKey(raw));
-      const ops = [{ op: "put", id: lock, parent: LOCKS, name: "", dir: false, size: 0, mtime: Date.now() / 1000,
-                     lock: { v: 1, salt: b64(salt), iter: LOCK_ITER, wrap: b64(wrap) } }];
+      const rec = { v: 1, salt: b64(salt), iter: LOCK_ITER, wrap: b64(wrap) };
+      if (wordsKey) rec.rec = b64(await seal(await recoveryKey(wordsKey), raw, AAD_LOCK_REC));
+      const ops = [{ op: "put", id: lock, parent: LOCKS, name: "", dir: false, size: 0, mtime: Date.now() / 1000, lock: rec }];
       for (const x of all) ops.push(await this._boxed(this.nodes.get(x), lock, x === id));
       for (let i = 0; i < ops.length; i += 400) await this._post(...ops.slice(i, i + 400));
       return lock;
@@ -506,6 +522,18 @@
       }));
       const now = new Set();
       for (const g of got) if (g) { this.opened.set(g[0], g[1]); now.add(g[0]); }
+      if (now.size) { await this._openBoxes(); this._derive(); }
+      return [...this.raw.values()].filter((n) => n.parent === LOCKED && now.has(n.in)).length;
+    }
+    /** The locks the account's words open (those made so): how many locked things are open now. */
+    async unlockWithWords(wordsKey) {
+      const rk = await recoveryKey(wordsKey);
+      const now = new Set();
+      for (const r of this.raw.values()) {
+        if (r.parent !== LOCKS || !r.lock || !r.lock.rec || this.opened.has(r.id)) continue;
+        try { this.opened.set(r.id, await fileKey(await unseal(rk, unb64(r.lock.rec), AAD_LOCK_REC))); now.add(r.id); }
+        catch (e) { /* made with other words, or damaged */ }
+      }
       if (now.size) { await this._openBoxes(); this._derive(); }
       return [...this.raw.values()].filter((n) => n.parent === LOCKED && now.has(n.in)).length;
     }
