@@ -121,6 +121,15 @@ class BrowserTest(helpers.DriveTest):
         p.set_input_files("#pick", src)
         p.wait_for_selector("text=hello.txt")
         self.assertEqual(self.download("/hello.txt"), ("hello.txt", b"hello from the browser"))
+        # A video clicked: it plays in the cinema, streamed in parts (a range of it asked for), and Escape closes it.
+        self.upload_text("/clip.mp4", "not really a video " * 1000)
+        p.goto(self.base + "/#/files/")
+        with p.expect_request(lambda r: "/api/file" in r.url and "clip.mp4" in r.url):
+            p.click(".row >> text=clip.mp4")
+        p.wait_for_selector(".cinema video")
+        p.wait_for_selector(".cinema >> text=This browser can't play this video")       # (it isn't one: offered as a download)
+        p.keyboard.press("Escape")
+        p.wait_for_selector(".cinema", state="detached")
         # The menu without Gallery and FindX, also after loading the page again; they are in the Tools menu instead.
         p.goto(self.base + "/#/settings")
         p.wait_for_selector(".nav-picks")

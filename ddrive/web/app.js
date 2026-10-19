@@ -414,7 +414,7 @@ function menuButton(items, title, sub) {
 function itemMenu(it) {
   return [
     it.dir ? { label: "Open", icon: "enter", run: () => go("#/files" + enc(it.path)) }
-           : { label: "Preview", icon: "open", run: () => openItem(it) },
+           : { label: "Preview", icon: "open", run: () => view(it) },
     it.dir && { label: "Open as gallery", icon: "gallery", run: () => go("#/gallery" + enc(it.path)) },
     !it.dir && route.name === "gallery" && { label: "Show in Files", icon: "enter", run: () => go("#/files" + enc(parent(it.path))) },
     it.dir ? { label: "Download as ZIP", icon: "download", run: () => download("/api/zip" + q({ path: it.path }), it.name + ".zip") }
@@ -781,7 +781,7 @@ function itemRow(it, opts = {}) {
   const more = menuButton(() => itemMenu(it), it.name, sub);
   const attrs = it.dir ? { class: "row", href: "#/files" + enc(it.path) }
                        : { class: "row click", tabindex: "0", role: "button",
-                           onclick: () => openItem(it), onkeydown: (e) => { if (e.key === "Enter") openItem(it); } };
+                           onclick: () => view(it), onkeydown: (e) => { if (e.key === "Enter") view(it); } };
   const row = h(it.dir ? "a" : "div", attrs, name,
                 h("span", { class: "size", title: it.dir && it.files != null ? plural(it.files, "file") : null },
                   it.dir ? (it.size ? size(it.size) : "") : size(it.size)),
@@ -3590,6 +3590,66 @@ async function thumbsForAll(path, prog) {
     } };
   b.show(prog);
   for (const it of todo) wantThumb(it, null, false, true);
+}
+
+/** A file clicked: a video plays in the cinema, anything else opens its details (with its preview). */
+function view(it) {
+  if (!it.dir && kind(it.name) === "video") cinema(it);
+  else openItem(it);
+}
+
+/** Cinema mode: one video over the whole page, on black, streamed (the player asks for the parts it needs,
+ *  so a big file starts at once and can be skipped through without being downloaded first). The bar at the top
+ *  fades while it plays. Keys: Space or K play/pause, J/L or the arrows 10 seconds back/on, F full screen,
+ *  M sound, Escape closes. */
+function cinema(it) {
+  const v = h("video", { src: fileUrl(it.path), controls: true, autoplay: true, playsinline: true, preload: "auto" });
+  const note = h("div", { class: "cin-note", hidden: true });
+  const close = () => {
+    document.removeEventListener("keydown", keys, true);
+    clearTimeout(idle);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => null);
+    v.pause(); v.removeAttribute("src"); v.load();          // (stops the streaming)
+    box.remove();
+  };
+  const full = () => document.fullscreenElement ? document.exitFullscreen().catch(() => null) : box.requestFullscreen().catch(() => null);
+  const seek = (d) => { v.currentTime = Math.max(0, Math.min((v.duration || 0) || Infinity, v.currentTime + d)); wake(); };
+  const keys = (e) => {
+    if ($("#dialog").open || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "")) return;
+    const k = e.key.toLowerCase();
+    const act = { escape: close, " ": () => (v.paused ? v.play() : v.pause()), k: () => (v.paused ? v.play() : v.pause()),
+                  j: () => seek(-10), l: () => seek(10), arrowleft: () => seek(-10), arrowright: () => seek(10),
+                  f: full, m: () => { v.muted = !v.muted; } }[k];
+    if (!act) return;
+    e.preventDefault(); e.stopPropagation();
+    if (k === "escape" && document.fullscreenElement) return document.exitFullscreen().catch(() => null);
+    act();
+  };
+  let idle = null;
+  const wake = () => {
+    box.classList.remove("idle");
+    clearTimeout(idle);
+    idle = setTimeout(() => { if (!v.paused) box.classList.add("idle"); }, 2500);
+  };
+  v.addEventListener("error", () => {
+    note.hidden = false;
+    note.replaceChildren(h("b", {}, "This browser can't play this video"),
+      h("div", {}, `Some kinds (${it.name.split(".").pop().toUpperCase()} with some codecs) only play in an app such as VLC.`),
+      h("button", { class: "btn", onclick: () => download(fileUrl(it.path, true), it.name) }, `Download (${size(it.size)})`));
+  });
+  v.addEventListener("pause", wake);
+  v.addEventListener("play", wake);
+  const box = h("div", { class: "lightbox cinema", role: "dialog", "aria-label": "Cinema: " + it.name, onmousemove: wake, ontouchstart: wake },
+    h("div", { class: "lb-top" },
+      h("div", { class: "lb-title" }, h("div", { class: "t" }, it.name), h("div", { class: "s" }, `${size(it.size)} · ${parent(it.path)}`)),
+      h("button", { class: "icon-btn", title: "Download", "aria-label": "Download", onclick: () => download(fileUrl(it.path, true), it.name) }, icon("download")),
+      h("button", { class: "icon-btn", title: "Details, sharing, versions", "aria-label": "Details", onclick: () => { close(); openItem(it); } }, icon("info")),
+      h("button", { class: "icon-btn", title: "Close (Esc)", "aria-label": "Close", onclick: close }, icon("close"))),
+    h("div", { class: "lb-stage", onclick: (e) => { if (e.target === e.currentTarget) close(); } }, v, note));
+  document.addEventListener("keydown", keys, true);
+  window.addEventListener("hashchange", close, { once: true });
+  document.body.append(box);
+  wake();
 }
 
 /** Full-screen viewer over the gallery: arrows (or the keyboard) go to the next and previous one. */

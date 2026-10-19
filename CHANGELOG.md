@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.13.1 (2026-10-18)
+
+- **Cinema mode for videos.** Clicking a video in a folder plays it over the whole page, on black: the bar at the top fades while it plays, and Space/K play and pause, J/L or the arrows go 10 seconds back or on, F is full screen, M the sound, Escape closes. Details, sharing and versions are one button away.
+- **Big videos stream.** The player asks for the parts it needs, so a large file starts at once and can be skipped through without being downloaded first (also for end-to-end encrypted accounts); closing the cinema stops it. A video the browser can't play (some MKV/AVI) says so and offers the download.
+
 ## 3.13.0 (2026-10-18)
 
 - **A forgotten lock password can be got round, if you choose so.** Locking a folder or file of an end-to-end
