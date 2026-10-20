@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.16.4 (2026-10-20)
+
+- **A locked Discord folder really stays locked now, also with a password-only lock.** The computer that saves Discord messages could only tell that a locked /Discord was there when the 24 words open the lock, or when the locked folder had the id a folder called Discord gets when it is first made. The /Discord that ends up locked is usually one that had come back (the first one was locked earlier), with an id of its own, so with a password-only lock it made yet another one. A locked folder now carries a tag made from its name and where it is (like the ids folders get already: it shows nothing more), so every computer of the account knows a locked folder of that name is there without opening it, and doesn't make one in the clear next to it, nor save into a /Discord in the clear that an earlier version made. Locks made before this get their tag the first time you unlock them in the dashboard.
+
 ## 3.16.3 (2026-10-19)
 
 - **Updating a computer can't get stuck half way any more.** After pulling new code a Lite starts again with it (`lite renew`): that stopped the drive, waited only until the drive's pid file was gone (which stopping removes at once) and started the new one while the old one was often still shutting down; when the old one then ended it removed the new one's pid file, and if the new one didn't come up the old one stayed, running the old version, and stopped telling the host anything. Now the new one starts only once the old one has really ended (after 2 minutes it is stopped hard), starting is tried 3 times, the old program never removes another's pid file, and a Lite that is still there 3 minutes after it should have started again tries again (3 times), and says so if it can't.

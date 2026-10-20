@@ -29,6 +29,9 @@
   const newId = () => hex(crypto.getRandomValues(new Uint8Array(16)));
   /** The id a new folder gets: the same on every device for the same name in the same folder, so two
    *  devices that make it at once make one folder (vault.folder_id). */
+  /** What a locked folder or file says of its name, in the clear (vault.py, "Password locks"): so that a device
+   *  that can't open it doesn't make one of the same name in the clear next to it. */
+  const lockedTag = async (parent, name) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`ddrive locked v1\n${parent}\n${name}`)))).slice(0, 32);
   const folderId = async (parent, name) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`ddrive folder v1\n${parent}\n${name}`)))).slice(0, 32);
   /** The list as it is shown, the same on every device (vault.view): folders that two devices made at
    *  once are one (the smallest id shows, with what is in all of them), what went `into` another folder
@@ -432,8 +435,23 @@
       if (!key) throw new Error("That is locked: unlock it first.");
       const op = { op: "put", id: e.id, parent: root ? LOCKED : e.parent, in: lock, objs: objectsOf(inner),
                    box: b64(await seal(key, enc.encode(JSON.stringify(inner)), AAD_LOCKED)) };
-      if (root) op.home = e.parent || "";
+      if (root) {
+        op.home = e.parent || "";
+        op.tag = await lockedTag(op.home, inner.name || "");
+        if (inner.trash) op.gone = 1;
+      }
       return op;
+    }
+    /** Locks opened here that were made before tags, or whose folder was renamed or deleted since: their tag
+     *  (and `gone`) set as they are now. (Best effort: an older page left them so.) */
+    async _tagRoots() {
+      const ops = [];
+      for (const n of this.nodes.values()) {
+        if (!n.lockRoot) continue;
+        const r = this.raw.get(n.id), tag = await lockedTag(n.parent || "", n._name || n.name), gone = n.trash ? 1 : undefined;
+        if (r && (r.tag !== tag || r.gone !== gone)) ops.push({ op: "set", id: n.id, fields: { tag, gone: gone || null } });
+      }
+      if (ops.length) await this._post(...ops).catch(() => null);
     }
     /** An entry as the change that keeps it in the clear. */
     _plain(e) {
@@ -531,7 +549,7 @@
       }));
       const now = new Set();
       for (const g of got) if (g) { this.opened.set(g[0], g[1]); now.add(g[0]); }
-      if (now.size) { await this._openBoxes(); this._derive(); }
+      if (now.size) { await this._openBoxes(); this._derive(); await this._tagRoots(); }
       return [...this.raw.values()].filter((n) => n.parent === LOCKED && now.has(n.in)).length;
     }
     /** The locks the account's words open (those made so): how many locked things are open now. */
@@ -543,7 +561,7 @@
         try { this.opened.set(r.id, await fileKey(await unseal(rk, unb64(r.lock.rec), AAD_LOCK_REC))); now.add(r.id); }
         catch (e) { /* made with other words, or damaged */ }
       }
-      if (now.size) { await this._openBoxes(); this._derive(); }
+      if (now.size) { await this._openBoxes(); this._derive(); await this._tagRoots(); }
       return [...this.raw.values()].filter((n) => n.parent === LOCKED && now.has(n.in)).length;
     }
     /** Every lock closed again in this page. */

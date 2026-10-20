@@ -626,6 +626,8 @@ const DDV = ctx.DDV;
     try { await v.lock(made, "another"); out.nested = "allowed"; } catch (e) { out.nested = e.message; }
   } else if (input.phase === "lock-discord") {
     out.lockedId = await v.lock(v.folderAt(["Discord"]), "correct horse", input.words ? Buffer.from(input.key, "hex") : null);
+  } else if (input.phase === "unlock") {
+    out.opened = await v.unlock("correct horse");
   } else if (input.phase === "peek") {
     await v.unlock("correct horse");
     const root = v.children("").find((n) => n.lockRoot);
@@ -785,6 +787,36 @@ const DDV = ctx.DDV;
         self.assertLessEqual(state["seq"] - before, 2)
         self.assertEqual(state["snapshot"]["seq"], state["seq"])
         self.assertEqual(self.new_device().list("/"), [])
+
+    @helpers.unittest.skipUnless(shutil.which("node"), "needs Node.js to run the page's code")
+    def test_a_locked_folder_that_had_come_back_stays_locked(self):
+        """The /Discord that is locked is often one that came back (the first one was locked before): it has
+        an id of its own, not the one a folder of that name gets. Its tag says its name all the same."""
+        from ddrive import vaultchat
+        v = self.device
+        v.mkdir("/Discord")
+        v.move("/Discord", "/Discord old")                              # (that id is taken now: a new /Discord gets another)
+        v.mkdir("/Discord")
+        self.assertNotEqual(v.resolve("/Discord")["id"], vault.folder_id("", "Discord"))
+        v.put("/Discord/a.jsonl", b"x")
+        self.run_page("lock-discord", words=False)                     # only the password opens it
+        chat = vaultchat.AccountAsDrive(lite.HostClient(self.address, auth=self.auth), self.key, os.path.join(self.tmp, "chat"), "pc")
+        chat.sync_now()
+        with self.assertRaisesRegex(vault.VaultError, "password-locked"):
+            chat.index.makedirs("/Discord/Live")
+        # A /Discord in the clear that an earlier version made meanwhile isn't written into either.
+        v.sync()._send({"op": "put", "id": vault.new_id(), "parent": "", "name": "Discord", "dir": True, "size": 0, "mtime": 1.0})
+        chat.sync_now()
+        self.assertIsNone(chat.index.resolve("/Discord"))
+        self.assertIsNotNone(v.sync().resolve("/Discord"))             # (it is there, for whoever deletes it)
+        # A lock made before tags: no way to tell, until a page opens it, which then gives it its tag.
+        root = next(n for n in v.nodes.values() if n.get("parent") == vault.LOCKED)
+        v._send({"op": "set", "id": root["id"], "fields": {"tag": None}})
+        old = self.new_device()
+        self.assertFalse(old._locked_here("", "Discord"))
+        self.assertEqual(self.run_page("unlock")["opened"], 1)
+        self.assertTrue(old.sync()._locked_here("", "Discord"))
+        self.assertFalse(old._locked_here("", "Discord old"))
 
     def test_a_locked_entry_moves_to_another_account_sealed(self):
         nodes = {"L": {"id": "L", "parent": vault.LOCKS, "lock": {"v": 1}},

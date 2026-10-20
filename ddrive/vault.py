@@ -59,8 +59,11 @@ that does sees it only after its password was typed there.
 A device must not make a folder or file in the clear where a locked one of that name is: that would
 bring the name back for everybody to see (the Discord logger, or folder sync, saving into a folder
 that was locked meanwhile). It knows one is there when the lock was made so that the words open it
-too (it opens it then, and what it saves there is sealed with the lock, see Vault.into_locks), or
-when the locked folder has the id a folder of that name gets (folder_id): one made by a device.
+too (it opens it then, and what it saves there is sealed with the lock, see Vault.into_locks), or by
+the locked folder's `tag`: locked_tag(its folder, its name), which a page that has the lock open
+keeps up to date (and `gone`: 1 while it is deleted), or, for a lock older than tags, when it has the
+id a folder of that name gets (folder_id). Like those ids, a tag lets somebody with the account's
+words check whether a locked folder has a name they guess; it shows nothing else.
 
 and the changes are: "put" (an entry as it now is), "move" (id, parent, name), "set" (id, fields: the
 ones given replace the entry's, null removes one), "del" (id: the entry and what is in it are gone for
@@ -208,6 +211,11 @@ def folder_id(parent: str, name: str) -> str:
     two devices that make it at once (two computers syncing into the account) make one folder, not
     two. (A folder that had that id and was deleted or moved meanwhile: a new id, see Vault.mkdir.)"""
     return hashlib.sha256(f"ddrive folder v1\n{parent}\n{name}".encode("utf-8")).hexdigest()[:32]
+
+
+def locked_tag(parent: str, name: str) -> str:
+    """What a locked folder or file says of its name, in the clear (see "Password locks")."""
+    return hashlib.sha256(f"ddrive locked v1\n{parent}\n{name}".encode("utf-8")).hexdigest()[:32]
 
 
 def view(nodes):
@@ -449,18 +457,21 @@ class Vault:
             for e in entries.values():
                 if not e.get("trash") and e.get("name"):
                     kids.setdefault(e["parent"], {})[e["name"]] = e
-            self._open = (entries, kids)
+            tags = {((n.get("home") or ""), n["tag"]) for n in self.nodes.values()
+                    if n.get("parent") == LOCKED and n.get("tag") and not n.get("gone")}
+            self._open = (entries, kids, tags)
         return self._open
 
     def _locked_here(self, parent, name):
         """True when a locked folder or file of this name is in folder `parent` (as far as this device
         can tell: see "Password locks" above)."""
-        if name in self._opened()[1].get(parent, {}):
+        entries, kids, tags = self._opened()
+        if name in kids.get(parent, {}) or (parent, locked_tag(parent, name)) in tags:
             return True
         n = self.nodes.get(folder_id(parent, name))
-        if n is None or n.get("parent") != LOCKED or (n.get("home") or "") != parent:
-            return False
-        e = self._opened()[0].get(n["id"])
+        if n is None or n.get("parent") != LOCKED or (n.get("home") or "") != parent or n.get("tag"):
+            return False                         # (one with a tag says its name above: renamed since, or deleted)
+        e = entries.get(n["id"])
         return e is None or (not e.get("trash") and e.get("name") == name)
 
     def _boxed(self, e, lock, root=False):
@@ -474,6 +485,9 @@ class Vault:
               "objs": self._objects(inner), "box": base64.b64encode(box).decode("ascii")}
         if root:
             op["home"] = e["parent"] or ""
+            op["tag"] = locked_tag(op["home"], inner.get("name") or "")
+            if inner.get("trash"):
+                op["gone"] = 1
         return op
 
     def entry(self, nid):
@@ -550,7 +564,10 @@ class Vault:
         kids = self._by_folder()
         locked = self._opened()[1] if self.into_locks else {}
         for name in [p for p in path.strip("/").split("/") if p]:
-            node = locked.get(nid, {}).get(name) or kids.get(nid, {}).get(name)
+            node = locked.get(nid, {}).get(name)
+            if node is None and self.into_locks and self._locked_here(nid, name):
+                return None                      # locked, and the words don't open it: not the one in the clear either
+            node = node or kids.get(nid, {}).get(name)
             if node is None:
                 return None
             nid = node["id"]
