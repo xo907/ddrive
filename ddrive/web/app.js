@@ -3122,11 +3122,13 @@ function lockDialog(it) {
   const go = h("button", { class: "btn", type: "button", onclick: async () => {
     if (a.value.length < 4) return toast("Use at least 4 characters");
     if (a.value !== b.value) return toast("The two passwords are different");
-    go.disabled = true;
     if (withWords.checked && !words.value.trim()) { words.focus(); return toast("Type your 24 words, or untick the box"); }
+    go.disabled = true;
+    go.textContent = "Locking…";             // (a big folder takes a while: everything in it is sealed again)
     const r = await attempt(() => api("/api/locks/add", { path: it.path, password: a.value, words: withWords.checked ? words.value : undefined }));
     words.value = "";
     go.disabled = false;
+    go.textContent = "Lock";
     if (r) { m.close(); toast(`Locked. It stays open in this browser until you lock it again${r.minutes ? ` or ${r.minutes} minutes pass without using it` : ""}.`); await refreshStatus(); render(); }
   } }, "Lock");
   const m = modal(`Lock “${it.name}”`,
@@ -3199,8 +3201,10 @@ function removeLockDialog(it) {
   const pw = pwInput("Password of the lock");
   const go = h("button", { class: "btn danger", type: "button", onclick: async () => {
     go.disabled = true;
+    go.textContent = "Removing…";
     const r = await attempt(() => api("/api/locks/remove", { path: it.path, password: pw.value }), "Lock removed");
     go.disabled = false;
+    go.textContent = "Remove the lock";
     if (r) { m.close(); await refreshStatus(); render(); } else pw.select();
   } }, "Remove the lock");
   const m = modal(`Remove the lock of “${it.name}”`,

@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.15.2 (2026-10-19)
+
+- **Locking or unlocking a big folder no longer looks stuck.** In an end-to-end encrypted account, locking a folder seals everything in it again. The page sent that in pieces of 400 changes and, after each one, sealed and uploaded the whole list of the account: for a big folder (a Discord archive of a few GB) that was the whole list hundreds of times over, and the button just stayed grey. Now the changes go in a few big batches and the list is sealed once at the end. The button says “Locking…” / “Removing…” meanwhile. Clearing old Discord previews does the same.
+- The Lock dialog's “Let my 24 words open it too” box is an ordinary checkbox again (it was drawn as a big grey square), and ticking it without typing the words no longer leaves the Lock button greyed out.
+
 ## 3.15.1 (2026-10-19)
 
 - **A password-locked Discord folder stays locked.** In an end-to-end encrypted account, the computer that saves Discord messages couldn't see /Discord once it was locked, so with the next message or attachment it made a new /Discord in the clear, and the folder kept coming back. Now no device makes a folder or file in the clear where a locked one of that name is. When the lock was made with “Let my 24 words open it too”, the computer keeps saving into the locked folder, sealed with its lock, so it stays hidden and nothing is missed; with a lock only the password opens, it keeps the new messages on the computer until the lock is removed. (A /Discord that already came back is an ordinary folder: delete it, or move what is in it into the locked one.)

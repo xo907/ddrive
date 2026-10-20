@@ -770,6 +770,22 @@ const DDV = ctx.DDV;
                 make()
         self.assertEqual([n["name"] for n in other.list("/")], ["Other"])
 
+    @helpers.unittest.skipUnless(shutil.which("node"), "needs Node.js to run the page's code")
+    def test_locking_a_big_folder_sends_it_in_few_batches(self):
+        """Every entry of a locked folder is sealed again: sent in big batches, and the whole list sealed once
+        at the end (sealing it after every 400 sent it hundreds of times, and locking looked stuck)."""
+        v = self.device
+        v.mkdir("/Discord")
+        top = v.resolve("/Discord")["id"]
+        v._send(*({"op": "put", "id": vault.new_id(), "parent": top, "name": f"f{i}.jsonl", "dir": False, "size": 1,
+                   "mtime": 1.0, "obj": "x", "key": "AA=="} for i in range(1500)))
+        before = v.client._json("/api/vault")["seq"]
+        self.run_page("lock-discord", words=False)
+        state = v.client._json("/api/vault")
+        self.assertLessEqual(state["seq"] - before, 2)
+        self.assertEqual(state["snapshot"]["seq"], state["seq"])
+        self.assertEqual(self.new_device().list("/"), [])
+
     def test_a_locked_entry_moves_to_another_account_sealed(self):
         nodes = {"L": {"id": "L", "parent": vault.LOCKS, "lock": {"v": 1}},
                  "f": {"id": "f", "parent": vault.LOCKED, "home": "", "in": "L", "box": "x", "objs": ["o1"]},

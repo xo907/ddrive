@@ -546,7 +546,7 @@
         if (all.every(preview)) folders.push(dir);              // nothing else in it: the folder goes too
       }
       const gone = [...files, ...folders];
-      for (let i = 0; i < gone.length; i += 400) await v._send(...gone.slice(i, i + 400).map((n) => ({ op: "del", id: n.id })));
+      await v._sendAll(gone.map((n) => ({ op: "del", id: n.id })));
       await drop(files.flatMap(objectsOf));
       return { ok: true, files: files.length, bytes: files.reduce((s, n) => s + (n.size || 0), 0) };
     },

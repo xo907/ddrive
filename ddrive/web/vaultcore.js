@@ -377,12 +377,18 @@
     }
     /** An entry and everything in it (also what is locked in it), by id. */
     _under(id) {
+      const kids = new Map();                  // (once: asking the whole list for each folder took minutes in a big one)
+      for (const n of this.raw.values()) {
+        const p = n.parent === LOCKED ? n.home : n.parent;
+        if (!kids.has(p)) kids.set(p, []);
+        kids.get(p).push(n.id);
+      }
       const out = [], todo = [id], seen = new Set();
       while (todo.length) {
         const cur = todo.pop();
         if (!this.raw.has(cur) || seen.has(cur)) continue;
         seen.add(cur); out.push(cur);
-        for (const n of this.raw.values()) if (n.parent === cur || (n.parent === LOCKED && n.home === cur)) todo.push(n.id);
+        todo.push(...(kids.get(cur) || []));
       }
       return out;
     }
@@ -440,12 +446,18 @@
     }
     /** What is in an entry as this page shows it (it first), by id. */
     _openUnder(id) {
-      const out = [], todo = [id];
+      const kids = new Map();
+      for (const n of this.nodes.values()) {
+        if (n.lockRoot) continue;
+        if (!kids.has(n.parent)) kids.set(n.parent, []);
+        kids.get(n.parent).push(n.id);
+      }
+      const out = [], todo = [id], seen = new Set();
       while (todo.length) {
         const cur = todo.pop();
-        if (!this.nodes.has(cur)) continue;
-        out.push(cur);
-        for (const n of this.nodes.values()) if (n.parent === cur && !n.lockRoot) todo.push(n.id);
+        if (!this.nodes.has(cur) || seen.has(cur)) continue;
+        seen.add(cur); out.push(cur);
+        todo.push(...(kids.get(cur) || []));
       }
       return out;
     }
@@ -498,8 +510,8 @@
       if (!n) throw new Error("That isn't there.");
       if (n.lockRoot) throw new Error("That has a lock already.");
       if (n.lock) throw new Error("That is in a locked folder already.");
-      const all = this._openUnder(id);
-      if ([...this.raw.values()].some((r) => r.parent === LOCKED && all.includes(r.home)))
+      const all = this._openUnder(id), inside = new Set(all);
+      if ([...this.raw.values()].some((r) => r.parent === LOCKED && inside.has(r.home)))
         throw new Error("There is a locked folder in it. Remove that lock first, or lock something else.");
       const raw = newKey(), salt = crypto.getRandomValues(new Uint8Array(16)), lock = newId();
       const wrap = await seal(await passwordKey(password, salt, LOCK_ITER), raw, AAD_LOCK_KEY);
@@ -508,7 +520,7 @@
       if (wordsKey) rec.rec = b64(await seal(await recoveryKey(wordsKey), raw, AAD_LOCK_REC));
       const ops = [{ op: "put", id: lock, parent: LOCKS, name: "", dir: false, size: 0, mtime: Date.now() / 1000, lock: rec }];
       for (const x of all) ops.push(await this._boxed(this.nodes.get(x), lock, x === id));
-      for (let i = 0; i < ops.length; i += 400) await this._post(...ops.slice(i, i + 400));
+      await this._postAll(ops);
       return lock;
     }
     /** The locks this password opens (every one of them): how many locked things are open now. */
@@ -548,7 +560,7 @@
       const ops = this._openUnder(id).map((x) => this._plain(this.nodes.get(x)));
       const others = [...this.raw.values()].some((r) => r.in === n.lock && r.parent === LOCKED && r.id !== id);
       if (!others) ops.push({ op: "del", id: n.lock });
-      for (let i = 0; i < ops.length; i += 400) await this._post(...ops.slice(i, i + 400));
+      await this._postAll(ops);
     }
     /** {count: locked things, open: those open here}. */
     lockCount() {
@@ -567,6 +579,30 @@
     }
 
     async _send(...ops) { return this._post(...(await this._seal(ops))); }
+    /** Many changes (locking a big folder): sent in batches as big as the server takes, and the whole list
+     *  sealed once at the end. (Sealing it after every 400 sent the whole list again and again: on a big
+     *  account that was hundreds of MB, and locking looked stuck.) */
+    async _postAll(ops, sealFirst = false) {
+      const BATCH = 2 * 1024 * 1024;           // (the server takes up to 4 MB)
+      let batch = [], size = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        const go = sealFirst ? await this._seal(batch) : batch;
+        batch = []; size = 0;
+        await this._post(...go);
+      };
+      this._bulk = true;
+      try {
+        for (const op of ops) {
+          const n = JSON.stringify(op).length * (sealFirst ? 2 : 1) + 64;
+          if (size + n > BATCH) await flush();
+          batch.push(op); size += n;
+        }
+        await flush();
+      } finally { this._bulk = false; }
+      if (this.since >= SNAPSHOT_EVERY) await this.snapshot().catch(() => null);
+    }
+    async _sendAll(ops) { return this._postAll(ops, true); }
     async _post(...ops) {
       const blobs = [];
       let total = 0;
@@ -576,7 +612,7 @@
       for (const b of blobs) { view.setUint32(pos, b.length); batch.set(b, pos + 4); pos += 4 + b.length; }
       await call("/api/vault/log", { method: "POST", body: batch, headers: { "Content-Type": "application/octet-stream" } });
       await this.sync();
-      if (this.since >= SNAPSHOT_EVERY) await this.snapshot().catch(() => null);
+      if (!this._bulk && this.since >= SNAPSHOT_EVERY) await this.snapshot().catch(() => null);
     }
     async snapshot() {
       const state = enc.encode(JSON.stringify({ nodes: Object.fromEntries(this.raw) }));

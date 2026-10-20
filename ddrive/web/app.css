@@ -1412,4 +1412,5 @@ body.server #locks, body.server #apps, body.server .usage, body.server .drop { d
 
 /* The lock dialog: "let my 24 words open it too" (an end-to-end account). */
 .check-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 14px; cursor: pointer; }
+dialog .check-row input[type=checkbox] { appearance: auto; width: 16px; height: 16px; min-width: 0; padding: 0; margin: 0; flex: none; accent-color: var(--accent); }
 .modal textarea[placeholder="Your 24 words"] { width: 100%; margin: 0 0 8px; }
