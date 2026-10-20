@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.15.3 (2026-10-19)
+
+- **An end-to-end encrypted account's page loads quickly again.** 3.15.2 made the page do more work for every deleted entry while it caught up with what changed (“getting what changed since”), and the Discord logger deletes many small files every day: on a big account the page could sit on that for minutes. A deleted file is now taken off at once, without looking through the whole list for what is in it (only a folder can hold anything); that is also much faster than before 3.15.2. The account's computers (DDrive Lite) got the same.
+
 ## 3.15.2 (2026-10-19)
 
 - **Locking or unlocking a big folder no longer looks stuck.** In an end-to-end encrypted account, locking a folder seals everything in it again. The page sent that in pieces of 400 changes and, after each one, sealed and uploaded the whole list of the account: for a big folder (a Discord archive of a few GB) that was the whole list hundreds of times over, and the button just stayed grey. Now the changes go in a few big batches and the list is sealed once at the end. The button says “Locking…” / “Removing…” meanwhile. Clearing old Discord previews does the same.

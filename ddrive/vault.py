@@ -379,6 +379,10 @@ class Vault:
             if node is not None:
                 node["parent"], node["name"] = op["parent"], op["name"]
         elif kind == "del":
+            node = self.nodes.get(op["id"])
+            if node is not None and not node.get("dir") and not node.get("box"):
+                del self.nodes[op["id"]]         # a file: nothing is in it
+                return
             gone, todo = set(), [op["id"]]
             while todo:
                 nid = todo.pop()

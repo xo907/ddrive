@@ -377,18 +377,15 @@
     }
     /** An entry and everything in it (also what is locked in it), by id. */
     _under(id) {
-      const kids = new Map();                  // (once: asking the whole list for each folder took minutes in a big one)
-      for (const n of this.raw.values()) {
-        const p = n.parent === LOCKED ? n.home : n.parent;
-        if (!kids.has(p)) kids.set(p, []);
-        kids.get(p).push(n.id);
-      }
+      const top = this.raw.get(id);
+      if (!top) return [];
+      if (!top.dir && !top.box) return [id];   // a file: nothing is in it (deleting many files is no longer a walk through the whole list each)
       const out = [], todo = [id], seen = new Set();
       while (todo.length) {
         const cur = todo.pop();
         if (!this.raw.has(cur) || seen.has(cur)) continue;
         seen.add(cur); out.push(cur);
-        todo.push(...(kids.get(cur) || []));
+        for (const n of this.raw.values()) if (n.parent === cur || (n.parent === LOCKED && n.home === cur)) todo.push(n.id);
       }
       return out;
     }
