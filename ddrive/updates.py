@@ -186,6 +186,13 @@ class Updates:
         return r.returncode == 0, said
 
 
+def _number(x):
+    try:
+        return float(x) if x not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 class Computers:
     """The DDrive Lite computers that use this drive, as each last said (they ask about once a minute
     whether to update), and the word to update: a time, which each computer acts on once."""
@@ -218,7 +225,9 @@ class Computers:
                         "id": device, "who": who, "seen": now,
                         "name": str(q.get("name") or "").strip()[:60] or "A computer",
                         "version": str(q.get("version") or "")[:20], "kind": str(q.get("kind") or "")[:10],
-                        "result": str(q.get("result") or "")[:300]}
+                        "result": str(q.get("result") or "")[:300],
+                        "done": _number(q.get("done")),          # the word to update it acted on last (None: before 3.16.2)
+                        "result_at": _number(q.get("result_at"))}
         return {"at": self.at}
 
     def update_all(self):

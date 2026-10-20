@@ -190,16 +190,25 @@ if __name__ == "__main__":
             self.assertEqual((pulls, got["at"]), ([], 0))
             got = self.client._json("/api/lite/computers/update", {})
             self.assertEqual(got["host"]["state"], "skipped")              # (a test drive isn't updated; the computers are told anyway)
-            s.told_to_update()
-            s.told_to_update()
+            told = self.client._json("/api/lite/computers")
+            self.assertLess(told["computers"][0]["done"], told["at"])      # told, not done yet: the page says it is waiting
+            with mock.patch.object(litesync, "version_on_disk", return_value="99.0.0"):
+                s.told_to_update()                               # it pulls, and says so the next time it asks
+                s.told_to_update()
             self.assertEqual(pulls, [1])                         # once for each time it was said
             got = self.client._json("/api/lite/computers")
-            self.assertEqual(got["computers"][0]["result"], "Updated.")
-            self.assertGreater(got["at"], 0)
+            c = got["computers"][0]
+            self.assertEqual((c["result"], c["done"]), (f"Updated {__version__} → 99.0.0.", got["at"]))
+            self.assertGreater(c["result_at"], 0)
+            self.client._json("/api/lite/computers/update", {})
+            s.told_to_update()
+            s.told_to_update()
+            self.assertEqual(self.client._json("/api/lite/computers")["computers"][0]["result"], f"git found nothing newer: still {__version__}.")
+            self.assertEqual(pulls, [1, 1])
             with mock.patch.object(updates, "install_kind", return_value="exe"):
                 self.client._json("/api/lite/computers/update", {})
                 s.told_to_update()
-            self.assertEqual(pulls, [1])
+            self.assertEqual(pulls, [1, 1])
             s.told_to_update()
             self.assertIn("wasn't installed with git", self.client._json("/api/lite/computers")["computers"][0]["result"])
         # what is said is kept: a drive that starts again still says it

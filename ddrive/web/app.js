@@ -4299,12 +4299,15 @@ async function computersSection(into) {
   const asked = d.at > 0 ? d.at : 0;
   const line = (c) => {
     const old = c.version && newer(d.version, c.version);
+    // Told to update and not done yet: it acts when it next checks in (about once a minute), or when it is next on.
+    const waiting = asked && (c.done != null ? c.done < asked : c.seen < asked + 5);
     return h("div", { class: "set-row sub" },
       h("div", { class: "set-text" },
         h("div", { class: "t" }, c.name, c.account && h("span", { class: "tag", style: "margin-left:8px" }, c.account)),
         h("div", { class: "s" }, [`DDrive ${c.version || "?"}`, old ? `(${d.version} is on this drive)` : "", !c.online && `· last seen ${ago(c.seen)}`,
                                   c.kind && c.kind !== "git" ? `· installed as ${c.kind}: updates by download only` : ""].filter(Boolean).join(" ")),
-        c.result && h("div", { class: "s faint" }, `Last update: ${c.result}`)),
+        waiting ? h("div", { class: "s" }, c.online ? "Told to update: it does when it next checks in, within a minute." : "Told to update: it does when it is next on.")
+          : c.result && h("div", { class: "s faint" }, `Last update${c.result_at ? ` (${ago(c.result_at)})` : ""}: ${c.result}`)),
       h("div", { class: "set-ctl" }, h("span", { class: "tag" + (c.online ? "" : " faint") }, c.online ? "Online" : "Offline")));
   };
   const go = h("button", { class: "btn small", onclick: async () => {
@@ -4318,7 +4321,7 @@ async function computersSection(into) {
     const host = r.host || {};
     toast("Told every computer to update. " + (host.state === "skipped" ? `This drive wasn't: ${host.message}` : "This drive is updating too."));
     if (host.state === "pulling" || host.state === "restarting") { updatingNow = true; await refreshStatus(); }
-    setTimeout(redraw, 1000); setTimeout(redraw, 75000);
+    for (const s of [1, 30, 70, 130]) setTimeout(redraw, s * 1000);
   } }, "Update all computers");
   const list = d.computers || [];
   into.replaceChildren(

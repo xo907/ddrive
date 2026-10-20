@@ -881,7 +881,7 @@ class Supervisor:
         kind = updates.install_kind()
         got = self._host[1]._json("/api/lite/update?" + urllib.parse.urlencode({
             "device": s.get("device") or state["id"], "name": lite.device_name(), "version": __version__, "kind": kind,
-            "result": state.get("result") or ""}))
+            "result": state.get("result") or "", "result_at": state.get("result_at") or "", "done": state.get("seen", "")}))
         at = float(got.get("at") or 0)
         if "seen" in state and at <= state["seen"]:
             return
@@ -893,8 +893,14 @@ class Supervisor:
             else:
                 ok, said = updates.Updates(None).pull()
                 last = said.splitlines()[-1] if said else ""
-                state["result"] = ("Already up to date." if "up to date" in said.lower() else "Updated.") if ok \
-                    else "git pull failed: " + (last or "no reason given")
+                disk = version_on_disk() or "?"
+                if not ok:
+                    state["result"] = f"git pull failed ({__version__}): " + (last or "no reason given")
+                elif disk != __version__:
+                    state["result"] = f"Updated {__version__} → {disk}."
+                else:
+                    state["result"] = f"git found nothing newer: still {__version__}."
+            state["result_at"] = time.time()
             log.info("The host said to update: %s", state["result"])
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:

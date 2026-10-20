@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.16.2 (2026-10-19)
+
+- **The Computers list says whether an update is still to come.** After Update all computers it showed each computer's last update result, even when that was from an earlier press and the computer hadn't checked in since (it does about once a minute): a computer could read “Already up to date” while still on the old version. Now a computer that was told and hasn't acted yet says so (“Told to update: it does when it next checks in”), the result says when it was, and it names the versions: “Updated 3.16.1 → 3.16.2”, or “git found nothing newer: still 3.16.1”. The list refreshes itself for two minutes after the press.
+
 ## 3.16.1 (2026-10-19)
 
 - **Update all computers updates this drive too.** The button in Settings, Computers, now also updates the drive the dashboard runs on, the way Update now does (git pull, then it starts again with the new code; the page waits for it), and tells every DDrive Lite computer to update. The computers hear it once the drive is back, if they ask while it restarts. On Windows the drive downloads the new version and asks to be restarted from the menu, as before.
