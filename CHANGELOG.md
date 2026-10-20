@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.15.1 (2026-10-19)
+
+- **A password-locked Discord folder stays locked.** In an end-to-end encrypted account, the computer that saves Discord messages couldn't see /Discord once it was locked, so with the next message or attachment it made a new /Discord in the clear, and the folder kept coming back. Now no device makes a folder or file in the clear where a locked one of that name is. When the lock was made with “Let my 24 words open it too”, the computer keeps saving into the locked folder, sealed with its lock, so it stays hidden and nothing is missed; with a lock only the password opens, it keeps the new messages on the computer until the lock is removed. (A /Discord that already came back is an ordinary folder: delete it, or move what is in it into the locked one.)
+
 ## 3.15.0 (2026-10-19)
 
 - **Which computers are logged in to Discord, and Unlink.** For an end-to-end encrypted account each computer that does Messages keeps its own Discord login. Settings now lists those computers: logged in (as whom) or not, which one this page's Messages come from, and when an off one was last seen. **Unlink** logs one out (its token is removed there, its logging and archiving stop; the messages already kept stay), and **Use this one** switches which computer the page asks.

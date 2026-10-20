@@ -56,6 +56,12 @@ are not forgotten by a device that can't open it). The locked folder or file its
 "~locks" or "~locked", so a device that doesn't know of locks never sees what is locked, and one
 that does sees it only after its password was typed there.
 
+A device must not make a folder or file in the clear where a locked one of that name is: that would
+bring the name back for everybody to see (the Discord logger, or folder sync, saving into a folder
+that was locked meanwhile). It knows one is there when the lock was made so that the words open it
+too (it opens it then, and what it saves there is sealed with the lock, see Vault.into_locks), or
+when the locked folder has the id a folder of that name gets (folder_id): one made by a device.
+
 and the changes are: "put" (an entry as it now is), "move" (id, parent, name), "set" (id, fields: the
 ones given replace the entry's, null removes one), "del" (id: the entry and what is in it are gone for
 good). An entry may carry fields a client doesn't know; it keeps them as they are.
@@ -78,6 +84,9 @@ INFO_AUTH = b"ddrive vault v1 auth"
 INFO_META = b"ddrive vault v1 meta"
 AAD_OP = b"ddv1 op"
 AAD_CHUNK = b"ddv1 chunk"
+AAD_LOCKED = b"ddv1 locked"
+AAD_LOCK_REC = b"ddv1 lock recovery"
+INFO_LOCK_REC = b"ddrive vault v1 lock recovery"
 LOCKS = "~locks"                  # password locks (see "Password locks" above): their records
 LOCKED = "~locked"                # what is locked
 MAGIC = b"DDV1"
@@ -320,6 +329,11 @@ class Vault:
         self._snaps = {}                 # a snapshot's object -> the objects that snapshot refers to
         self._view = None                # (merged, hidden, strays) as view() found them, with _kids
         self._tidying = False
+        self._rec_key = hkdf(key, INFO_LOCK_REC)
+        self._lock_keys = {}             # lock id -> its key (None: the words don't open it)
+        self._boxes = {}                 # a locked entry's sealed content -> what it says
+        self._open = None                # (id -> locked entry as opened, folder id -> {name: entry}), with _kids
+        self.into_locks = False          # paths reach into what is locked (when the words open it)
 
     # ------------------------------------------------------------ the list of files
     def sync(self):
@@ -395,7 +409,81 @@ class Vault:
     def _by_folder(self):
         if self._kids is None:                   # (deleted entries are kept, but not there)
             self._kids, *self._view = view(self.nodes)
+            self._open = None
         return self._kids
+
+    # ------------------------------------------------------------ password locks
+    def _opened(self):
+        """What is locked with a lock that this account's words open: (id -> the entry as it is, with
+        `lock` and, for the locked folder or file itself, `lock_root` and its folder as `parent`;
+        folder id -> {name: entry} of those that are there)."""
+        self._by_folder()
+        if self._open is None:
+            for n in self.nodes.values():
+                rec = n.get("lock") if n.get("parent") == LOCKS else None
+                if isinstance(rec, dict) and n["id"] not in self._lock_keys:
+                    try:
+                        self._lock_keys[n["id"]] = unseal(self._rec_key, base64.b64decode(rec["rec"]), AAD_LOCK_REC) \
+                            if rec.get("rec") else None
+                    except (VaultError, ValueError, TypeError):
+                        self._lock_keys[n["id"]] = None
+            entries, kids = {}, {}
+            for n in self.nodes.values():
+                key = self._lock_keys.get(n.get("in")) if n.get("box") else None
+                if not key:
+                    continue
+                if n["box"] not in self._boxes:
+                    try:
+                        self._boxes[n["box"]] = json.loads(unseal(key, base64.b64decode(n["box"]), AAD_LOCKED))
+                    except (VaultError, ValueError, TypeError):
+                        continue
+                root = n.get("parent") == LOCKED
+                e = dict(self._boxes[n["box"]], id=n["id"], parent=(n.get("home") or "") if root else n["parent"], lock=n["in"])
+                if root:
+                    e["lock_root"] = True
+                entries[n["id"]] = e
+            for e in entries.values():
+                if not e.get("trash") and e.get("name"):
+                    kids.setdefault(e["parent"], {})[e["name"]] = e
+            self._open = (entries, kids)
+        return self._open
+
+    def _locked_here(self, parent, name):
+        """True when a locked folder or file of this name is in folder `parent` (as far as this device
+        can tell: see "Password locks" above)."""
+        if name in self._opened()[1].get(parent, {}):
+            return True
+        n = self.nodes.get(folder_id(parent, name))
+        if n is None or n.get("parent") != LOCKED or (n.get("home") or "") != parent:
+            return False
+        e = self._opened()[0].get(n["id"])
+        return e is None or (not e.get("trash") and e.get("name") == name)
+
+    def _boxed(self, e, lock, root=False):
+        """An entry as the change that keeps it sealed with lock `lock` (as the locked one itself, when `root`)."""
+        key = self._lock_keys.get(lock)
+        if not key:
+            raise VaultError("That is password-locked.")
+        inner = {k: v for k, v in e.items() if k not in ("id", "parent", "lock", "lock_root", "op", "home", "in", "box", "objs")}
+        box = seal(key, json.dumps(inner, separators=(",", ":")).encode("utf-8"), AAD_LOCKED)
+        op = {"op": "put", "id": e["id"], "parent": LOCKED if root else e["parent"], "in": lock,
+              "objs": self._objects(inner), "box": base64.b64encode(box).decode("ascii")}
+        if root:
+            op["home"] = e["parent"] or ""
+        return op
+
+    def entry(self, nid):
+        """An entry by id (what is locked as it is, with into_locks)."""
+        if self.into_locks and nid in self._opened()[0]:
+            return self._opened()[0][nid]
+        return self.nodes.get(nid)
+
+    def children(self, parent):
+        """What is in a folder (also what is locked in it, with into_locks)."""
+        out = dict(self._by_folder().get(parent, {}))
+        if self.into_locks:
+            out.update(self._opened()[1].get(parent, {}))
+        return list(out.values())
 
     def tidy(self):
         """Make the list say what view() shows, also for devices that don't know of merging: what is
@@ -451,12 +539,14 @@ class Vault:
         return list(self._by_folder().get(parent, {}).values())
 
     def resolve(self, path):
-        """The node at a path ('' is the top folder), or None."""
+        """The node at a path ('' is the top folder), or None. With into_locks, what is locked (with a lock
+        the words open) is found too, before anything of the same name in the clear."""
         nid = ""
         node = {"id": "", "dir": True, "name": "", "parent": None}
         kids = self._by_folder()
+        locked = self._opened()[1] if self.into_locks else {}
         for name in [p for p in path.strip("/").split("/") if p]:
-            node = kids.get(nid, {}).get(name)
+            node = locked.get(nid, {}).get(name) or kids.get(nid, {}).get(name)
             if node is None:
                 return None
             nid = node["id"]
@@ -486,11 +576,14 @@ class Vault:
             raise VaultError(f"Not found: {parent}")
         if self.resolve(path) is not None:
             raise VaultError("Something with that name already exists")
+        if self._locked_here(up["id"], name):
+            raise VaultError(f"{path} is password-locked, and this device can't open it: nothing is put there in the clear")
         nid = folder_id(up["id"], name)
         if nid in self.nodes:                    # (that folder was there once, and was deleted or moved)
             nid = new_id()
-        self._send({"op": "put", "id": nid, "parent": up["id"], "name": name, "dir": True, "size": 0, "mtime": time.time(),
-                    "at": time.time(), "by": self.name})
+        op = {"op": "put", "id": nid, "parent": up["id"], "name": name, "dir": True, "size": 0, "mtime": time.time(),
+              "at": time.time(), "by": self.name}
+        self._send(self._boxed(op, up["lock"]) if up.get("lock") else op)
 
     def move(self, src, dst):
         node = self.resolve(src)
@@ -500,6 +593,8 @@ class Vault:
             raise VaultError(f"Not found: {src if node is None else parent}")
         if self.resolve(dst) is not None:
             raise VaultError("Something with that name already exists")
+        if node.get("lock") or up.get("lock") or self._locked_here(up["id"], name):
+            raise VaultError(f"{src if node.get('lock') else dst} is password-locked")
         self._send({"op": "move", "id": node["id"], "parent": up["id"], "name": name})
 
     def delete(self, path):
@@ -508,7 +603,9 @@ class Vault:
         node = self.resolve(path)
         if node is None or not node["id"]:
             raise VaultError(f"Not found: {path}")
-        self._send({"op": "set", "id": node["id"], "fields": {"trash": {"at": time.time(), "path": "/" + path.strip("/")}}})
+        trash = {"trash": {"at": time.time(), "path": "/" + path.strip("/")}}
+        self._send(self._boxed(dict(node, **trash), node["lock"], node.get("lock_root")) if node.get("lock")
+                   else {"op": "set", "id": node["id"], "fields": trash})
 
     @staticmethod
     def _objects(node):
@@ -619,6 +716,8 @@ class Vault:
         old = self.resolve(path)
         if old is not None and old["dir"]:
             raise VaultError(f"{path} is a folder")
+        if old is None and self._locked_here(up["id"], name):
+            raise VaultError(f"{path} is password-locked, and this device can't open it: nothing is put there in the clear")
         size = len(data) if data is not None else size
         key, oid = os.urandom(32), new_id()
         self._store(oid, key, data, read, size, stop=stop, hear=hear)
@@ -634,7 +733,8 @@ class Vault:
             entry["versions"] = versions[:VERSIONS_KEPT]
         entry.update(size=size, mtime=mtime if mtime is not None else time.time(), obj=oid,
                      key=base64.b64encode(key).decode("ascii"))
-        self._send(dict(entry, op="put"))
+        lock = (old or up).get("lock")
+        self._send(self._boxed(entry, lock, bool(old and old.get("lock_root"))) if lock else dict(entry, op="put"))
         self._drop(dropped)
 
     def read(self, path, start=0, length=None):

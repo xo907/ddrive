@@ -624,6 +624,17 @@ const DDV = ctx.DDV;
     await v._send({ op: "set", id: c.id, fields: { star: 1234 } });
     out.count = v.lockCount();
     try { await v.lock(made, "another"); out.nested = "allowed"; } catch (e) { out.nested = e.message; }
+  } else if (input.phase === "lock-discord") {
+    out.lockedId = await v.lock(v.folderAt(["Discord"]), "correct horse", input.words ? Buffer.from(input.key, "hex") : null);
+  } else if (input.phase === "peek") {
+    await v.unlock("correct horse");
+    const root = v.children("").find((n) => n.lockRoot);
+    out.top = names("");
+    out.inside = names(root.id);
+    const sub = v.children(root.id).find((n) => n.name === "Servers");
+    out.text = await (await v.blob(v.children(sub.id).find((n) => n.name === "b.jsonl"))).text();
+    const live = v.children(root.id).find((n) => n.name === "Live");
+    out.live = await (await v.blob(v.children(live.id).find((n) => n.name === "a.jsonl"))).text();
   } else if (input.phase === "open") {
     out.before = { count: v.lockCount(), top: names("") };
     out.wrong = await v.unlock("wrong horse");
@@ -646,10 +657,11 @@ const DDV = ctx.DDV;
 })().catch((e) => { console.error(e.stack || e); process.exit(1); });
 """
 
-    def run_page(self, phase):
+    def run_page(self, phase, **more):
         page = os.path.join(helpers.ROOT, "ddrive", "web", "vaultcore.js")
         out = subprocess.run(["node", "-e", self.LOCK_PAGE, page], capture_output=True, text=True, timeout=300,
-                             input=json.dumps({"address": self.address, "cookie": self.device.client.cookie, "key": self.key.hex(), "phase": phase}))
+                             input=json.dumps({"address": self.address, "cookie": self.device.client.cookie, "key": self.key.hex(),
+                                               "phase": phase, **more}))
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout)
 
@@ -679,8 +691,13 @@ const DDV = ctx.DDV;
         self.assertEqual(len(boxed), 7)                                 # Private, a, sub, b, Made inside, new.txt, and c.txt (moved in)
         self.assertTrue(all(n.get("objs") is not None for n in boxed))
         self.assertTrue(any(n["parent"] == vault.LOCKED and n.get("home") == "" for n in boxed))
-        # That device makes a folder of the same name meanwhile, and the host still knows nothing.
-        d.mkdir("/Private")
+        # It doesn't make one of the same name in the clear (that would show the name again)...
+        with self.assertRaisesRegex(vault.VaultError, "password-locked"):
+            d.mkdir("/Private")
+        with self.assertRaisesRegex(vault.VaultError, "password-locked"):
+            d.put("/Private", b"a file of that name")
+        # ...but a device of an earlier version did, and the host still knows nothing.
+        d._send({"op": "put", "id": vault.new_id(), "parent": "", "name": "Private", "dir": True, "size": 0, "mtime": 1.0})
         d.put("/Private/from-the-phone.txt", b"phone")
         r = self.run_page("open")
         self.assertEqual(r["before"], {"count": {"count": 1, "open": 0}, "top": ["Private", "Public"]})
@@ -698,6 +715,60 @@ const DDV = ctx.DDV;
         self.assertEqual(d.read("/Private/sub/b.txt"), b"SECRET-two")
         self.assertEqual(d.read("/Private/Made inside/new.txt"), b"SECRET-made-in-a-locked-folder")
         self.assertFalse(any(n.get("box") or n.get("parent") in (vault.LOCKS, vault.LOCKED) for n in d.nodes.values()))
+
+    @helpers.unittest.skipUnless(shutil.which("node"), "needs Node.js to run the page's code")
+    def test_what_is_saved_into_a_locked_folder_stays_locked(self):
+        """The Discord logger keeps saving into /Discord after it was locked: sealed with the lock when the
+        words open it too, and never into a new /Discord in the clear."""
+        from ddrive import vaultchat
+        v = self.device
+        v.mkdir("/Discord")
+        v.mkdir("/Discord/Live")
+        v.put("/Discord/Live/a.jsonl", b"one")
+        self.run_page("lock-discord", words=True)
+        plain = self.new_device()                                       # (as folder sync uses the account)
+        self.assertEqual(plain.list("/"), [])
+        for make in (lambda: plain.mkdir("/Discord"), lambda: plain.put("/Discord", b"x")):
+            with self.assertRaisesRegex(vault.VaultError, "password-locked"):
+                make()
+        # The account's computer saving Discord messages opens it with the words and saves into it.
+        chat = vaultchat.AccountAsDrive(lite.HostClient(self.address, auth=self.auth), self.key, os.path.join(self.tmp, "chat"), "pc")
+        chat.sync_now()
+        chat.index.makedirs("/Discord/Servers")
+        chat.fs.put_file("/Discord/Servers/b.jsonl", io.BytesIO(b"SECRET-two"))
+        fh = chat.fs.create("/Discord/Live/a.jsonl")
+        chat.fs.write("/Discord/Live/a.jsonl", b"SECRET-one-again", 0, fh)
+        chat.fs.release("/Discord/Live/a.jsonl", fh)
+        top = chat.index.resolve("/Discord")
+        self.assertEqual(sorted(n["name"] for n in chat.index.children(top["id"])), ["Live", "Servers"])
+        b = chat.index.resolve("/Discord/Servers/b.jsonl")
+        self.assertEqual(chat.fs.read_file(b["id"], 0, 100), b"SECRET-two")
+        # Nothing of it shows anywhere else, and only the page with the password opens it.
+        plain.sync()
+        self.assertEqual(plain.list("/"), [])
+        kept = json.dumps(plain.nodes)
+        for secret in ("SECRET", '"Servers"', '"Discord"', "b.jsonl"):
+            self.assertNotIn(secret, kept)
+        r = self.run_page("peek")
+        self.assertEqual((r["top"], r["inside"]), (["Discord"], ["Live", "Servers"]))
+        self.assertEqual((r["text"], r["live"]), ("SECRET-two", "SECRET-one-again"))
+        # A lock only the password opens: the computer can't save there, and makes no new /Discord either.
+        v.sync().mkdir("/Other")
+        other = vault.Vault(lite.HostClient(self.address, auth=self.auth), self.key)
+        other.into_locks = True
+        other.sync()
+        self.assertIsNotNone(other.resolve("/Discord/Servers/b.jsonl"))
+        v.sync()
+        v.into_locks = True
+        node = v.resolve("/Discord")
+        v._send({"op": "del", "id": node["id"]})                       # (removed for good: again, with a lock only the password opens)
+        v.into_locks = False
+        v.mkdir("/Discord")
+        self.run_page("lock-discord", words=False)
+        for make in (lambda: other.sync().mkdir("/Discord"), lambda: other.put("/Discord/x.jsonl", b"x")):
+            with self.assertRaisesRegex(vault.VaultError, "password-locked|Not found"):
+                make()
+        self.assertEqual([n["name"] for n in other.list("/")], ["Other"])
 
     def test_a_locked_entry_moves_to_another_account_sealed(self):
         nodes = {"L": {"id": "L", "parent": vault.LOCKS, "lock": {"v": 1}},

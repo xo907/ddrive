@@ -63,7 +63,7 @@ class _Index:
 
     def children(self, nid):
         with self.s.lock:
-            return [self._node(n) for n in self.s.v._by_folder().get(nid, {}).values()]
+            return [self._node(n) for n in self.s.v.children(nid)]
 
     def makedirs(self, path):
         with self.s.lock:
@@ -84,7 +84,7 @@ class _Fs:
 
     def read_file(self, nid, offset, size):
         with self.s.lock:
-            n = self.s.v.nodes.get(nid)
+            n = self.s.v.entry(nid)
             if n is None or n.get("dir"):
                 raise FileNotFoundError(nid)
             return vault.open_range(base64.b64decode(n["key"]), lambda a, k: self.s.v._fetch(n["obj"], a, k), n["size"], offset, size)
@@ -135,6 +135,7 @@ class AccountAsDrive:
         os.makedirs(data_dir, exist_ok=True)
         self.v = vault.Vault(client, key)
         self.v.name = device_id
+        self.v.into_locks = True          # a locked /Discord stays locked: what is saved goes in sealed (vault.py)
         self.lock = threading.RLock()
         self._synced = 0.0
         self._token_file = os.path.join(data_dir, "discord-token")
