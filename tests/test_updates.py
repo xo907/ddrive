@@ -2,6 +2,7 @@
 version, and the dashboard's "Update now" (which a test drive refuses: it is never updated)."""
 
 import json
+import sys
 import unittest
 
 import helpers
@@ -128,6 +129,38 @@ class WebUpdateTest(helpers.DriveTest):
         self.assertIs(got["values"]["update_check"], True)
         self.assertEqual(self.call("POST", "/api/settings", {"update_check": False})[0], 200)
         self.assertIs(self.d.cfg.update_check, False)
+
+    def test_update_all_computers_updates_this_drive_too(self):
+        from unittest import mock
+        import time
+        self.d.local_test_dir = None                    # (as a real drive: only the restart itself is left out)
+        pulls = []
+        with mock.patch.object(updates, "install_kind", return_value="git"), \
+                mock.patch.object(updates.Updates, "pull", lambda self: pulls.append(1) or (True, "Already up to date.")), \
+                mock.patch("os.kill") as kill:
+            with mock.patch.object(updates, "version_on_disk", return_value=__version__):
+                st, got = self.call("POST", "/api/lite/computers/update", {})
+                self.assertEqual((st, got["host"]["state"] in ("pulling", "done")), (200, True))
+                for _ in range(100):
+                    if self.web.updates.updating["state"] != "pulling":
+                        break
+                    time.sleep(0.05)
+            self.assertEqual(self.web.updates.updating["state"], "done")       # the newest already: not restarted
+            kill.assert_not_called()
+            self.assertGreater(self.web.computers.at, 0)
+            with mock.patch.object(updates, "version_on_disk", return_value="99.0.0"):
+                self.call("POST", "/api/lite/computers/update", {})
+                for _ in range(100):
+                    if kill.called or self.web.updates.updating["state"] == "done":
+                        break
+                    time.sleep(0.05)
+            if sys.platform == "win32":                                      # (it can't restart itself there: it says to)
+                self.assertIn("Restart DDrive", self.web.updates.updating["message"])
+            else:
+                kill.assert_called_once()                                    # newer code: the drive starts again with it
+                self.assertTrue(self.d.restart_requested)
+        self.assertEqual(len(pulls), 2)
+        self.d.restart_requested = False
 
     def test_after_an_update_the_drive_starts_again_as_it_was_started(self):
         from unittest import mock

@@ -14,7 +14,8 @@ How it is updated depends on how it was installed:
 * anything else (pip, a copy of the folder): the same link.
 
 The computers that run DDrive Lite with this drive can be updated from here too, all at once, with no
-need to sign in to each one ("Update all computers" on the Settings page, Computers): every running Lite
+need to sign in to each one ("Update all computers" on the Settings page, Computers, which updates
+this drive as Update now does, too): every running Lite
 asks the drive about once a minute whether it was told to update (and says which version it runs and
 how it is installed). Told so, a git checkout does `git pull --ff-only` and starts again with the new
 code by itself (litesync.Supervisor). The drive only says "update"; where the code comes from is the
@@ -236,6 +237,16 @@ class Computers:
         with self._lock:
             out = [dict(c, online=now - c["seen"] < self.ONLINE_S) for c in self._seen.values() if now - c["seen"] <= self.KEEP_S]
         return {"at": self.at, "computers": sorted(out, key=lambda c: (not c["online"], c["name"].lower()))}
+
+
+def version_on_disk():
+    """The version of the code in the program's folder now (newer than what runs, after a git pull)."""
+    try:
+        with open(os.path.join(ROOT, "ddrive", "__init__.py"), encoding="utf-8") as f:
+            m = re.search(r'__version__\s*=\s*"([^"]+)"', f.read())
+        return m.group(1) if m else None
+    except OSError:
+        return None
 
 
 def restart_command():

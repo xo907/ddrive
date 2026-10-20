@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.16.1 (2026-10-19)
+
+- **Update all computers updates this drive too.** The button in Settings, Computers, now also updates the drive the dashboard runs on, the way Update now does (git pull, then it starts again with the new code; the page waits for it), and tells every DDrive Lite computer to update. The computers hear it once the drive is back, if they ask while it restarts. On Windows the drive downloads the new version and asks to be restarted from the menu, as before.
+- Update now no longer restarts a drive that already runs the newest code.
+
 ## 3.16.0 (2026-10-19)
 
 - **Update all computers from the dashboard.** Settings has a new Computers section: every computer running DDrive Lite with this drive (yours and those of accounts), with the version it runs, whether it is online and how its last update went. **Update all computers** tells them all to update: within about a minute each one pulls the newest DDrive (git pull) and starts again with it, by itself. No more signing in to the Pi to update it. A computer that is off does it when it is next on; one that wasn't installed with git says so (it updates by download). The drive only says “update”: the code comes from each computer's own git remote, so the dashboard can't make a computer run anything else. Only the owner and admins see the section and its button.

@@ -188,7 +188,8 @@ if __name__ == "__main__":
             self.assertEqual([(c["id"], c["version"], c["kind"], c["online"]) for c in got["computers"]],
                              [("pi-at-home", __version__, "git", True)])
             self.assertEqual((pulls, got["at"]), ([], 0))
-            self.assertTrue(self.client._json("/api/lite/computers/update", {})["ok"])
+            got = self.client._json("/api/lite/computers/update", {})
+            self.assertEqual(got["host"]["state"], "skipped")              # (a test drive isn't updated; the computers are told anyway)
             s.told_to_update()
             s.told_to_update()
             self.assertEqual(pulls, [1])                         # once for each time it was said

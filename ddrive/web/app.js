@@ -4309,12 +4309,16 @@ async function computersSection(into) {
   };
   const go = h("button", { class: "btn small", onclick: async () => {
     const ok = await ask({ title: "Update all computers?", ok: "Update all",
-      text: "Every computer that runs DDrive Lite with this drive downloads the newest DDrive (git pull) and starts again with it, within about a minute. "
-        + "Its drive letter or folder goes away for a moment; folder syncing carries on. A computer that is off does it when it is next on." });
+      text: "This drive and every computer that runs DDrive Lite with it download the newest DDrive (git pull) and start again with it, within about a minute. "
+        + "The dashboard is away for a moment while this drive restarts; this page waits for it. On the computers the drive letter or folder goes away for a moment and folder syncing carries on. "
+        + "A computer that is off does it when it is next on." });
     if (!ok) return;
-    if (await attempt(() => api("/api/lite/computers/update", {}), "Told every computer to update. Each does within about a minute.")) {
-      setTimeout(redraw, 1000); setTimeout(redraw, 75000);
-    }
+    const r = await attempt(() => api("/api/lite/computers/update", {}));
+    if (!r) return;
+    const host = r.host || {};
+    toast("Told every computer to update. " + (host.state === "skipped" ? `This drive wasn't: ${host.message}` : "This drive is updating too."));
+    if (host.state === "pulling" || host.state === "restarting") { updatingNow = true; await refreshStatus(); }
+    setTimeout(redraw, 1000); setTimeout(redraw, 75000);
   } }, "Update all computers");
   const list = d.computers || [];
   into.replaceChildren(
@@ -4324,7 +4328,8 @@ async function computersSection(into) {
     h("div", { class: "settings" },
       h("div", { class: "set-row" },
         h("div", { class: "set-text" }, h("div", { class: "t" }, "Update all computers"),
-          h("div", { class: "s" }, asked ? `Last told to update ${ago(asked)}.` : "Each pulls the newest DDrive and starts again with it.")),
+          h("div", { class: "s" }, "This drive and every computer below pull the newest DDrive and start again with it."
+                                   + (asked ? ` Last done ${ago(asked)}.` : ""))),
         h("div", { class: "set-ctl wide" }, go, h("button", { class: "btn ghost small", onclick: redraw }, "Refresh"))),
       list.length ? list.map(line)
         : h("div", { class: "set-row sub" }, h("div", { class: "set-text" }, h("div", { class: "s" }, "No computer has checked in yet. A running DDrive Lite 3.16.0 or newer shows up here within a minute.")))));

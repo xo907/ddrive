@@ -3330,13 +3330,17 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         """Update now: git pull, then the drive stops as it always does and starts again with the new code."""
         if self._acct is not None and not self._admin:
             raise ApiError(403, "Only the drive's owner updates it")
+        self._json({"ok": True, "updating": self._update_host()})
+
+    def _update_host(self):
+        """Start updating this drive (in the background). Returns how it goes; ApiError when it can't be."""
         up = self.server.app.updates
         if getattr(self.drive, "local_test_dir", None):
             raise ApiError(400, "A test drive isn't updated")
         if updates.install_kind() != "git":
             raise ApiError(400, "This copy of DDrive wasn't installed with git: download the new version from the releases page.")
         if up.updating and up.updating.get("state") in ("pulling", "restarting"):
-            return self._json({"ok": True, "updating": up.updating})
+            return up.updating
         up.updating = {"state": "pulling", "message": "Downloading the new version…"}
         drive = self.drive
 
@@ -3344,6 +3348,9 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             ok, said = up.pull()
             if not ok:
                 up.updating = {"state": "failed", "message": "It couldn't be updated: " + (said.splitlines()[-1] if said else "git failed")}
+                return
+            if updates.version_on_disk() == __version__:
+                up.updating = {"state": "done", "message": f"This drive has the newest DDrive already ({__version__})."}
                 return
             if sys.platform == "win32":
                 # (on Windows a program can't stop itself the gentle way from here: the menu does it)
@@ -3356,7 +3363,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             import signal
             os.kill(os.getpid(), signal.SIGTERM)  # the usual way down; cli.cmd_mount starts it again (os.execv)
         threading.Thread(target=run, name="Update", daemon=True).start()
-        self._json({"ok": True, "updating": up.updating})
+        return up.updating
 
     def _get_api_lite_update(self):
         """A running DDrive Lite asks this about once a minute: whether it was told to update. It says
@@ -3378,13 +3385,18 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         self._json(dict(got, version=__version__))
 
     def _post_api_lite_computers_update(self):
-        """Update all computers: each running DDrive Lite updates itself (git pull) and starts again with
-        the new code, the next time it asks (within about a minute)."""
+        """Update all computers: this drive (as Update now does), and each running DDrive Lite, which
+        updates itself (git pull) and starts again with the new code the next time it asks (within about
+        a minute; what was said is kept, so one that asks while this drive restarts hears it after)."""
         if self._acct is not None and not self._admin:
             raise ApiError(403, "Only the drive's owner updates the computers")
         at = self.server.app.computers.update_all()
         log.info("Every DDrive Lite computer was told to update.")
-        self._json({"ok": True, "at": at})
+        try:
+            host = self._update_host()
+        except ApiError as e:
+            host = {"state": "skipped", "message": str(e)}
+        self._json({"ok": True, "at": at, "host": host})
 
     def _get_api_settings(self):
         cfg = self.drive.cfg
