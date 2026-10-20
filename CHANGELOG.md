@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.16.0 (2026-10-19)
+
+- **Update all computers from the dashboard.** Settings has a new Computers section: every computer running DDrive Lite with this drive (yours and those of accounts), with the version it runs, whether it is online and how its last update went. **Update all computers** tells them all to update: within about a minute each one pulls the newest DDrive (git pull) and starts again with it, by itself. No more signing in to the Pi to update it. A computer that is off does it when it is next on; one that wasn't installed with git says so (it updates by download). The drive only says “update”: the code comes from each computer's own git remote, so the dashboard can't make a computer run anything else. Only the owner and admins see the section and its button.
+- A computer needs DDrive Lite 3.16.0 for this, so the update to 3.16.0 itself is the last one done by hand (or by `lite autoupdate on`).
+
 ## 3.15.3 (2026-10-19)
 
 - **An end-to-end encrypted account's page loads quickly again.** 3.15.2 made the page do more work for every deleted entry while it caught up with what changed (“getting what changed since”), and the Discord logger deletes many small files every day: on a big account the page could sit on that for minutes. A deleted file is now taken off at once, without looking through the whole list for what is in it (only a folder can hold anything); that is also much faster than before 3.15.2. The account's computers (DDrive Lite) got the same.

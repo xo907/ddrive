@@ -2421,10 +2421,12 @@ async function renderSettings() {
            h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))]).flat(),
        h("div", { id: "discord-settings" }),
        h("div", { id: "signin-settings" }),
+       h("div", { id: "computers-settings" }),
        h("div", { id: "accounts-settings" }),
        h("div", { id: "erase-settings" }));
   if (!SERVER) discordSection($("#discord-settings"));      // (the owner's Discord account: not an admin's)
   signInSection($("#signin-settings"));
+  computersSection($("#computers-settings"));
   accountsSection($("#accounts-settings"));
   if (!SERVER) eraseSection($("#erase-settings"));          // the owner's alone
 }
@@ -4286,6 +4288,46 @@ function newAccountDialog(redraw, admin = false) {
     e2e && field("Note", note), area,
     h("div", { class: "modal-actions" }, e2e ? h("button", { class: "btn", type: "button", onclick: (e) => { e.target.parentNode.remove(); startE2E(); } }, "Next")
                                              : h("button", { class: "btn ghost", type: "button", onclick: () => m.close() }, "Close")));
+}
+
+// The computers that run DDrive Lite with this drive (updates.Computers): which version each runs, and
+// "Update all computers": each pulls the new code and starts again with it within about a minute.
+async function computersSection(into) {
+  const d = await api("/api/lite/computers").catch(() => null);
+  if (!d || !into || !into.isConnected) return;
+  const redraw = () => computersSection(into);
+  const asked = d.at > 0 ? d.at : 0;
+  const line = (c) => {
+    const old = c.version && newer(d.version, c.version);
+    return h("div", { class: "set-row sub" },
+      h("div", { class: "set-text" },
+        h("div", { class: "t" }, c.name, c.account && h("span", { class: "tag", style: "margin-left:8px" }, c.account)),
+        h("div", { class: "s" }, [`DDrive ${c.version || "?"}`, old ? `(${d.version} is on this drive)` : "", !c.online && `· last seen ${ago(c.seen)}`,
+                                  c.kind && c.kind !== "git" ? `· installed as ${c.kind}: updates by download only` : ""].filter(Boolean).join(" ")),
+        c.result && h("div", { class: "s faint" }, `Last update: ${c.result}`)),
+      h("div", { class: "set-ctl" }, h("span", { class: "tag" + (c.online ? "" : " faint") }, c.online ? "Online" : "Offline")));
+  };
+  const go = h("button", { class: "btn small", onclick: async () => {
+    const ok = await ask({ title: "Update all computers?", ok: "Update all",
+      text: "Every computer that runs DDrive Lite with this drive downloads the newest DDrive (git pull) and starts again with it, within about a minute. "
+        + "Its drive letter or folder goes away for a moment; folder syncing carries on. A computer that is off does it when it is next on." });
+    if (!ok) return;
+    if (await attempt(() => api("/api/lite/computers/update", {}), "Told every computer to update. Each does within about a minute.")) {
+      setTimeout(redraw, 1000); setTimeout(redraw, 75000);
+    }
+  } }, "Update all computers");
+  const list = d.computers || [];
+  into.replaceChildren(
+    h("h2", {}, "Computers"),
+    h("p", { class: "muted", style: "margin:0 0 12px" }, "Computers running DDrive Lite with this drive, your own and those of accounts. Each checks in about once a minute. "
+      + "No need to sign in to them to update them: they fetch the new code from GitHub themselves (DDrive Lite 3.16.0 or newer; an older one needs one last update by hand)."),
+    h("div", { class: "settings" },
+      h("div", { class: "set-row" },
+        h("div", { class: "set-text" }, h("div", { class: "t" }, "Update all computers"),
+          h("div", { class: "s" }, asked ? `Last told to update ${ago(asked)}.` : "Each pulls the newest DDrive and starts again with it.")),
+        h("div", { class: "set-ctl wide" }, go, h("button", { class: "btn ghost small", onclick: redraw }, "Refresh"))),
+      list.length ? list.map(line)
+        : h("div", { class: "set-row sub" }, h("div", { class: "set-text" }, h("div", { class: "s" }, "No computer has checked in yet. A running DDrive Lite 3.16.0 or newer shows up here within a minute.")))));
 }
 
 async function accountsSection(into) {

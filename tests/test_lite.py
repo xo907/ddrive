@@ -173,6 +173,38 @@ if __name__ == "__main__":
     helpers.unittest.main()
 
 
+    def test_every_computer_is_updated_from_the_host(self):
+        """"Update all computers" on the host: each running Lite pulls the new code once, and says how it went."""
+        from unittest import mock
+        from ddrive import __version__, litesync, updates
+        s = litesync.Supervisor()
+        settings = {"host": self.address, "device": "pi-at-home"}
+        pulls = []
+        with mock.patch.object(lite, "load_settings", return_value=settings), mock.patch.object(lite, "client_from", return_value=self.client), \
+                mock.patch.object(litesync, "default_data_dir", return_value=self.tmp), mock.patch.object(updates, "install_kind", return_value="git"), \
+                mock.patch.object(updates.Updates, "pull", lambda self: pulls.append(1) or (True, "Updating 1..2\nFast-forward")):
+            s.told_to_update()                                   # the first time it only says it is there
+            got = self.client._json("/api/lite/computers")
+            self.assertEqual([(c["id"], c["version"], c["kind"], c["online"]) for c in got["computers"]],
+                             [("pi-at-home", __version__, "git", True)])
+            self.assertEqual((pulls, got["at"]), ([], 0))
+            self.assertTrue(self.client._json("/api/lite/computers/update", {})["ok"])
+            s.told_to_update()
+            s.told_to_update()
+            self.assertEqual(pulls, [1])                         # once for each time it was said
+            got = self.client._json("/api/lite/computers")
+            self.assertEqual(got["computers"][0]["result"], "Updated.")
+            self.assertGreater(got["at"], 0)
+            with mock.patch.object(updates, "install_kind", return_value="exe"):
+                self.client._json("/api/lite/computers/update", {})
+                s.told_to_update()
+            self.assertEqual(pulls, [1])
+            s.told_to_update()
+            self.assertIn("wasn't installed with git", self.client._json("/api/lite/computers")["computers"][0]["result"])
+        # what is said is kept: a drive that starts again still says it
+        self.assertEqual(updates.Computers(os.path.join(self.host.cfg.resolved_data_dir, "lite-update.json")).at, self.web.computers.at)
+
+
 class RefusedWordsTest(helpers.unittest.TestCase):
     def test_turned_down_words_are_not_tried_again_and_again(self):
         from ddrive.lite import HostClient, HostError

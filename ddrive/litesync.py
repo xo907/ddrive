@@ -28,10 +28,12 @@ import logging
 import os
 import posixpath
 import re
+import secrets
 import sys
 import threading
 import time
 import types
+import urllib.parse
 
 from . import __version__, sync, vault
 from .config import default_data_dir
@@ -829,6 +831,7 @@ class Supervisor:
         self._renewing = False
         self._looked = 0.0
         self._pulled = time.time() - 12 * 3600 + 600        # (the first look for a newer version: 10 minutes after starting)
+        self._host = (None, None)                            # (the settings it is for, a client of the host) to ask whether to update
 
     def renew_check(self):
         """Keep this program up to date: with `lite autoupdate on` (a git checkout), pull a newer DDrive twice a day; and
@@ -837,6 +840,10 @@ class Supervisor:
         from . import lite, updates
         if self._renewing or getattr(sys, "frozen", False):
             return
+        try:
+            self.told_to_update()
+        except Exception as e:                   # (the host is away, or older than 3.16.0: it is asked again in a minute)
+            log.debug("Asking the host whether to update: %s", e)
         now = time.time()
         if lite.load_settings().get("autoupdate") and now - self._pulled > 12 * 3600 and updates.install_kind() == "git":
             self._pulled = now
@@ -850,6 +857,48 @@ class Supervisor:
             self._renewing = True
             log.info("DDrive %s is in the program's folder now (this is %s): starting again with it", disk, __version__)
             lite._spawn("renew")
+
+    def told_to_update(self):
+        """Ask the host whether its owner said to update every computer ("Update all computers" on its
+        Settings page, updates.Computers), saying which version runs here and how its last update went.
+        Told so (once for each time it was said), a git checkout pulls the new code; renew_check then
+        starts again with it."""
+        from . import lite, updates
+        s = lite.load_settings()
+        if not s.get("host"):
+            return
+        sig = (s.get("host"), s.get("protected"), s.get("e2e"))
+        if self._host[0] != sig:
+            self._host = (sig, lite.client_from(s))
+        path = os.path.join(default_data_dir(), "lite", "update.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        if not state.get("id"):
+            state["id"] = secrets.token_hex(8)
+        kind = updates.install_kind()
+        got = self._host[1]._json("/api/lite/update?" + urllib.parse.urlencode({
+            "device": s.get("device") or state["id"], "name": lite.device_name(), "version": __version__, "kind": kind,
+            "result": state.get("result") or ""}))
+        at = float(got.get("at") or 0)
+        if "seen" in state and at <= state["seen"]:
+            return
+        fresh = "seen" not in state              # (the first answer: what was said before this computer asked isn't news)
+        state["seen"] = at
+        if not fresh:
+            if kind != "git":
+                state["result"] = "Can't update itself: it wasn't installed with git."
+            else:
+                ok, said = updates.Updates(None).pull()
+                last = said.splitlines()[-1] if said else ""
+                state["result"] = ("Already up to date." if "up to date" in said.lower() else "Updated.") if ok \
+                    else "git pull failed: " + (last or "no reason given")
+            log.info("The host said to update: %s", state["result"])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
 
     def _claim(self):
         other = running_pid()

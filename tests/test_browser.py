@@ -174,6 +174,23 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(self.errors, [])
 
     # ------------------------------------------------------------ an end-to-end encrypted account
+    def test_every_computer_is_updated_from_the_settings(self):
+        self.web.computers.heard("", {"device": "pi1", "name": "pi-xo", "version": "3.0.0", "kind": "git", "result": ""})
+        self.web.computers.heard("", {"device": "pc2", "name": "laptop", "version": "3.0.0", "kind": "exe"})
+        self.sign_in_owner()
+        p = self.page
+        p.goto(self.base + "/#/settings")
+        p.wait_for_selector("text=Update all computers >> nth=0")
+        self.assertIn("pi-xo", p.inner_text("#computers-settings"))
+        self.assertIn("updates by download only", p.inner_text("#computers-settings"))
+        if os.environ.get("DD_SHOT"):
+            p.locator("#computers-settings").screenshot(path=os.environ["DD_SHOT"])
+        p.click("#computers-settings button:has-text('Update all computers')")
+        p.click("#dialog-ok")
+        p.wait_for_selector("text=Told every computer to update")
+        self.assertGreater(self.web.computers.at, 0)
+        self.assertEqual(self.errors, [])
+
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)

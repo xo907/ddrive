@@ -13,10 +13,18 @@ How it is updated depends on how it was installed:
 * DDrive.exe or the .deb package: the dashboard links to the release to download;
 * anything else (pip, a copy of the folder): the same link.
 
+The computers that run DDrive Lite with this drive can be updated from here too, all at once, with no
+need to sign in to each one ("Update all computers" on the Settings page, Computers): every running Lite
+asks the drive about once a minute whether it was told to update (and says which version it runs and
+how it is installed). Told so, a git checkout does `git pull --ff-only` and starts again with the new
+code by itself (litesync.Supervisor). The drive only says "update"; where the code comes from is the
+computer's own git remote, so nobody who controls the drive can make a computer run other code.
+
 The phone apps are published next to the code (android/release/DDrive.apk, findx/release/FindX.apk), each
 with a VERSION file, which is what is compared with the version an app says it is.
 """
 
+import json
 import logging
 import os
 import re
@@ -175,6 +183,59 @@ class Updates:
         r = subprocess.run(["git", "pull", "--ff-only"], cwd=ROOT, capture_output=True, text=True, timeout=300)
         said = (r.stdout + r.stderr).strip()[-2000:]
         return r.returncode == 0, said
+
+
+class Computers:
+    """The DDrive Lite computers that use this drive, as each last said (they ask about once a minute
+    whether to update), and the word to update: a time, which each computer acts on once."""
+
+    ONLINE_S = 180                # heard from within this long: connected
+    KEEP_S = 7 * 86400            # not heard from for this long: off the list
+    MAX = 500
+
+    def __init__(self, path=None, clock=time.time):
+        self.path, self.clock = path, clock
+        self._lock = threading.Lock()
+        self._seen = {}           # (who, device) -> what it said
+        self.at = 0.0             # when "update all" was last pressed
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.at = float(json.load(f).get("at") or 0)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+    def heard(self, who, q):
+        """A computer asked (who: '' for the owner, else the account it is signed in to). Returns the answer."""
+        device = re.sub(r"[^0-9A-Za-z_-]", "", str(q.get("device") or ""))[:64]
+        now = self.clock()
+        if device:
+            with self._lock:
+                for key in [k for k, c in self._seen.items() if now - c["seen"] > self.KEEP_S]:
+                    del self._seen[key]
+                if (who, device) in self._seen or len(self._seen) < self.MAX:
+                    self._seen[(who, device)] = {
+                        "id": device, "who": who, "seen": now,
+                        "name": str(q.get("name") or "").strip()[:60] or "A computer",
+                        "version": str(q.get("version") or "")[:20], "kind": str(q.get("kind") or "")[:10],
+                        "result": str(q.get("result") or "")[:300]}
+        return {"at": self.at}
+
+    def update_all(self):
+        """Tell every computer to update (each does when it next asks, within about a minute)."""
+        with self._lock:
+            self.at = max(self.clock(), self.at + 0.001)
+            if self.path:
+                tmp = self.path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"at": self.at}, f)
+                os.replace(tmp, self.path)
+            return self.at
+
+    def listing(self):
+        now = self.clock()
+        with self._lock:
+            out = [dict(c, online=now - c["seen"] < self.ONLINE_S) for c in self._seen.values() if now - c["seen"] <= self.KEEP_S]
+        return {"at": self.at, "computers": sorted(out, key=lambda c: (not c["online"], c["name"].lower()))}
 
 
 def restart_command():

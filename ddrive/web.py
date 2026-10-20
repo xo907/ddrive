@@ -75,7 +75,7 @@ NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave
 # Anything not listed here answers 403 for them, so a new route is the owner's until it is added.
 ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
     contacts contacts/export locks starred recent history home insights bookmarks changelog
-    sync sync/tree sync/browse upload/part queue""".split())
+    sync sync/tree sync/browse upload/part queue lite/update""".split())
 ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
@@ -86,7 +86,7 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("""status account changelog queue vault vault/log vault/object vault/pending vault/sync vault/shares
+E2E_GET = frozenset("""status account changelog queue lite/update vault vault/log vault/object vault/pending vault/sync vault/shares
     vault/move vault/move/peer vault/move/list""".split())
 E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
     vault/move/open vault/move/send vault/move/finish vault/move/cancel
@@ -112,8 +112,8 @@ OWNER_ONLY = frozenset(("/api/signin/passkey/options", "/api/signin/passkey/regi
 # and the log. Its page says which of the two it means with the header X-DD-Admin: 1 (e2e-api.js).
 # Not here, so not an admin's: the owner's files and everything that lists or opens them, and how the
 # owner signs in (with that it could make itself a sign-in that switching it off doesn't end).
-ADMIN_GET = frozenset("""status signin settings accounts accounts/moves log check changelog""".split())
-ADMIN_POST = frozenset("""logout settings update/check update/install accounts/create accounts/admin accounts/invite accounts/invite/revoke
+ADMIN_GET = frozenset("""status signin settings accounts accounts/moves log check changelog lite/computers""".split())
+ADMIN_POST = frozenset("""logout settings update/check update/install lite/computers/update accounts/create accounts/admin accounts/invite accounts/invite/revoke
     accounts/disable accounts/delete accounts/restore accounts/moves/cancel log/clear
     repair repair/recheck resources/clean check/start check/stop check/remove""".split())
 
@@ -226,6 +226,7 @@ class WebServer:
         self.findx = FindXRelay(path=os.path.join(self.cfg.resolved_data_dir, "findx-relay.json"))   # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
         self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
         self.updates = updates.Updates(self.cfg)    # whether a newer DDrive is out, and updating to it (updates.py)
+        self.computers = updates.Computers(os.path.join(self.cfg.resolved_data_dir, "lite-update.json"))   # DDrive Lite computers: update them all
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -3356,6 +3357,34 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             os.kill(os.getpid(), signal.SIGTERM)  # the usual way down; cli.cmd_mount starts it again (os.execv)
         threading.Thread(target=run, name="Update", daemon=True).start()
         self._json({"ok": True, "updating": up.updating})
+
+    def _get_api_lite_update(self):
+        """A running DDrive Lite asks this about once a minute: whether it was told to update. It says
+        which version it runs, how it is installed and how its last update went (the Computers list)."""
+        who = self._who()
+        self._json(self.server.app.computers.heard(who or "", self._query()))
+
+    def _get_api_lite_computers(self):
+        if self._acct is not None and not self._admin:
+            raise ApiError(403, "Only the drive's owner updates the computers")
+        got = self.server.app.computers.listing()
+        names = {}
+        for c in got["computers"]:
+            if c["who"] and c["who"] not in names:
+                rec = self.server.app.accounts._recs.get(c["who"]) or {}
+                names[c["who"]] = rec.get("name") or f"Account {c['who'][:8]}"
+            c["account"] = names.get(c["who"], "")
+            del c["who"]
+        self._json(dict(got, version=__version__))
+
+    def _post_api_lite_computers_update(self):
+        """Update all computers: each running DDrive Lite updates itself (git pull) and starts again with
+        the new code, the next time it asks (within about a minute)."""
+        if self._acct is not None and not self._admin:
+            raise ApiError(403, "Only the drive's owner updates the computers")
+        at = self.server.app.computers.update_all()
+        log.info("Every DDrive Lite computer was told to update.")
+        self._json({"ok": True, "at": at})
 
     def _get_api_settings(self):
         cfg = self.drive.cfg
