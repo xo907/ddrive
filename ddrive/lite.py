@@ -802,6 +802,17 @@ def _spawn(*argv):
                                 start_new_session=True, close_fds=True)
 
 
+def _wait_gone(pid, seconds):
+    """True once process `pid` has ended (False: still there after `seconds`)."""
+    from .litesync import alive
+    end = time.time() + seconds
+    while alive(pid):
+        if time.time() > end:
+            return False
+        time.sleep(0.5)
+    return True
+
+
 def _mount_pid():
     """The program showing the host's drive on this computer, if one is running."""
     from .litesync import alive
@@ -915,10 +926,11 @@ def cmd_mount(args):
         fuse.FUSE(LiteFS(client), mp, **kwargs)
     finally:
         syncing.stop()
-        try:
-            os.remove(_pid_file())
-        except OSError:
-            pass
+        if _mount_pid() in (None, os.getpid()):          # (not the one of the program that started after it)
+            try:
+                os.remove(_pid_file())
+            except OSError:
+                pass
     return 0
 
 
@@ -960,17 +972,37 @@ def cmd_stop(args):
 def cmd_renew(args):
     """Started by a running Lite whose code was updated (litesync.Supervisor.renew_check): that program ends, and
     starts again with the new code. Not one to type: it runs by itself, its output goes to lite.log."""
-    from . import litesync
+    from . import __version__, litesync
+    tell = litesync.tell_host                # (the host's Computers list shows each step as it happens)
     time.sleep(2)
-    if _mount_pid():                         # the program showing the drive (folder syncing runs in it too)
+    old = _mount_pid()
+    if old:                                  # the program showing the drive (folder syncing runs in it too)
+        tell(f"Stopping the drive to start it again with DDrive {__version__}…")
         cmd_stop(args)
-        for _ in range(60):
-            if not _mount_pid():
-                break
-            time.sleep(0.5)
-        return cmd_mount(argparse.Namespace(mount=None, background=True, verbose=False))
+        # Gone for real before the new one starts (stopping takes the pid file away at once, but the program
+        # may take a while: what it was uploading, the Discord messages it keeps).
+        if not _wait_gone(old, 120):
+            tell("The drive didn't stop by itself in 2 minutes: stopping it hard…")
+            log.warning("The drive (pid %s) didn't stop: killing it", old)
+            try:
+                os.kill(old, 9)
+            except OSError:
+                pass
+            _wait_gone(old, 10)
+            if unmount:
+                unmount(normalize_mount_point(load_settings().get("mount_point") or ""), lazy=True)
+        for attempt in range(3):
+            tell(f"Starting the drive with DDrive {__version__}…" + (f" (try {attempt + 1})" if attempt else ""))
+            if cmd_mount(argparse.Namespace(mount=None, background=True, verbose=False)) == 0 and _mount_pid():
+                return 0                     # (it checks in with the host itself once it runs)
+            time.sleep(5)
+        tell(f"Couldn't start the drive again with DDrive {__version__}: see lite.log and ddrive.log in {default_data_dir()}.")
+        if load_settings().get("sync"):
+            _sync_ensure()                   # (the folders sync at least)
+        return 1
     pid = litesync.running_pid()             # only the folder syncing (`lite sync run`)
     if pid and pid != os.getpid():
+        tell(f"Starting folder syncing again with DDrive {__version__}…")
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
         else:

@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.16.3 (2026-10-19)
+
+- **Updating a computer can't get stuck half way any more.** After pulling new code a Lite starts again with it (`lite renew`): that stopped the drive, waited only until the drive's pid file was gone (which stopping removes at once) and started the new one while the old one was often still shutting down; when the old one then ended it removed the new one's pid file, and if the new one didn't come up the old one stayed, running the old version, and stopped telling the host anything. Now the new one starts only once the old one has really ended (after 2 minutes it is stopped hard), starting is tried 3 times, the old program never removes another's pid file, and a Lite that is still there 3 minutes after it should have started again tries again (3 times), and says so if it can't.
+- **Live progress in Settings, Computers.** Each computer says what it is doing as it happens: downloading the new code, stopping the drive, starting it with the new version, or what went wrong. The list refreshes every 3 seconds while anything is happening, and shows a version that is downloaded but not running yet. Computers check in every 15 seconds now (was a minute), and start again with new code at once after pulling it.
+
 ## 3.16.2 (2026-10-19)
 
 - **The Computers list says whether an update is still to come.** After Update all computers it showed each computer's last update result, even when that was from an earlier press and the computer hadn't checked in since (it does about once a minute): a computer could read “Already up to date” while still on the old version. Now a computer that was told and hasn't acted yet says so (“Told to update: it does when it next checks in”), the result says when it was, and it names the versions: “Updated 3.16.1 → 3.16.2”, or “git found nothing newer: still 3.16.1”. The list refreshes itself for two minutes after the press.

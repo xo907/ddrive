@@ -4292,7 +4292,9 @@ function newAccountDialog(redraw, admin = false) {
 
 // The computers that run DDrive Lite with this drive (updates.Computers): which version each runs, and
 // "Update all computers": each pulls the new code and starts again with it within about a minute.
+let computersTimer = null;
 async function computersSection(into) {
+  clearTimeout(computersTimer);
   const d = await api("/api/lite/computers").catch(() => null);
   if (!d || !into || !into.isConnected) return;
   const redraw = () => computersSection(into);
@@ -4301,12 +4303,15 @@ async function computersSection(into) {
     const old = c.version && newer(d.version, c.version);
     // Told to update and not done yet: it acts when it next checks in (about once a minute), or when it is next on.
     const waiting = asked && (c.done != null ? c.done < asked : c.seen < asked + 5);
+    const pending = c.disk && c.version && c.disk !== c.version;          // downloaded, not running yet
+    busy = busy || !!c.phase || (waiting && c.online) || (pending && c.online);
     return h("div", { class: "set-row sub" },
       h("div", { class: "set-text" },
         h("div", { class: "t" }, c.name, c.account && h("span", { class: "tag", style: "margin-left:8px" }, c.account)),
-        h("div", { class: "s" }, [`DDrive ${c.version || "?"}`, old ? `(${d.version} is on this drive)` : "", !c.online && `· last seen ${ago(c.seen)}`,
+        h("div", { class: "s" }, [`DDrive ${c.version || "?"}`, pending ? `(${c.disk} downloaded, not running yet)` : old ? `(${d.version} is on this drive)` : "", !c.online && `· last seen ${ago(c.seen)}`,
                                   c.kind && c.kind !== "git" ? `· installed as ${c.kind}: updates by download only` : ""].filter(Boolean).join(" ")),
-        waiting ? h("div", { class: "s" }, c.online ? "Told to update: it does when it next checks in, within a minute." : "Told to update: it does when it is next on.")
+        c.phase && c.online ? h("div", { class: "s live-phase" }, h("span", { class: "spin" }), c.phase, c.phase_at ? ` · for ${Math.max(0, Math.round(Date.now() / 1000 - c.phase_at))} s` : "")
+          : waiting ? h("div", { class: "s" }, c.online ? "Told to update: it does when it next checks in (every 15 seconds; a computer on an earlier version: within a minute)." : "Told to update: it does when it is next on.")
           : c.result && h("div", { class: "s faint" }, `Last update${c.result_at ? ` (${ago(c.result_at)})` : ""}: ${c.result}`)),
       h("div", { class: "set-ctl" }, h("span", { class: "tag" + (c.online ? "" : " faint") }, c.online ? "Online" : "Offline")));
   };
@@ -4321,20 +4326,24 @@ async function computersSection(into) {
     const host = r.host || {};
     toast("Told every computer to update. " + (host.state === "skipped" ? `This drive wasn't: ${host.message}` : "This drive is updating too."));
     if (host.state === "pulling" || host.state === "restarting") { updatingNow = true; await refreshStatus(); }
-    for (const s of [1, 30, 70, 130]) setTimeout(redraw, s * 1000);
+    redraw();
   } }, "Update all computers");
+  let busy = false;
   const list = d.computers || [];
+  const rows = list.map(line);
+  // Live while something is happening (every 3 s), else now and then (every 20 s), as long as this page shows it.
+  computersTimer = setTimeout(() => { if (into.isConnected) redraw(); }, busy ? 3000 : 20000);
   into.replaceChildren(
     h("h2", {}, "Computers"),
-    h("p", { class: "muted", style: "margin:0 0 12px" }, "Computers running DDrive Lite with this drive, your own and those of accounts. Each checks in about once a minute. "
-      + "No need to sign in to them to update them: they fetch the new code from GitHub themselves (DDrive Lite 3.16.0 or newer; an older one needs one last update by hand)."),
+    h("p", { class: "muted", style: "margin:0 0 12px" }, "Computers running DDrive Lite with this drive, your own and those of accounts. Each checks in every 15 seconds and says, as it happens, what it is doing while it updates. "
+      + "No need to sign in to them to update them: they fetch the new code from GitHub themselves (DDrive Lite 3.16.0 or newer; live progress from 3.16.3)."),
     h("div", { class: "settings" },
       h("div", { class: "set-row" },
         h("div", { class: "set-text" }, h("div", { class: "t" }, "Update all computers"),
           h("div", { class: "s" }, "This drive and every computer below pull the newest DDrive and start again with it."
                                    + (asked ? ` Last done ${ago(asked)}.` : ""))),
         h("div", { class: "set-ctl wide" }, go, h("button", { class: "btn ghost small", onclick: redraw }, "Refresh"))),
-      list.length ? list.map(line)
+      list.length ? rows
         : h("div", { class: "set-row sub" }, h("div", { class: "set-text" }, h("div", { class: "s" }, "No computer has checked in yet. A running DDrive Lite 3.16.0 or newer shows up here within a minute.")))));
 }
 

@@ -182,7 +182,8 @@ if __name__ == "__main__":
         pulls = []
         with mock.patch.object(lite, "load_settings", return_value=settings), mock.patch.object(lite, "client_from", return_value=self.client), \
                 mock.patch.object(litesync, "default_data_dir", return_value=self.tmp), mock.patch.object(updates, "install_kind", return_value="git"), \
-                mock.patch.object(updates.Updates, "pull", lambda self: pulls.append(1) or (True, "Updating 1..2\nFast-forward")):
+                mock.patch.object(updates.Updates, "pull", lambda self: pulls.append(1) or (True, "Updating 1..2\nFast-forward")), \
+                mock.patch.object(lite, "_spawn") as spawn:
             s.told_to_update()                                   # the first time it only says it is there
             got = self.client._json("/api/lite/computers")
             self.assertEqual([(c["id"], c["version"], c["kind"], c["online"]) for c in got["computers"]],
@@ -193,13 +194,21 @@ if __name__ == "__main__":
             told = self.client._json("/api/lite/computers")
             self.assertLess(told["computers"][0]["done"], told["at"])      # told, not done yet: the page says it is waiting
             with mock.patch.object(litesync, "version_on_disk", return_value="99.0.0"):
-                s.told_to_update()                               # it pulls, and says so the next time it asks
+                s.told_to_update()                               # it pulls, says so, and starts again with it at once
+                spawn.assert_called_once_with("renew")
+                got = self.client._json("/api/lite/computers")
+                c = got["computers"][0]
+                self.assertEqual((c["result"], c["done"], c["disk"], c["version"]), (f"Updated {__version__} → 99.0.0.", got["at"], "99.0.0", __version__))
+                self.assertEqual(c["phase"], "Starting again with DDrive 99.0.0…")     # live, as it happens
+                self.assertGreater(c["result_at"], 0)
+                litesync.tell_host("Stopping the drive…")    # (what `lite renew` says: no version, it runs no drive)
+                c = self.client._json("/api/lite/computers")["computers"][0]
+                self.assertEqual((c["phase"], c["version"]), ("Stopping the drive…", __version__))
                 s.told_to_update()
             self.assertEqual(pulls, [1])                         # once for each time it was said
-            got = self.client._json("/api/lite/computers")
-            c = got["computers"][0]
-            self.assertEqual((c["result"], c["done"]), (f"Updated {__version__} → 99.0.0.", got["at"]))
-            self.assertGreater(c["result_at"], 0)
+            s._renewing = False                                  # (as a new program, started with the new code, would be)
+            s.told_to_update()
+            self.assertEqual(self.client._json("/api/lite/computers")["computers"][0]["phase"], "")
             self.client._json("/api/lite/computers/update", {})
             s.told_to_update()
             s.told_to_update()
@@ -244,6 +253,38 @@ class RefusedWordsTest(helpers.unittest.TestCase):
 
 
 class RenewTest(unittest.TestCase):
+    def test_starting_again_that_doesnt_happen_is_tried_again_and_said(self):
+        from unittest import mock
+        from ddrive import litesync
+        s = litesync.Supervisor()
+        with mock.patch.object(lite, "_spawn") as spawn, mock.patch.object(lite, "load_settings", return_value={}), \
+                mock.patch.object(litesync, "version_on_disk", return_value="99.0.0"):
+            s.renew_check()
+            s.renew_check()
+            self.assertEqual(spawn.call_count, 1)                # waits for it
+            for _ in range(5):
+                s._renew_at -= litesync.RENEW_WAIT_S + 1         # (minutes later, still here: it didn't happen)
+                s.renew_check()
+            self.assertEqual(spawn.call_count, litesync.RENEW_TRIES)
+            self.assertIn("Couldn't start again with DDrive 99.0.0", s._phase())
+
+    def test_renew_waits_for_the_old_drive_to_end_and_says_each_step(self):
+        from unittest import mock
+        said, killed = [], []
+        with mock.patch("time.sleep"), mock.patch.object(lite, "_mount_pid", side_effect=[1234, 4321, 4321]), \
+                mock.patch.object(lite, "cmd_stop") as stop, mock.patch.object(lite, "_wait_gone", side_effect=[False, True]) as wait, \
+                mock.patch("os.kill", lambda pid, sig: killed.append((pid, sig))), mock.patch.object(lite, "unmount", None), \
+                mock.patch.object(lite, "cmd_mount", return_value=0) as mount, \
+                mock.patch("ddrive.litesync.tell_host", side_effect=said.append):
+            self.assertEqual(lite.cmd_renew(mock.Mock()), 0)
+        stop.assert_called_once()
+        self.assertEqual(wait.call_args_list[0], mock.call(1234, 120))  # the old one has to be gone for real
+        self.assertEqual(killed, [(1234, 9)])                           # it wasn't: stopped hard
+        mount.assert_called_once()
+        self.assertTrue(said[0].startswith("Stopping the drive"))
+        self.assertIn("stopping it hard", said[1])
+        self.assertTrue(said[2].startswith("Starting the drive with DDrive"))
+
     def test_a_running_lite_starts_again_once_its_code_is_newer(self):
         from unittest import mock
         from ddrive import __version__, litesync

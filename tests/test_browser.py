@@ -177,14 +177,19 @@ class BrowserTest(helpers.DriveTest):
     def test_every_computer_is_updated_from_the_settings(self):
         self.web.computers.heard("", {"device": "pi1", "name": "pi-xo", "version": "3.0.0", "kind": "git", "result": ""})
         self.web.computers.heard("", {"device": "pc2", "name": "laptop", "version": "3.0.0", "kind": "exe"})
+        self.web.computers.heard("", {"device": "pi3", "name": "pi-two", "version": "3.0.0", "disk": "3.0.1", "kind": "git",
+                                      "phase": "Stopping the drive to start it again with DDrive 3.0.1…"})
         self.sign_in_owner()
         p = self.page
         p.goto(self.base + "/#/settings")
         p.wait_for_selector("text=Update all computers >> nth=0")
         self.assertIn("pi-xo", p.inner_text("#computers-settings"))
         self.assertIn("updates by download only", p.inner_text("#computers-settings"))
+        self.assertIn("Stopping the drive", p.inner_text("#computers-settings .live-phase"))      # what it is doing, live
         if os.environ.get("DD_SHOT"):
             p.locator("#computers-settings").screenshot(path=os.environ["DD_SHOT"])
+        self.web.computers.heard("", {"device": "pi3", "name": "pi-two", "version": "3.0.1", "kind": "git"})
+        p.wait_for_function("() => !document.querySelector('#computers-settings .live-phase')", timeout=10000)   # (it looks again every 3 s)
         p.click("#computers-settings button:has-text('Update all computers')")
         p.click("#dialog-ok")
         p.wait_for_selector("text=Told every computer to update")

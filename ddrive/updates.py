@@ -220,14 +220,22 @@ class Computers:
             with self._lock:
                 for key in [k for k, c in self._seen.items() if now - c["seen"] > self.KEEP_S]:
                     del self._seen[key]
-                if (who, device) in self._seen or len(self._seen) < self.MAX:
-                    self._seen[(who, device)] = {
+                old = self._seen.get((who, device))
+                if old is not None or len(self._seen) < self.MAX:
+                    phase = str(q.get("phase") or "")[:200]
+                    rec = {
                         "id": device, "who": who, "seen": now,
                         "name": str(q.get("name") or "").strip()[:60] or "A computer",
                         "version": str(q.get("version") or "")[:20], "kind": str(q.get("kind") or "")[:10],
+                        "disk": str(q.get("disk") or "")[:20],   # the version in its folder (newer than `version`: not running yet)
                         "result": str(q.get("result") or "")[:300],
                         "done": _number(q.get("done")),          # the word to update it acted on last (None: before 3.16.2)
-                        "result_at": _number(q.get("result_at"))}
+                        "result_at": _number(q.get("result_at")),
+                        "phase": phase,                          # what it is busy with right now (updating), as it happens
+                        "phase_at": (old["phase_at"] if old and old.get("phase") == phase else now) if phase else None}
+                    if not rec["version"] and old is not None:   # (said by `lite renew`, which runs no drive)
+                        rec["version"] = old["version"]
+                    self._seen[(who, device)] = rec
         return {"at": self.at}
 
     def update_all(self):
