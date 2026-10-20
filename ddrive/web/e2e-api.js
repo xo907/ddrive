@@ -1164,6 +1164,31 @@
   }
   /** The account's computers that can do Messages, and which of them are logged in to Discord (each keeps its
    *  own token): asked of each one that is on. */
+  /** The /Discord folders at the top that aren't locked, and which device wrote what is in them (each change
+   *  says which device made it: `by`): to find a computer that makes /Discord again after it was locked. */
+  GET["chat/writers"] = async () => {
+    const kids = new Map();
+    for (const n of v.nodes.values()) {
+      if (n.trash) continue;
+      if (!kids.has(n.parent)) kids.set(n.parent, []);
+      kids.get(n.parent).push(n);
+    }
+    const folders = [];
+    for (const top of kids.get("") || []) {
+      if (!top.dir || top.lockRoot || (top._name || top.name) !== "Discord") continue;
+      const by = new Map(), todo = [top];
+      while (todo.length) {
+        const n = todo.pop();
+        const who = n.by || "a device that didn't say", w = by.get(who) || { name: who, count: 0, last: 0 };
+        w.count++; w.last = Math.max(w.last, n.at || n.mtime || 0);
+        by.set(who, w);
+        todo.push(...(kids.get(n.id) || []));
+      }
+      folders.push({ path: "/" + top.name, made_by: top.by || "a device that didn't say", made_at: top.at || top.mtime || 0,
+                     writers: [...by.values()].sort((a, b) => b.last - a.last) });
+    }
+    return { folders };
+  };
   GET["chat/devices"] = async () => {
     const ds = (await devices()).filter((d) => d.chat);
     const items = await Promise.all(ds.map(async (d) => {
@@ -1265,7 +1290,7 @@
     await drop(objects);
   }
 
-  const PASS = /^(account|account\/delete|changelog|vault(\/.*)?|findx(\/.*)?)$/;        // about the account itself (and FindX's sealed relay): the server's to answer
+  const PASS = /^(account|account\/delete|account\/devices(\/.*)?|changelog|vault(\/.*)?|findx(\/.*)?)$/;        // about the account itself (and FindX's sealed relay): the server's to answer
 
   async function answer(url, init) {
     const name = url.pathname.slice(5).replace(/\/+$/, ""), method = (init.method || "GET").toUpperCase();

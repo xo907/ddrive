@@ -5063,7 +5063,57 @@ async function discordSection(into) {
       (s.connected || (s.totals && s.totals.messages)) && row("Messages", s.locked ? `${s.folder} is locked in this browser. Unlock it with the padlock at the top.`
           : `${s.totals ? plural(s.totals.messages, "message") : "Nothing"} kept in ${s.folder} on your drive: encrypted, on every device, at no cost.`,
           h("a", { class: "btn ghost small", href: "#/messages" }, "Open"))),
-    window.E2E && E2E.active && discordDevices());
+    window.E2E && E2E.active && discordDevices(),
+    window.E2E && E2E.active && accountDevices());
+}
+
+/** An end-to-end account: every device that uses it (as the server sees them: accountdevices.py), who wrote
+ *  into a /Discord that isn't locked, and keeping a device out. */
+let devicesTimer = null;
+function accountDevices() {
+  const box = h("div", {}, h("h2", {}, "Devices using this account"), h("p", { class: "muted small" }, "Looking…"));
+  const draw = async () => {
+    clearTimeout(devicesTimer);
+    const [r, w] = await Promise.all([api("/api/account/devices").catch((e) => ({ error: e.message })), api("/api/chat/writers").catch(() => null)]);
+    if (!box.isConnected && box.parentNode) return;
+    if (r.error) return box.replaceChildren(h("h2", {}, "Devices using this account"), h("p", { class: "muted small" }, r.error));
+    const kinds = { computer: "DDrive", browser: "Browser", phone: "Phone app", older: "Older DDrive" };
+    const rows = (r.devices || []).map((d) => {
+      const bits = [d.version ? `DDrive ${d.version}` : "", d.addr, `seen ${ago(d.seen)}`, d.last_write ? `last wrote ${ago(d.last_write)}` : "hasn't written anything",
+                    d.refused && !d.blocked ? `kept from writing ${ago(d.refused)}` : ""].filter(Boolean);
+      return h("div", { class: "set-row" },
+        h("div", { class: "set-text" },
+          h("div", { class: "t" }, d.name, h("span", { class: "tag", style: "margin-left:8px" }, kinds[d.kind] || d.kind),
+            d.me && h("span", { class: "tag", style: "margin-left:6px" }, "This browser"),
+            d.blocked && h("span", { class: "tag warn-text", style: "margin-left:6px" }, "Signed out")),
+          h("div", { class: "s" }, bits.join(" · ")),
+          d.kind === "older" && h("div", { class: "s warn-text" }, "Runs a DDrive from before 3.16.5, so it doesn't say which computer it is: the address is where it is. Update it (git pull), or sign it out.")),
+        h("div", { class: "set-ctl" },
+          !d.me && h("button", { class: "btn ghost small" + (d.blocked ? "" : " danger"), onclick: async () => {
+            if (!d.blocked && !await ask({ title: `Sign out ${d.name}?`, ok: "Sign out", danger: true,
+              text: "The server refuses everything it asks from now on: it can't read or change anything in this account until you let it back in here. (It keeps its own copy of the 24 words; this keeps your own devices in order, it doesn't stop somebody who has the words.)" })) return;
+            if (await attempt(() => api("/api/account/devices/block", { key: d.key, on: !d.blocked }), d.blocked ? `${d.name} can use the account again` : `${d.name} is signed out`)) draw();
+          } }, d.blocked ? "Let back in" : "Sign out"),
+          !d.me && !d.blocked && Date.now() / 1000 - d.seen > 86400 && h("button", { class: "btn ghost small", onclick: async () => {
+            if (await attempt(() => api("/api/account/devices/forget", { key: d.key }))) draw(); } }, "Forget")));
+    });
+    const writers = ((w && w.folders) || []).map((f) => h("div", { class: "set-row" },
+      h("div", { class: "set-text" },
+        h("div", { class: "t" }, `${f.path} (not locked)`),
+        h("div", { class: "s" }, `Made by ${f.made_by}${f.made_at ? " " + ago(f.made_at) : ""}. Written into by: ` + f.writers.map((x) => `${x.name} (${plural(x.count, "item")}, last ${ago(x.last)})`).join(", ") + "."))));
+    box.replaceChildren(h("h2", {}, "Devices using this account"),
+      h("p", { class: "muted small" }, "Every device that used this account lately, as the server sees it: what it is, where from, and when it last wrote something. Newest writer first."),
+      ...(writers.length ? [h("p", { class: "muted small", style: "margin:12px 0 4px" }, "Who writes into a Discord folder that isn't locked (each change says which device made it):"), h("div", { class: "settings" }, ...writers)] : []),
+      h("div", { class: "settings" },
+        h("div", { class: "set-row" },
+          h("div", { class: "set-text" }, h("div", { class: "t" }, "Refuse older computers"),
+            h("div", { class: "s" }, "Computers with a DDrive from before 3.16.5 can still read, but can't change anything in this account (they make the Discord folder again after it was locked). Browsers and the phone app aren't affected.")),
+          h("div", { class: "set-ctl" }, switchEl(r.strict, async (on) => { await attempt(() => api("/api/account/devices/strict", { on }), on ? "Older computers can't change anything now" : "Older computers can change things again"); draw(); }, "Refuse older computers"))),
+        ...rows));
+    devicesTimer = setTimeout(() => { if (box.isConnected) draw(); }, 15000);
+  };
+  draw();
+  return box;
 }
 
 /** An end-to-end account: each of its computers keeps its own Discord login. Which ones are logged in, and Unlink. */

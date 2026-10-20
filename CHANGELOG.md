@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.16.5 (2026-10-20)
+
+- **Devices using this account** (Settings of an end-to-end encrypted account, under Discord): every device that used the account lately as the server sees it, newest writer first: its name and DDrive version, where it is (its address), when it was last seen and when it last wrote something. A DDrive or Lite from before 3.16.5 doesn't say which computer it is, so it shows as “A computer with DDrive older than 3.16.5” with its address: the way to find a forgotten computer that still runs old code.
+- **Who writes into a Discord folder that isn't locked:** for each /Discord in the clear, which device made it and when, and which devices wrote into it (every change in the account says which device made it).
+- **Sign out a device:** the server refuses everything it asks until you let it back in. **Refuse older computers:** computers with a DDrive from before 3.16.5 can still read, but can't change anything in the account (browsers and the phone app aren't affected). This keeps your own devices in order; it doesn't stop somebody who has the 24 words.
+- DDrive Lite says which computer it is (an id of its own, its name and version) on every request to the host.
+
 ## 3.16.4 (2026-10-20)
 
 - **A locked Discord folder really stays locked now, also with a password-only lock.** The computer that saves Discord messages could only tell that a locked /Discord was there when the 24 words open the lock, or when the locked folder had the id a folder called Discord gets when it is first made. The /Discord that ends up locked is usually one that had come back (the first one was locked earlier), with an id of its own, so with a password-only lock it made yet another one. A locked folder now carries a tag made from its name and where it is (like the ids folders get already: it shows nothing more), so every computer of the account knows a locked folder of that name is there without opening it, and doesn't make one in the clear next to it, nor save into a /Discord in the clear that an earlier version made. Locks made before this get their tag the first time you unlock them in the dashboard.

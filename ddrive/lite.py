@@ -80,6 +80,7 @@ class HostClient:
         self.address = f"{u.scheme}://{u.netloc}"
         self.phrase, self.cookie = phrase, cookie
         self.auth = auth                     # an end-to-end encrypted account signs in with this (vault.py); its words stay here
+        self.ident = {}                      # who this computer is (X-DD-Device, X-DD-Name, X-DD-Version: client_from)
         self.timeout = timeout
         self._local = threading.local()
         self._login_lock = threading.Lock()
@@ -106,7 +107,7 @@ class HostClient:
     def request(self, method, path, body=None, headers=None, raw=False):
         """The answer's body (or, with `raw`, the open answer, which the caller reads to the end)."""
         for attempt in (0, 1):
-            h = {"Cookie": f"dd_session={self.cookie}", **(headers or {})}
+            h = {"Cookie": f"dd_session={self.cookie}", **self.ident, **(headers or {})}
             if method == "POST":
                 h["X-DD"] = "1"
             resp = self._send(method, path, body, h)
@@ -754,8 +755,14 @@ def client_from(s):
         # An end-to-end encrypted account: the words stay on this computer. The host gets the sign-in
         # key made from them, and after that only what was sealed here (vault.py).
         from . import vault, words
-        return HostClient(s["host"], cookie=secret.get("cookie", ""), auth=vault.auth_key(words.phrase_to_key(secret["phrase"])).hex())
-    return HostClient(s["host"], secret["phrase"], secret.get("cookie", ""))
+        client = HostClient(s["host"], cookie=secret.get("cookie", ""), auth=vault.auth_key(words.phrase_to_key(secret["phrase"])).hex())
+    else:
+        client = HostClient(s["host"], secret["phrase"], secret.get("cookie", ""))
+    from . import __version__, litesync
+    # Who this is, for the account's list of its devices (accountdevices.py on the host: it can be signed out there).
+    client.ident = {"X-DD-Device": s.get("device") or litesync.update_state()["id"], "X-DD-Name": device_name(),
+                    "X-DD-Version": __version__}
+    return client
 
 
 def vault_from(s):

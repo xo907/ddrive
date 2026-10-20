@@ -196,6 +196,29 @@ class BrowserTest(helpers.DriveTest):
         self.assertGreater(self.web.computers.at, 0)
         self.assertEqual(self.errors, [])
 
+    def test_an_accounts_devices_and_who_writes_into_discord(self):
+        self.sign_up_e2e()
+        p = self.page
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Discord"})["status"], 200)
+        aid = next(iter(self.web.accounts._recs))
+        self.web.account_devices.heard(aid, {}, "192.168.1.50", "POST", "/api/vault/log")     # an old computer somewhere
+        p.goto(self.base + "/#/settings")
+        p.wait_for_selector("text=Devices using this account")
+        p.wait_for_selector("text=Discord (not locked)")
+        box = p.locator("h2:has-text('Devices using this account') >> xpath=..")
+        text = box.inner_text()
+        self.assertIn("This browser", text)
+        self.assertIn("192.168.1.50", text)
+        self.assertIn("Made by the dashboard", text)
+        if os.environ.get("DD_SHOT"):
+            box.screenshot(path=os.environ["DD_SHOT"])
+        p.once("dialog", lambda d: d.accept())
+        box.locator(".set-row:has-text('192.168.1.50') button:has-text('Sign out')").click()
+        p.click("#dialog-ok")
+        p.wait_for_selector("text=Let back in")
+        self.assertIn("u:192.168.1.50", self.web.account_devices._data[aid]["blocked"])
+        self.assertEqual(self.errors, [])
+
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)

@@ -818,6 +818,50 @@ const DDV = ctx.DDV;
         self.assertTrue(old.sync()._locked_here("", "Discord"))
         self.assertFalse(old._locked_here("", "Discord old"))
 
+    def test_the_devices_that_use_the_account_and_keeping_one_out(self):
+        old = self.device                                               # a DDrive from before 3.16.5: says nothing of itself
+        pi = vault.Vault(lite.HostClient(self.address, auth=self.auth), self.key)
+        pi.client.ident = {"X-DD-Device": "pi-id", "X-DD-Name": "pi-xo", "X-DD-Version": "3.16.5"}
+        pi.sync()
+        pi.mkdir("/from-the-pi")
+        old.sync().mkdir("/Discord")
+        got = pi.client._json("/api/account/devices")
+        devs = {d["key"]: d for d in got["devices"]}
+        self.assertEqual((devs["d:pi-id"]["name"], devs["d:pi-id"]["version"], devs["d:pi-id"]["kind"]), ("pi-xo", "3.16.5", "computer"))
+        self.assertTrue(devs["d:pi-id"]["me"])
+        older = devs["u:127.0.0.1"]
+        self.assertEqual((older["kind"], older["addr"]), ("older", "127.0.0.1"))
+        self.assertGreater(older["last_write"], 0)                     # it wrote: the newest writer comes first
+        self.assertEqual(got["devices"][0]["key"], "u:127.0.0.1")
+        # Older computers may read, but not change anything.
+        pi.client._json("/api/account/devices/strict", {"on": True})
+        with self.assertRaises(lite.HostError) as e:
+            old.sync().mkdir("/Discord again")
+        self.assertEqual(e.exception.status, 403)
+        self.assertIn("3.16.5", str(e.exception))
+        self.assertEqual(sorted(n["name"] for n in old.sync().list("/")), ["Discord", "from-the-pi"])
+        pi.mkdir("/still-fine")
+        pi.client._json("/api/account/devices/strict", {"on": False})
+        old.mkdir("/Discord again")
+        # Signed out: nothing at all, until it is let back in.
+        with self.assertRaises(lite.HostError):
+            pi.client._json("/api/account/devices/block", {"key": "d:pi-id"})          # (not itself)
+        old.client._json("/api/account/devices/block", {"key": "d:pi-id"})
+        with self.assertRaises(lite.HostError) as e:
+            pi.sync()
+        self.assertIn("signed out", str(e.exception))
+        self.assertTrue(next(d for d in old.client._json("/api/account/devices")["devices"] if d["key"] == "d:pi-id")["blocked"])
+        old.client._json("/api/account/devices/block", {"key": "d:pi-id", "on": False})
+        pi.sync()
+        # A browser and the phone app are told apart by what they say they are.
+        from ddrive import accountdevices
+        self.assertEqual(accountdevices.describe({"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130 Safari/537 Edg/130"}, "1.2.3.4")[1]["name"], "Edge on Windows")
+        self.assertEqual(accountdevices.describe({"User-Agent": "Dalvik/2.1.0 (Linux; U; Android 14)"}, "1.2.3.4")[1]["kind"], "phone")
+        # The list is kept when the drive starts again.
+        self.web.account_devices.close()
+        kept = accountdevices.AccountDevices(self.web.account_devices.path)
+        self.assertIn("d:pi-id", {d["key"] for d in kept.listing(next(iter(kept._data)))["devices"]})
+
     def test_a_locked_entry_moves_to_another_account_sealed(self):
         nodes = {"L": {"id": "L", "parent": vault.LOCKS, "lock": {"v": 1}},
                  "f": {"id": "f", "parent": vault.LOCKED, "home": "", "in": "L", "box": "x", "objs": ["o1"]},

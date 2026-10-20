@@ -43,6 +43,7 @@ from .index import ROOT_ID, new_uid
 from . import legal, monitor, passkeys, resources, words
 from .shares import Shares
 from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
+from .accountdevices import AccountDevices, describe as describe_device
 from .bookmarks import BookmarkHandlers
 from .chatlog import ChatHandlers
 from .findx import Relay as FindXRelay
@@ -86,9 +87,9 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete 
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("""status account changelog queue lite/update vault vault/log vault/object vault/pending vault/sync vault/shares
+E2E_GET = frozenset("""status account account/devices changelog queue lite/update vault vault/log vault/object vault/pending vault/sync vault/shares
     vault/move vault/move/peer vault/move/list""".split())
-E2E_POST = frozenset("""logout account/delete vault/log vault/snapshot vault/object vault/delete
+E2E_POST = frozenset("""logout account/delete account/devices/block account/devices/strict account/devices/forget vault/log vault/snapshot vault/object vault/delete
     vault/move/open vault/move/send vault/move/finish vault/move/cancel
     vault/share vault/share/update vault/share/revoke vault/share/collect
     vault/sync/jobs vault/sync/tell vault/sync/ask vault/sync/forget
@@ -226,6 +227,7 @@ class WebServer:
         self.findx = FindXRelay(path=os.path.join(self.cfg.resolved_data_dir, "findx-relay.json"))   # FindX: your phones' sealed reports and commands, passed on unread (findx.py)
         self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
         self.updates = updates.Updates(self.cfg)    # whether a newer DDrive is out, and updating to it (updates.py)
+        self.account_devices = AccountDevices(os.path.join(self.cfg.resolved_data_dir, "account-devices.json"))   # who uses an end-to-end account (accountdevices.py)
         self.computers = updates.Computers(os.path.join(self.cfg.resolved_data_dir, "lite-update.json"))   # DDrive Lite computers: update them all
 
     # ------------------------------------------------------------ lifecycle
@@ -269,6 +271,7 @@ class WebServer:
         self.findx_circles.close()
         self.lite.close()
         self.sealed.close()
+        self.account_devices.close()
         try:
             self.httpd.shutdown()
             self.httpd.server_close()
@@ -915,6 +918,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                                             "end-to-end encrypted account to carry on." if retired and method != "GET"
                                        else "Only the owner of this drive can do that.")
                 self._retired = retired
+                if e2e:                          # which device asks, and whether it is kept out (accountdevices.py)
+                    refused = self.server.app.account_devices.heard(who, self.headers, self._addr(), method, route)
+                    if refused:
+                        return self._error(403, refused)
                 if (e2e and method == "POST" and (route.startswith("/api/vault/") or route == "/api/account/delete")
                         and not route.startswith("/api/vault/move/") and self.server.app.moves.moving(who)):
                     return self._error(423, "This account is moving into another one: nothing in it can change now.")
@@ -3364,6 +3371,35 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             os.kill(os.getpid(), signal.SIGTERM)  # the usual way down; cli.cmd_mount starts it again (os.execv)
         threading.Thread(target=run, name="Update", daemon=True).start()
         return up.updating
+
+    # ------------------------------------------------------------ devices using an end-to-end account (accountdevices.py)
+    def _account_devices(self):
+        if self._acct is None or not self._e2e:
+            raise ApiError(400, "This is for end-to-end encrypted accounts.")
+        return self.server.app.account_devices, self._acct.id, describe_device(self.headers, self._addr())[0]
+
+    def _get_api_account_devices(self):
+        devs, aid, me = self._account_devices()
+        self._json(devs.listing(aid, me))
+
+    def _post_api_account_devices_block(self):
+        devs, aid, me = self._account_devices()
+        body = self._body_json()
+        key = str(body.get("key") or "")
+        if key == me:
+            raise ApiError(400, "That is this browser: sign it out with Sign out instead.")
+        devs.block(aid, key, bool(body.get("on", True)))
+        self._json({"ok": True})
+
+    def _post_api_account_devices_strict(self):
+        devs, aid, me = self._account_devices()
+        devs.set_strict(aid, bool(self._body_json().get("on")))
+        self._json({"ok": True})
+
+    def _post_api_account_devices_forget(self):
+        devs, aid, me = self._account_devices()
+        devs.forget(aid, str(self._body_json().get("key") or ""))
+        self._json({"ok": True})
 
     def _get_api_lite_update(self):
         """A running DDrive Lite asks this about once a minute: whether it was told to update. It says
