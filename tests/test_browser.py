@@ -219,6 +219,39 @@ class BrowserTest(helpers.DriveTest):
         self.assertIn("u:192.168.1.50", self.web.account_devices._data[aid]["blocked"])
         self.assertEqual(self.errors, [])
 
+    def test_a_locked_folder_and_the_one_that_came_back_are_merged(self):
+        p = self.page
+        self.sign_up_e2e()
+        for folder in ("/Discord", "/Discord/Live"):
+            self.assertEqual(self.api("POST", "/api/mkdir", {"path": folder})["status"], 200)
+        self.upload_text("/Discord/Live/a.jsonl", "A")
+        self.upload_text("/Discord/note.txt", "locked one")
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Discord", "password": "blue whale"})["status"], 200)
+        self.api("POST", "/api/locks/lock")
+        for folder in ("/Discord", "/Discord/Live"):                            # (it came back, as an older computer made it)
+            self.assertEqual(self.api("POST", "/api/mkdir", {"path": folder})["status"], 200)
+        self.upload_text("/Discord/Live/b.jsonl", "B")
+        self.upload_text("/Discord/note.txt", "the one that came back")
+        self.api("POST", "/api/locks/unlock", {"password": "blue whale"})
+        self.assertEqual(self.names(), ["Discord", "Discord (locked)"])
+        p.goto(self.base + "/#/files/")
+        p.wait_for_selector("text=Discord (locked)")
+        for path in ("/Discord", "/Discord (locked)"):
+            p.locator(f'.row[data-path="{path}"] .row-cb').click()
+        p.locator('.row[data-path="/Discord"]').click(button="right")
+        p.click("text=Merge the 2 folders…")
+        p.wait_for_selector("dialog[open] >> text=What moves into a locked folder is locked with it")
+        self.assertTrue(p.locator("dialog[open] input[type=radio]").nth(1).is_checked())       # the locked one is kept
+        p.click("dialog[open] button:has-text('Merge')")
+        p.wait_for_selector("text=Merged into Discord (locked)")
+        self.assertEqual(self.names(), ["Discord"])
+        self.assertEqual(self.names("/Discord"), ["Live", "note (2).txt", "note.txt"])
+        self.assertEqual(self.names("/Discord/Live"), ["a.jsonl", "b.jsonl"])
+        self.assertEqual(self.download("/Discord/Live/b.jsonl"), ("b.jsonl", b"B"))
+        self.api("POST", "/api/locks/lock")
+        self.assertEqual(self.names(), [])                                       # all of it locked, the one that came back too
+        self.assertEqual(self.errors, [])
+
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)

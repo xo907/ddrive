@@ -77,7 +77,7 @@ NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave
 ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
     contacts contacts/export locks starred recent history home insights bookmarks changelog
     sync sync/tree sync/browse upload/part queue lite/update""".split())
-ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move delete share shares/update shares/revoke
+ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move merge delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
     bookmarks/save bookmarks/refresh bookmarks/delete
@@ -2653,6 +2653,50 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         self._node(posixpath.dirname(dst), want_dir=True)
         self.drive.fs.rename(src, dst)
         self._json({"ok": True, "path": dst})
+
+    def _post_api_merge(self):
+        """Two folders made one: what is in `from` goes into `into` (folders of one name merged in turn, a file
+        that is there already the same kept once, another of the same name kept as "name (2)"); `from`, empty
+        then, is removed."""
+        body = self._body_json()
+        src, sn = self._node(body.get("from"), want_dir=True)
+        dst, dn = self._node(body.get("into"), want_dir=True)
+        if ROOT_ID in (sn["id"], dn["id"]) or sn["id"] == dn["id"]:
+            raise ApiError(400, "Pick two different folders")
+        if dst.lower().startswith(src.lower() + "/") or src.lower().startswith(dst.lower() + "/"):
+            raise ApiError(400, "One of them is inside the other")
+        fs, idx = self.drive.fs, self.drive.index
+        stats = {"moved": 0, "merged": 0, "same": 0, "renamed": 0}
+
+        def walk(s, s_node, d):
+            taken = {c["name"]: c for c in idx.children(idx.resolve(d)["id"])}
+            for c in list(idx.children(s_node["id"])):
+                name, sp = c["name"], posixpath.join(s, c["name"])
+                same = taken.get(name)
+                if same is None:
+                    fs.rename(sp, posixpath.join(d, name))
+                    taken[name] = c
+                    stats["moved"] += 1
+                elif c["is_dir"] and same["is_dir"]:
+                    walk(sp, c, posixpath.join(d, name))
+                    fs.rmdir(sp)
+                    stats["merged"] += 1
+                elif not c["is_dir"] and not same["is_dir"] and c["size"] == same["size"] and c["mtime"] == same["mtime"]:
+                    fs.unlink(sp)                # (the same file: kept once; an earlier version stays where versions are kept)
+                    stats["same"] += 1
+                else:
+                    stem, ext = (name, "") if c["is_dir"] else posixpath.splitext(name)
+                    if not stem:
+                        stem, ext = name, ""
+                    i = 2
+                    while f"{stem} ({i}){ext}" in taken:
+                        i += 1
+                    fs.rename(sp, posixpath.join(d, f"{stem} ({i}){ext}"))
+                    taken[f"{stem} ({i}){ext}"] = c
+                    stats["renamed"] += 1
+        walk(src, sn, dst)
+        fs.rmdir(src)
+        self._json(dict(stats, ok=True))
 
     def _post_api_delete(self):
         path, node = self._node(self._body_json().get("path"))

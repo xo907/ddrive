@@ -431,6 +431,7 @@ function itemMenu(it) {
     "-",
     { label: "Rename…", icon: "rename", run: () => rename(it) },
     { label: "Move to…", icon: "move", run: () => moveTo(it) },
+    mergePair(it) && { label: "Merge the 2 folders…", icon: "move", run: () => mergeDialog(mergePair(it)) },
     !it.dir && { label: "Duplicate", icon: "copy", run: () => duplicate(it) },
     !it.dir && { label: "Earlier versions", icon: "history", run: () => openItem(it, "versions") },
     { label: "Details", icon: "info", run: () => openItem(it) },
@@ -894,7 +895,39 @@ function syncSel() {
         else download("/api/zip" + q({ paths: JSON.stringify(paths) }), "DDrive.zip");
       } }, "Download"),
       h("button", { class: "btn ghost small", onclick: () => moveMany([...sel]) }, "Move to…"),
+      mergePair() && h("button", { class: "btn ghost small", onclick: () => mergeDialog(mergePair()) }, "Merge"),
       h("button", { class: "btn danger small", onclick: () => deleteMany([...sel]) }, "Delete")));
+}
+
+/** The two folders that are selected (with `it` among them, when given), or null. */
+function mergePair(it) {
+  if (route.name !== "files" || sel.size !== 2 || (it && !sel.has(it.path))) return null;
+  const two = [...sel].map((p) => listed.find((x) => x.path === p));
+  return two.every((x) => x && x.dir) ? two : null;
+}
+/** Two folders made one: which of them stays (a locked one, if one is: what comes in is sealed with its lock). */
+function mergeDialog(two) {
+  let keep = two.findIndex((x) => x.locked);
+  if (keep < 0) keep = 0;
+  const label = (x) => x.name + (x.locked ? " (locked)" : "");
+  const pick = h("div", { class: "settings" }, two.map((x, i) => h("label", { class: "check-row", style: "padding:8px 12px" },
+    h("input", { type: "radio", name: "merge-keep", checked: i === keep, onchange: () => { keep = i; } }),
+    h("span", {}, "Keep ", h("b", {}, label(x)), h("span", { class: "muted" }, "  " + x.path)))));
+  const go = h("button", { class: "btn", type: "button", onclick: async () => {
+    const into = two[keep], from = two[1 - keep];
+    go.disabled = true; go.textContent = "Merging…";
+    const r = await attempt(() => api("/api/merge", { from: from.path, into: into.path }));
+    go.disabled = false; go.textContent = "Merge";
+    if (!r) return;
+    m.close(); sel.clear(); syncSel();
+    toast(`Merged into ${label(into)}: ${plural(r.moved, "item")} moved` + (r.merged ? `, ${plural(r.merged, "folder")} of the same name merged` : "")
+      + (r.same ? `, ${plural(r.same, "copy", "copies")} that were the same kept once` : "") + (r.renamed ? `, ${plural(r.renamed, "item")} renamed “(2)”` : ""));
+    render();
+  } }, "Merge");
+  const m = modal("Merge the 2 folders",
+    h("p", { class: "muted", style: "margin:0 0 12px" }, "Everything in the other folder moves into the one you keep. Folders of the same name are merged the same way; a file that is in both the same is kept once, and two different files of one name are both kept (one as “name (2)”). The emptied folder goes to Deleted."
+      + (two.some((x) => x.locked) ? " What moves into a locked folder is locked with it." : "")),
+    pick, h("div", { class: "modal-actions" }, go));
 }
 
 function clickSelect(e, it) {

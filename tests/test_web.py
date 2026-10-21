@@ -268,6 +268,26 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("POST", "/api/settings", {"thumbs_store": "server"})[0], 200)
         self.assertEqual(self.req("POST", other, body=b"\x89PNG small")[0], 200)
 
+    def test_two_folders_are_merged(self):
+        self.login()
+        d = self.d
+        for folder in ("/A", "/A/sub", "/B", "/B/sub", "/B/only-b"):
+            d.fs.mkdir(folder, 0o755)
+        self.write(d, "/A/sub/one.txt", b"one")
+        self.write(d, "/A/note.txt", b"from A")
+        self.write(d, "/B/sub/two.txt", b"two")
+        self.write(d, "/B/note.txt", b"from B, longer")
+        self.assertEqual(self.req("POST", "/api/merge", {"from": "/A", "into": "/A/sub"})[0], 400)       # (not into itself)
+        status, _, body = self.req("POST", "/api/merge", {"from": "/B", "into": "/A"})
+        self.assertEqual(status, 200, body)
+        got = json.loads(body)
+        self.assertEqual((got["moved"], got["merged"], got["renamed"]), (2, 1, 1))     # only-b and two.txt; sub; note.txt
+        names = lambda path: sorted(c["name"] for c in d.index.children(d.index.resolve(path)["id"]))
+        self.assertEqual(names("/A"), ["note (2).txt", "note.txt", "only-b", "sub"])
+        self.assertEqual(names("/A/sub"), ["one.txt", "two.txt"])
+        self.assertIsNone(d.index.resolve("/B"))
+        self.assertEqual(d.fs.read_file(d.index.resolve("/A/note (2).txt")["id"], 0, 100), b"from B, longer")
+
     def test_the_status_says_when_files_changed(self):
         """Pages that list files look again when `rev` went up, instead of fetching their lists on a timer."""
         self.login()

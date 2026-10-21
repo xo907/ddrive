@@ -476,6 +476,39 @@
       await v._send({ op: "put", id, parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now(), at: now(), by: ME });
       return { ok: true, path };
     },
+    /** Two folders made one: what is in `from` goes into `into` (folders of one name merged in turn, a file that
+     *  is there already the same kept once, another of the same name kept as "name (2)"), and `from`, empty,
+     *  goes to Deleted. Into or out of a locked folder, what moves is sealed with its lock, or opened, as ever. */
+    async merge(b) {
+      const from = at(b.from, "dir"), into = at(b.into, "dir");
+      if (!from.id || !into.id || from.id === into.id) throw new Fail(400, "Pick two different folders");
+      if (under(from.id).includes(into.id) || under(into.id).includes(from.id)) throw new Fail(400, "One of them is inside the other");
+      if (into.lock && under(from.id).some((id) => id !== from.id && (v.nodes.get(id) || {}).lockRoot))
+        throw new Fail(400, "There is a locked folder in the other one: a locked folder can't go into another. Remove that lock first.");
+      const ops = [], stats = { moved: 0, merged: 0, same: 0, renamed: 0 }, t = now();
+      const real = (n) => n._name || n.name;
+      const gone = (n, path) => ops.push({ op: "set", id: n.id, fields: { trash: { at: t, path } } });
+      const walk = (src, dst, srcPath) => {
+        const taken = new Map(v.children(dst.id).map((n) => [real(n), n]));
+        for (const c of v.children(src.id)) {
+          const name = real(c), same = taken.get(name), path = srcPath + "/" + name;
+          if (!same) { ops.push({ op: "move", id: c.id, parent: dst.id, name }); taken.set(name, c); stats.moved++; }
+          else if (c.dir && same.dir && !c.lockRoot && !same.lockRoot) { walk(c, same, path); gone(c, path); stats.merged++; }
+          else if (!c.dir && !same.dir && (c.obj === same.obj || (c.size === same.size && c.mtime === same.mtime))) { gone(c, path); stats.same++; }
+          else {
+            const dot = name.lastIndexOf("."), stem = c.dir || dot <= 0 ? name : name.slice(0, dot), ext = c.dir || dot <= 0 ? "" : name.slice(dot);
+            let i = 2;
+            while (taken.has(`${stem} (${i})${ext}`)) i++;
+            ops.push({ op: "move", id: c.id, parent: dst.id, name: `${stem} (${i})${ext}` });
+            taken.set(`${stem} (${i})${ext}`, c); stats.renamed++;
+          }
+        }
+      };
+      walk(from, into, clean(b.from));
+      gone(from, clean(b.from));
+      await v._sendAll(ops);
+      return { ok: true, ...stats };
+    },
     async move(b) {
       const n = at(b.from), to = clean(b.to), cut = to.lastIndexOf("/");
       if (!n.id) throw new Fail(400, "The account itself can't be moved");

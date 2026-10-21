@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.17.0 (2026-10-20)
+
+- **Merge two folders.** Select two folders (the checkboxes, or Ctrl-click) and choose **Merge the 2 folders…** in the right-click menu, or **Merge** in the selection bar. You pick which one stays (a locked one, if one of them is). Everything in the other one moves into it: folders of the same name are merged the same way, a file that is in both the same is kept once, and two different files of one name are both kept, one as “name (2)”. The emptied folder goes to Deleted. What moves into a locked folder is locked with it, so a /Discord that came back and the locked one become one locked folder in one step (unlock the locked one first, so that both show).
+
 ## 3.16.5 (2026-10-20)
 
 - **Devices using this account** (Settings of an end-to-end encrypted account, under Discord): every device that used the account lately as the server sees it, newest writer first: its name and DDrive version, where it is (its address), when it was last seen and when it last wrote something. A DDrive or Lite from before 3.16.5 doesn't say which computer it is, so it shows as “A computer with DDrive older than 3.16.5” with its address: the way to find a forgotten computer that still runs old code.
