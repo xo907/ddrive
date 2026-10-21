@@ -1174,12 +1174,15 @@
   // what it would ask a server, through the server in sealed messages, and shows the sealed answers.
   const NO_COMPUTER = "Messages need one of your own computers to be on: DDrive or DDrive Lite, signed in to this account, with folder syncing turned on. " +
                       "It reads Discord and seals what it keeps; the server isn't allowed to see any of it.";
-  let chatDevice = "";
+  // Which computer this page's Messages asks: kept in this browser, so that a reload asks the same one (each computer
+  // keeps its own logging choices: another one after a reload looked like the choices were forgotten).
+  let chatDevice = (() => { try { return localStorage.getItem("dd-chat-device") || ""; } catch (e) { return ""; } })();
+  const keepChatDevice = (id) => { chatDevice = id || ""; try { localStorage.setItem("dd-chat-device", chatDevice); } catch (e) { /* this visit */ } };
   async function chatCall(method, name, query, body, device = null, wait = 55) {
     const ds = (await devices()).filter((d) => d.online && d.chat);
     const d = device ? ds.find((x) => x.id === device) : ds.find((x) => x.id === chatDevice) || ds[0];
     if (!d) return null;
-    if (!device) chatDevice = d.id;
+    if (!device && !chatDevice) keepChatDevice(d.id);         // (the first one: one that is off for a while is not forgotten)
     const r = await DDV.call("/api/vault/sync/ask", { method: "POST", json: { device: d.id, wait,
       sealed: await DDV.sealMessage(v.meta, { do: "chat", method, route: name, query: Object.fromEntries(query || []), body }) } });
     return DDV.openMessage(v.meta, r.sealed);
@@ -1244,7 +1247,7 @@
     return { ok: true };
   };
   /** Which computer this page's Messages asks. */
-  POST["chat/devices/use"] = async (b) => { chatDevice = String(b.device || "") || null; return { ok: true }; };
+  POST["chat/devices/use"] = async (b) => { keepChatDevice(String(b.device || "")); return { ok: true }; };
 
   /** Opening an attachment: from Discord while it is still there, else the sealed copy in the account. */
   async function chatOpen(query) {

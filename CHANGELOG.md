@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.17.1 (2026-10-21)
+
+- **Channels picked for the Messages logger are all kept.** Ticking channels one after another, the page sent the whole choice each time, but the first answer replaced the choice the picker on screen kept changing, and answers (from the computer that does the logging, through the server) came back in any order: some ticks were lost, and a reload showed them unticked. Now one save goes at a time, each with everything chosen by then.
+- An end-to-end encrypted account's Messages page keeps asking the same computer after a reload (it is remembered in the browser): each computer keeps its own logging choices, so asking another one looked like they were forgotten. **Use this one** in Settings still switches.
+
 ## 3.17.0 (2026-10-20)
 
 - **Merge two folders.** Select two folders (the checkboxes, or Ctrl-click) and choose **Merge the 2 folders…** in the right-click menu, or **Merge** in the selection bar. You pick which one stays (a locked one, if one of them is). Everything in the other one moves into it: folders of the same name are merged the same way, a file that is in both the same is kept once, and two different files of one name are both kept, one as “name (2)”. The emptied folder goes to Deleted. What moves into a locked folder is locked with it, so a /Discord that came back and the locked one become one locked folder in one step (unlock the locked one first, so that both show).

@@ -5370,10 +5370,23 @@ function drawLive(body) {
       h("div", { class: "ch-cta" }, h("button", { class: "btn", onclick: () => discordLogin(render) }, "Log in with Discord"))));
   }
   const rules = chat.logger.rules;
-  const save = async (patch) => {
+  // One save at a time, each with all that is chosen by then: answers come back (from the computer that does the
+  // logging, through the server) in any order, and quick ticks one after another used to lose some. What the
+  // answer says is taken in, except the choice of conversations: the picker on screen keeps changing that one.
+  let saving = null, wanted = null;
+  const save = (patch) => {
     Object.assign(rules, patch);
-    const r = await attempt(() => api("/api/chat/logger/rules", rules));
-    if (r) Object.assign(rules, r.rules);
+    wanted = JSON.parse(JSON.stringify(rules));
+    saving = saving || (async () => {
+      while (wanted) {
+        const body = wanted;
+        wanted = null;
+        const r = await attempt(() => api("/api/chat/logger/rules", body));
+        if (r && r.rules && !wanted) for (const [k, val] of Object.entries(r.rules)) if (k !== "selection") rules[k] = val;
+      }
+      saving = null;
+    })();
+    return saving;
   };
   const pill = h("span", { class: "ch-status" });
   const toggle = h("button", { class: "btn small", type: "button", onclick: async () => {

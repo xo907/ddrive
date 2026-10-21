@@ -252,6 +252,44 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(self.names(), [])                                       # all of it locked, the one that came back too
         self.assertEqual(self.errors, [])
 
+    def test_the_channels_picked_for_the_logger_are_all_kept(self):
+        """Ticking channels one after another, quicker than the answers come back (from the account's computer,
+        through the server, in any order): every tick is saved, and the last one saved is what is on screen."""
+        self.sign_in_owner()
+        got = self.page.evaluate("""async () => {
+            const saved = [];
+            window.api = async (path, body) => {
+                if (path === "/api/chat/logger/rules") {
+                    const sent = JSON.parse(JSON.stringify(body));
+                    saved.push(sent);
+                    await new Promise((r) => setTimeout(r, [300, 50, 200, 20][saved.length % 4]));     // (answers out of order)
+                    return { rules: sent };
+                }
+                return { messages: [] };
+            };
+            chat = { connected: true, logger: { status: "connected", rules: { scope: "custom", selection: { dms: {}, guilds: {} }, keywords: [],
+                     captureMine: true, captureOthers: true, allDms: false, downloadAttachments: false, attachmentsOnly: false } } };
+            chatDir = { guilds: [{ id: "g1", name: "Server" }], dms: [] };
+            chatChannels.set("g1", ["c1", "c2", "c3", "c4"].map((id) => ({ id, name: id })));
+            chatOpen.add("g1");
+            const body = document.createElement("div");
+            document.body.append(body);
+            drawLive(body);
+            for (const id of ["c1", "c2", "c3", "c4"]) {
+                body.querySelector(`.ch-pick-row.sub [aria-label="${id}"]`).click();
+                await new Promise((r) => setTimeout(r, 30));
+            }
+            await new Promise((r) => setTimeout(r, 1500));
+            clearInterval(chatTimer);
+            const last = saved[saved.length - 1].selection.guilds.g1;
+            return { last: Object.keys(last || {}).sort(), shown: Object.keys(chat.logger.rules.selection.guilds.g1 || {}).sort(),
+                     ticked: [...body.querySelectorAll('.ch-pick-row.sub [aria-checked="true"]')].map((b) => b.getAttribute("aria-label")).sort() };
+        }""")
+        self.assertEqual(got["ticked"], ["c1", "c2", "c3", "c4"])
+        self.assertEqual(got["last"], ["c1", "c2", "c3", "c4"])          # what the computer keeps
+        self.assertEqual(got["shown"], ["c1", "c2", "c3", "c4"])
+        self.assertEqual(self.errors, [])
+
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)
