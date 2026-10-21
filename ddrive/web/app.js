@@ -103,6 +103,8 @@ const ICONS = {
   star: '<path d="m10 3 2.1 4.4 4.8.6-3.5 3.3.9 4.8L10 13.8 5.7 16.1l.9-4.8L3.1 8l4.8-.6z"/>',
   grid: '<rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1"/><rect x="11" y="11" width="5.5" height="5.5" rx="1"/>',
   list: '<path d="M4 5.5h12M4 10h12M4 14.5h12"/>',
+  sort: '<path d="M6.5 4v12M3.5 13l3 3 3-3M13.5 16V4M10.5 7l3-3 3 3"/>',
+  color: '<path d="M10 3s-5 5.5-5 9a5 5 0 0 0 10 0c0-3.5-5-9-5-9z"/>',
   activity: '<path d="M2.5 10h3l2-5 3.5 10 2-5h4.5"/>',
   clock: '<circle cx="10" cy="10" r="6.5"/><path d="M10 6.5V10l2.5 1.6"/>',
   pie: '<path d="M10 3.5a6.5 6.5 0 1 0 6.5 6.5H10z"/><path d="M12.5 3a5 5 0 0 1 4.5 4.5h-4.5z"/>',
@@ -424,6 +426,7 @@ function itemMenu(it) {
     !it.dir && kind(it.name) === "text" && { label: "Edit", icon: "rename", run: () => editText(it) },
     "-",
     { label: it.starred ? "Remove the star" : "Star", icon: "star", run: () => setStar(it, !it.starred) },
+    it.dir && { label: "Colour…", icon: "color", run: () => colorDialog(it) },
     !isAccount() && { label: "Available offline", icon: "offline", checked: !!it.pinned, run: () => setPinned(it, !it.pinned) },
     it.locked ? { label: "Lock again now", icon: "lock", run: lockAllNow }
               : { label: "Lock with a password…", icon: "lock", run: () => lockDialog(it) },
@@ -775,7 +778,7 @@ function itemRow(it, opts = {}) {
   if (it.starred) tags.push(h("span", { class: "star", title: "Starred" }, icon("star")));
   if (it.locked) tags.push(h("span", { class: "tag", title: "Has a password lock (open in this browser)" }, icon("lock", "tag-ico"), "Locked"));
   const label = h("span", { class: "label" }, it.name);
-  const name = h("span", { class: "name" }, icon(k === "pdf" ? "text" : k, it.dir ? "folder" : ""),
+  const name = h("span", { class: "name" }, icon(k === "pdf" ? "text" : k, folderClass(it)),
                  opts.where ? h("span", { style: "min-width:0" }, label, h("div", { class: "where" }, parent(it.path))) : label,
                  ...tags);
   const sub = it.dir ? parent(it.path) : `${size(it.size)} · ${when(it.mtime)}`;
@@ -802,9 +805,61 @@ function itemRow(it, opts = {}) {
 
 const gridView = () => { try { return localStorage.getItem("dd-view") === "grid"; } catch { return false; } };
 
-function listHead() {
-  return h("div", { class: "row head" }, h("span", {}, "Name"), h("span", { class: "size" }, "Size"),
-           h("span", { class: "date" }, "Modified"), h("span"));
+// ---- folder colours (synced to every device: index.py colors, or the entry's `color` in an end-to-end account)
+const FOLDER_COLORS = [["red", "Red"], ["orange", "Orange"], ["yellow", "Yellow"], ["green", "Green"], ["teal", "Teal"],
+                       ["blue", "Blue"], ["purple", "Purple"], ["pink", "Pink"], ["gray", "Grey"]];
+const folderClass = (it) => it.dir ? "folder" + (it.color ? " fc-" + it.color : "") : "";
+function colorDialog(it) {
+  const pickColor = async (color) => {
+    if (await attempt(() => api("/api/color", { path: it.path, color }))) { m.close(); it.color = color || undefined; render(); }
+  };
+  const m = modal(`Colour of “${it.name}”`,
+    h("div", { class: "color-picks" },
+      FOLDER_COLORS.map(([key, label]) => h("button", { class: "color-pick" + (it.color === key ? " on" : ""), type: "button", title: label, "aria-label": label,
+                                                        onclick: () => pickColor(key) }, icon("folder", "folder fc-" + key), h("span", {}, label))),
+      h("button", { class: "color-pick" + (it.color ? "" : " on"), type: "button", title: "No colour", onclick: () => pickColor("") },
+        icon("folder", "folder"), h("span", {}, "None"))),
+    h("p", { class: "muted small", style: "margin:12px 0 0" }, "Shows on all your devices."));
+}
+
+// ---- sorting the files of a folder (kept in this browser): folders first, then by name, size or date
+const SORTS = [["name", "Name"], ["size", "Size"], ["mtime", "Modified"]];
+function sortPref() {
+  try {
+    const s = JSON.parse(localStorage.getItem("dd-sort") || "{}");
+    return { key: SORTS.some(([k]) => k === s.key) ? s.key : "name", desc: !!s.desc };
+  } catch { return { key: "name", desc: false }; }
+}
+function setSort(key) {
+  const s = sortPref();
+  const next = s.key === key ? { key, desc: !s.desc } : { key, desc: key !== "name" };     // (biggest and newest first, the first time)
+  try { localStorage.setItem("dd-sort", JSON.stringify(next)); } catch { /* this visit only */ }
+  sortNow = next;
+  renderFiles();
+}
+let sortNow = null;               // (when the browser keeps nothing: this visit)
+const collate = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+function sortItems(items) {
+  const { key, desc } = sortNow || sortPref();
+  const by = key === "size" ? (a, b) => (a.size || 0) - (b.size || 0) : key === "mtime" ? (a, b) => (a.mtime || 0) - (b.mtime || 0) : () => 0;
+  return [...items].sort((a, b) => (b.dir - a.dir) || (desc ? -1 : 1) * (by(a, b) || collate.compare(a.name, b.name)));
+}
+function sortMenu() {
+  const s = sortNow || sortPref();
+  return SORTS.map(([key, label]) => ({ label: s.key === key ? `${label} ${s.desc ? "↓" : "↑"}` : label, icon: "sort",
+                                        checked: s.key === key, run: () => setSort(key) }));
+}
+
+function listHead(sortable) {
+  if (!sortable) {
+    return h("div", { class: "row head" }, h("span", {}, "Name"), h("span", { class: "size" }, "Size"),
+             h("span", { class: "date" }, "Modified"), h("span"));
+  }
+  const s = sortNow || sortPref();
+  const col = (key, label, cls) => h("button", { class: "sort-col" + (cls ? " " + cls : "") + (s.key === key ? " on" : ""), type: "button",
+      "aria-sort": s.key === key ? (s.desc ? "descending" : "ascending") : "none", title: `Sort by ${label.toLowerCase()}`, onclick: () => setSort(key) },
+    label, s.key === key ? h("span", { class: "arrow" }, s.desc ? "↓" : "↑") : null);
+  return h("div", { class: "row head" }, col("name", "Name"), col("size", "Size", "size"), col("mtime", "Modified", "date"), h("span"));
 }
 
 let filesShown = "";                 // the folder that is drawn, as the server listed it: a listing that is the same changes nothing
@@ -837,15 +892,20 @@ function drawFiles(path, data, whole) {
                     "aria-label": gridView() ? "Show as a list" : "Show as a grid",
                     onclick: () => { try { localStorage.setItem("dd-view", gridView() ? "list" : "grid"); } catch { /* private mode */ } renderFiles(); } },
         icon(gridView() ? "list" : "grid")),
+      h("button", { class: "icon-btn", title: "Sort", "aria-label": "Sort", "aria-haspopup": "menu", onclick: (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        openMenu(sortMenu(), r.right - 220, r.bottom + 4, "Sort by", null);
+      } }, icon("sort")),
       h("a", { class: "icon-btn", title: "Photos and videos in this folder", "aria-label": "Gallery of this folder", href: "#/gallery" + enc(path) }, icon("gallery")),
       h("button", { class: "btn ghost", onclick: newFolder }, "New folder"),
       h("button", { class: "btn", onclick: () => $("#pick").click() }, "Upload")));
+  data = { ...data, items: sortItems(data.items) };
   listed = data.items;
   // A big folder is drawn in parts: what fits on the screen at once, the rest right after, so the page
   // shows without waiting for thousands of rows.
   const grid = gridView(), mine = ++filesDrawn, FIRST = whole ? data.items.length : 150, MORE = 400;
   const rows = data.items.slice(0, FIRST).map((it) => itemRow(it, { grid }));
-  const list = h("div", { class: "list" + (grid ? " grid" : "") }, listHead(), rows);
+  const list = h("div", { class: "list" + (grid ? " grid" : "") }, listHead(true), rows);
   const body = data.items.length ? list
     : h("div", { class: "empty" }, h("b", {}, "Nothing here yet"), "Drop files anywhere on this page, or use Upload.");
   page(bar, selBar, body, h("div", { class: "spacer" }));
@@ -3467,7 +3527,7 @@ const THUMB_RING = '<circle class="t" cx="16" cy="16" r="12" pathLength="100"/><
  *  is there and only has to load gets the light alone ("loading"). */
 function thumbBox(it) {
   const k = it.dir ? "folder" : kind(it.name);
-  const box = h("span", { class: "thumb" }, icon(k === "pdf" ? "text" : k, it.dir ? "folder" : ""));
+  const box = h("span", { class: "thumb" }, icon(k === "pdf" ? "text" : k, folderClass(it)));
   if (!isMedia(it) || it.thumb === -1) return box;
   const settle = () => { box.classList.remove("pending", "working", "loading"); const ring = box.querySelector(".thumb-ring"); if (ring) ring.remove(); };
   const done = () => { box.waiting = null; thumbSeen.unobserve(box); };          // (nothing more to watch it for)

@@ -77,7 +77,7 @@ NOTE_IDLE = 20.0          # a note is uploaded this long after the last autosave
 ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes versions deleted snapshots snapshot shares
     contacts contacts/export locks starred recent history home insights bookmarks changelog
     sync sync/tree sync/browse upload/part queue lite/update""".split())
-ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move merge delete share shares/update shares/revoke
+ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move merge color delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
     bookmarks/save bookmarks/refresh bookmarks/delete
@@ -817,6 +817,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
     def _dispatch(self, method):
         self.rfile.n = 0                         # from here on: bytes of this request's body
         self._locks_seen = None                  # (a connection is kept for several requests)
+        self._colors_seen = None
         self._move_body = {}
         self._admin, self._e2e, self._retired = "", False, False
         self._t0 = time.perf_counter()
@@ -1194,7 +1195,31 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
              "state": n["state"], "pinned": bool(n["is_pinned"])}
         if n["uid"] in self._lock_ids():
             e["locked"] = True            # has a password lock (open in this browser, or it wouldn't be listed)
+        color = self._colors().get(n["uid"]) if n["is_dir"] else None
+        if color:
+            e["color"] = color
         return e
+
+    def _colors(self):
+        """The folders' colours, read once per request and drive (as _lock_ids)."""
+        index = self.drive.index
+        got = self.__dict__.get("_colors_seen")
+        if got is None or got[0] is not index:
+            got = self._colors_seen = (index, index.colors_all() if hasattr(index, "colors_all") else {})
+        return got[1]
+
+    def _post_api_color(self):
+        """A folder's colour, as the list shows it (synced to every device); "" or none: no colour."""
+        body = self._body_json()
+        path, node = self._node(body.get("path"), want_dir=True)
+        if node["id"] == ROOT_ID:
+            raise ApiError(400, "The drive itself has no colour")
+        color = str(body.get("color") or "")
+        if color and color not in self.drive.index.COLORS:
+            raise ApiError(400, "Not a colour this knows")
+        self.drive.index.color_set(node["uid"], color or None)
+        self.drive.journal.wake()
+        self._json({"ok": True})
 
     def _shown(self, path):
         """False for a path under a hidden or locked folder (for lists that don't go through _node)."""

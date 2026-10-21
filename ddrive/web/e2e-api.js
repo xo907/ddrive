@@ -84,6 +84,7 @@
     const e = { name: n.name, path, dir: !!n.dir, size: n.size || 0, mtime: n.mtime || 0, state: "synced", pinned: false };
     if (n.star) e.starred = true;
     if (n.lockRoot) e.locked = true;
+    if (n.dir && n.color) e.color = n.color;
     if (n.dir) { const s = sizes.get(n.id) || [0, 0]; e.size = s[0]; e.files = s[1]; }
     else if (MEDIA.has(ext(n.name))) e.thumb = n.thumb ? (n.thumb === -1 ? -1 : 1) : null;
     return e;
@@ -529,6 +530,14 @@
       const path = clean(b.path), n = at(path);
       if (!n.id) throw new Fail(400, "The account itself can't be deleted");
       await v._send({ op: "set", id: n.id, fields: { trash: { at: now(), path } } });
+      return { ok: true };
+    },
+    async color(b) {
+      const n = at(b.path, "dir");
+      if (!n.id) throw new Fail(400, "The account itself has no colour");
+      const color = String(b.color || "");
+      if (color && !"red orange yellow green teal blue purple pink gray".split(" ").includes(color)) throw new Fail(400, "Not a colour this knows");
+      await v._send({ op: "set", id: n.id, fields: { color: color || null } });
       return { ok: true };
     },
     async star(b) {

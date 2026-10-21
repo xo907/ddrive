@@ -290,6 +290,55 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(got["shown"], ["c1", "c2", "c3", "c4"])
         self.assertEqual(self.errors, [])
 
+    def test_sorting_the_files_and_folder_colours(self):
+        self.sign_in_owner()
+        p = self.page
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Alpha"})["status"], 200)
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/beta"})["status"], 200)
+        self.upload_text("/small.txt", "x")
+        self.upload_text("/big.txt", "x" * 5000)
+        self.upload_text("/file10.txt", "xx")
+        self.upload_text("/file9.txt", "xxx")
+        p.goto(self.base + "/#/files/")
+        p.wait_for_selector("text=file10.txt")
+        order = lambda: p.eval_on_selector_all(".list .row[data-path] .label", "els => els.map((e) => e.textContent)")
+        self.assertEqual(order(), ["Alpha", "beta", "big.txt", "file9.txt", "file10.txt", "small.txt"])     # (folders first; 9 before 10)
+        p.click(".row.head .sort-col.size")                                # biggest first
+        p.wait_for_function("() => document.querySelector('.row.head .sort-col.size[aria-sort=descending]')")
+        self.assertEqual(order()[2:], ["big.txt", "file9.txt", "file10.txt", "small.txt"])
+        p.click(".row.head .sort-col.size")                                # smallest first
+        p.wait_for_function("() => document.querySelector('.row.head .sort-col.size[aria-sort=ascending]')")
+        self.assertEqual(order()[2:], ["small.txt", "file10.txt", "file9.txt", "big.txt"])
+        p.reload()                                                         # kept in this browser
+        p.wait_for_selector("text=file10.txt")
+        self.assertEqual(order()[2:], ["small.txt", "file10.txt", "file9.txt", "big.txt"])
+        p.click("button[aria-label=Sort]")                                 # (the grid and phones have no header: the menu)
+        p.click(".ctx >> text=Name")
+        p.wait_for_function("() => document.querySelector('.row.head .sort-col[aria-sort=ascending]')")
+        self.assertEqual(order()[2:], ["big.txt", "file9.txt", "file10.txt", "small.txt"])
+        # A folder's colour, from its menu.
+        p.locator('.row[data-path="/Alpha"]').click(button="right")
+        p.click("text=Colour…")
+        p.click("dialog[open] .color-pick[aria-label=Blue]")
+        p.wait_for_selector('.row[data-path="/Alpha"] .ico.folder.fc-blue')
+        self.assertEqual(self.api("GET", "/api/list?path=/")["json"]["items"][0].get("color"), "blue")
+        if os.environ.get("DD_SHOT"):
+            p.locator('.row[data-path="/Alpha"]').click(button="right")
+            p.click("text=Colour…")
+            p.locator("dialog[open]").screenshot(path=os.environ["DD_SHOT"].replace(".png", "-dialog.png"))
+            p.keyboard.press("Escape")
+            p.locator(".list").screenshot(path=os.environ["DD_SHOT"])
+        self.assertEqual(self.errors, [])
+
+    def test_an_end_to_end_accounts_folders_have_colours(self):
+        self.sign_up_e2e()
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Photos"})["status"], 200)
+        self.assertEqual(self.api("POST", "/api/color", {"path": "/Photos", "color": "green"})["status"], 200)
+        self.assertEqual(self.api("GET", "/api/list?path=/")["json"]["items"][0]["color"], "green")
+        self.assertEqual(self.api("POST", "/api/color", {"path": "/Photos", "color": "plaid"})["status"], 400)
+        self.assertEqual(self.api("POST", "/api/color", {"path": "/Photos", "color": ""})["status"], 200)
+        self.assertNotIn("color", self.api("GET", "/api/list?path=/")["json"]["items"][0])
+
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)

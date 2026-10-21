@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.18.0 (2026-10-21)
+
+- **Sort the files by name, size or date.** Click Name, Size or Modified at the top of a folder's list (again to turn the order round), or use the new Sort button next to the grid button, which works in the grid and on phones too. Folders stay above files; names sort as people read them (file9 before file10). Each browser remembers how you like it.
+- **Coloured folders.** Right-click a folder, **Colour…**, and pick one of nine colours (or none). The colour shows in the list, the grid and everywhere else the folder is listed, on all your devices: a drive keeps it with the folder (it stays when the folder is renamed or moved), an end-to-end encrypted account seals it with the folder like everything else.
+
 ## 3.17.1 (2026-10-21)
 
 - **Channels picked for the Messages logger are all kept.** Ticking channels one after another, the page sent the whole choice each time, but the first answer replaced the choice the picker on screen kept changing, and answers (from the computer that does the logging, through the server) came back in any order: some ticks were lost, and a reload showed them unticked. Now one save goes at a time, each with everything chosen by then.

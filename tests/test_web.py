@@ -268,6 +268,28 @@ class WebTest(helpers.DriveTest):
         self.assertEqual(self.req("POST", "/api/settings", {"thumbs_store": "server"})[0], 200)
         self.assertEqual(self.req("POST", other, body=b"\x89PNG small")[0], 200)
 
+    def test_folders_have_colours(self):
+        self.login()
+        d = self.d
+        d.fs.mkdir("/Work", 0o755)
+        self.write(d, "/note.txt", b"x")
+        listing = lambda: {i["name"]: i.get("color") for i in json.loads(self.req("GET", "/api/list?path=/")[2])["items"]}
+        self.assertEqual(self.req("POST", "/api/color", {"path": "/Work", "color": "blue"})[0], 200)
+        self.assertEqual(listing(), {"Work": "blue", "note.txt": None})
+        self.assertEqual(self.req("POST", "/api/color", {"path": "/Work", "color": "plaid"})[0], 400)
+        self.assertEqual(self.req("POST", "/api/color", {"path": "/note.txt", "color": "red"})[0], 400)    # (folders only)
+        # It goes to every device as a change of its own; one that doesn't know it leaves it alone.
+        uid = d.index.resolve("/Work")["uid"]
+        with d.index.tx() as db:
+            d.index._op_color(db, {"t": "color", "u": uid, "c": "green"}, set(), set())
+        self.assertEqual(listing()["Work"], "green")
+        self.assertEqual(self.req("POST", "/api/color", {"path": "/Work", "color": ""})[0], 200)
+        self.assertEqual(listing()["Work"], None)
+        d.fs.rename("/Work", "/Job")                                     # (it belongs to the folder, not its name)
+        self.req("POST", "/api/color", {"path": "/Job", "color": "pink"})
+        d.fs.rename("/Job", "/Work")
+        self.assertEqual(listing()["Work"], "pink")
+
     def test_two_folders_are_merged(self):
         self.login()
         d = self.d

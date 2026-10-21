@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS share_views(id TEXT NOT NULL, device TEXT NOT NULL, n
 CREATE TABLE IF NOT EXISTS locks(uid TEXT PRIMARY KEY, rec TEXT NOT NULL);
 -- Starred items (synced between devices).
 CREATE TABLE IF NOT EXISTS stars(uid TEXT PRIMARY KEY, at REAL NOT NULL);
+-- Folder colours (synced between devices): uid of the folder -> the colour's name.
+CREATE TABLE IF NOT EXISTS colors(uid TEXT PRIMARY KEY, color TEXT NOT NULL);
 -- What happened on the drive, as this device saw it (kept here only; the newest few thousand).
 CREATE TABLE IF NOT EXISTS activity(
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -869,6 +871,30 @@ class Index:
             db.execute("INSERT OR IGNORE INTO stars(uid, at) VALUES(?, ?)", (str(op["u"]), time.time()))
         else:
             db.execute("DELETE FROM stars WHERE uid=?", (str(op["u"]),))
+
+    # ------------------------------------------------------------ folder colours
+    COLORS = frozenset("red orange yellow green teal blue purple pink gray".split())
+
+    def colors_all(self):
+        with self.lock:
+            return {r[0]: r[1] for r in self.db.execute("SELECT uid, color FROM colors")}
+
+    def color_set(self, uid, color):
+        """Give a folder a colour (None: none) here and on every device."""
+        color = color if color in self.COLORS else None
+        with self.tx() as db:
+            if color:
+                db.execute("INSERT OR REPLACE INTO colors(uid, color) VALUES(?, ?)", (uid, color))
+            else:
+                db.execute("DELETE FROM colors WHERE uid=?", (uid,))
+            self._queue(db, {"t": "color", "u": uid, "c": color or ""})
+
+    def _op_color(self, db, op, busy, changed):
+        color = str(op.get("c") or "")
+        if color in self.COLORS:
+            db.execute("INSERT OR REPLACE INTO colors(uid, color) VALUES(?, ?)", (str(op["u"]), color))
+        else:
+            db.execute("DELETE FROM colors WHERE uid=?", (str(op["u"]),))
 
     # ------------------------------------------------------------ activity
     def _act(self, db, kind, path, size=0, is_dir=False, uid=None, device="", src=None):
