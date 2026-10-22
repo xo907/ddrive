@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.18.1 (2026-10-21)
+
+- **Upload a folder that loses its folders says so.** On a computer, Upload a folder (and dragging a folder onto the page) keeps every folder inside, however deep: tested now in both kinds of account. A phone's picker, and the DDrive app's, can only choose files, not a folder, so the files came without the folders they were in and were all put loose into the open folder. Now the page says so, and puts them into one new folder of their own (named as you like) instead.
+
 ## 3.18.0 (2026-10-21)
 
 - **Sort the files by name, size or date.** Click Name, Size or Modified at the top of a folder's list (again to turn the order round), or use the new Sort button next to the grid button, which works in the grid and on phones too. Folders stay above files; names sort as people read them (file9 before file10). Each browser remembers how you like it.

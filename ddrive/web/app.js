@@ -1668,11 +1668,25 @@ async function uploadAll(entries, dir) {
 }
 
 for (const id of ["#pick", "#pick-dir"]) {
-  $(id).addEventListener("change", (e) => {
-    const files = [...e.target.files].map((file) => ({ file, rel: file.webkitRelativePath || file.name }));
+  $(id).addEventListener("change", async (e) => {
+    let files = [...e.target.files].map((file) => ({ file, rel: file.webkitRelativePath || file.name }));
     e.target.value = "";
-    if (files.length) uploadAll(files, currentDir);
+    if (id === "#pick-dir" && files.length && !files.some((f) => f.rel.includes("/"))) files = await flatFolder(files);
+    if (files && files.length) uploadAll(files, currentDir);
   });
+}
+
+/** "Upload a folder" that got files without the folders they are in: what phones (and the DDrive app) do,
+ *  whose pickers choose files, not folders. Said, instead of putting them all loose into the open folder;
+ *  they can go into a folder of their own. Returns the files to upload ([{file, rel}]) or null. */
+async function flatFolder(files) {
+  const name = await ask({ title: "The folders inside weren't kept", value: "Uploaded " + new Date().toISOString().slice(0, 10), ok: "Upload into this folder",
+    text: `This ${PHONE_APP ? "app" : "browser"} picked ${plural(files.length, "file")} without the folders they are in (phones can only pick files, not folders), `
+      + "so the folder structure can't be kept here. To keep it, upload the folder from a computer: Upload a folder, or drag the folder onto the page. "
+      + "Or put these files into one new folder, named:" });
+  if (name === null || name === false) return null;
+  const folder = String(name).trim().replace(/[\\/]+/g, " ") || "Uploaded";
+  return files.map((f) => ({ file: f.file, rel: folder + "/" + f.file.name }));
 }
 
 async function readEntries(entry, prefix, out) {

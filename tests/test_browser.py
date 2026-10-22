@@ -339,6 +339,54 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(self.api("POST", "/api/color", {"path": "/Photos", "color": ""})["status"], 200)
         self.assertNotIn("color", self.api("GET", "/api/list?path=/")["json"]["items"][0])
 
+    def _a_folder_on_this_computer(self):
+        top = os.path.join(self.tmp, "pick", "Project")
+        for rel, text in (("readme.txt", "top"), ("src/main.py", "code"), ("src/lib/util.py", "util"), ("docs/a/b/deep.txt", "deep")):
+            os.makedirs(os.path.dirname(os.path.join(top, rel)), exist_ok=True)
+            with open(os.path.join(top, rel), "w") as f:
+                f.write(text)
+        return top
+
+    def _upload_a_folder_keeps_its_folders(self):
+        p = self.page
+        p.goto(self.base + "/#/files/")
+        p.wait_for_selector("text=Nothing here yet")
+        p.set_input_files("#pick-dir", self._a_folder_on_this_computer())
+        p.wait_for_selector('.row[data-path="/Project"]')
+        p.wait_for_function("() => [...document.querySelectorAll('.toast, #toast')].some((t) => /4 files added/.test(t.textContent))")
+        self.assertEqual(self.names(), ["Project"])
+        self.assertEqual(self.names("/Project"), ["docs", "readme.txt", "src"])
+        self.assertEqual(self.names("/Project/src"), ["lib", "main.py"])
+        self.assertEqual(self.names("/Project/src/lib"), ["util.py"])
+        self.assertEqual(self.names("/Project/docs/a/b"), ["deep.txt"])
+        self.assertEqual(self.errors, [])
+
+    def test_uploading_a_folder_keeps_its_folders(self):
+        self.sign_in_owner()
+        self._upload_a_folder_keeps_its_folders()
+
+    def test_a_folder_picked_without_its_folders_is_said_and_kept_together(self):
+        """A phone's picker hands over files, not a folder: that is said, and they go into a folder of their own."""
+        self.sign_in_owner()
+        p = self.page
+        p.goto(self.base + "/#/files/")
+        p.wait_for_selector("text=Nothing here yet")
+        top = self._a_folder_on_this_computer()
+        p.evaluate("document.querySelector('#pick-dir').removeAttribute('webkitdirectory')")     # (as a phone's picker: files only)
+        p.set_input_files("#pick-dir", [os.path.join(top, "readme.txt"), os.path.join(top, "src", "main.py")])
+        p.wait_for_selector("#dialog[open] >> text=The folders inside weren't kept")
+        p.fill("#dialog-input", "From my phone")
+        p.click("#dialog-ok")
+        p.wait_for_selector('.row[data-path="/From my phone"]')
+        p.wait_for_function("() => [...document.querySelectorAll('.toast, #toast')].some((t) => /2 files added/.test(t.textContent))")
+        self.assertEqual(self.names(), ["From my phone"])
+        self.assertEqual(self.names("/From my phone"), ["main.py", "readme.txt"])
+        self.assertEqual(self.errors, [])
+
+    def test_uploading_a_folder_keeps_its_folders_in_an_end_to_end_account(self):
+        self.sign_up_e2e()
+        self._upload_a_folder_keeps_its_folders()
+
     def test_an_end_to_end_account_and_its_password_locks(self):
         p = self.page
         p.clock.install()                        # (the page's own time, moved on below: locks close after 15 minutes)
