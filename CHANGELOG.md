@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.0 (2026-10-24)
+
+- **Live upload into your end-to-end encrypted account, through DDrive Lite.** The host can't put anything into such an account (it can't seal for it), so recordings went only into the owner's drive. Now `lite recorder on`, on a computer where Lite is signed in to the account, makes a recorder key and listens on `http://127.0.0.1:8766` (that computer only): a recorder there (the Discord call recorder) sends to it as it would to a drive, and Lite seals what arrives a piece (1 MiB) at a time and sends it on to the host while the recording goes on, held in memory, never on the disk. The account gets the file, in `/Recordings`, when the recording ends (or a few minutes after the recorder stops sending). It runs in whichever Lite program runs (the drive letter, folder syncing, or its own), so `lite autostart on` covers it. The host takes the sealed recording as an object that grows (its size isn't known until the end); that needs the host to have 3.20.0 too.
+- The Discord call recorder sends to Lite's address by default now (`http://127.0.0.1:8766`).
+
 ## 3.19.2 (2026-10-24)
 
 - **The recorder key from a terminal.** `run.bat recorder-key` (`./run.sh recorder-key`) on the computer that runs the drive shows the key (making one if there is none), with the server URL and the folder; `recorder-key new` makes a new one, `recorder-key off` turns live upload off. A running drive picks it up by itself.

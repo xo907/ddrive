@@ -2002,9 +2002,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             pass
         return False
 
-    def _take_part(self, path, size, offset, mtime):
-        """One part of a file that is sent in parts; answers how far it is, and "done" with the last one."""
+    def _take_part(self, path, size, offset, mtime, grow=False, end=False):
+        """One part of a file that is sent in parts; answers how far it is, and "done" with the last one.
+        grow: its size isn't known yet (a recording, made while it is sent: Lite's live upload): the parts
+        go on until one says it is the `end`, and that one makes the size."""
         n = int(self.headers.get("Content-Length") or 0)
+        if grow:
+            size = offset + n if end else max(size, offset + n)
         if n > PART_MAX or offset + n > size:
             raise ApiError(413 if n > PART_MAX else 400, "that part is too big")
         self._node(posixpath.dirname(path), want_dir=True)
@@ -2014,6 +2018,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             raise ApiError(400, f"{path} is a folder")
         fs._refuse_hidden(path)
         fs._check_size_limit(size, path)
+        known = "grow" if grow else size          # (what the collected parts are noted as: a growing file has no size yet)
         # The sender says where its part starts. Further on than what is here: it is told how much is
         # here and goes on from there (it goes back, if it has to). At or before the end of what is
         # here: that is where the file goes on, and what was here after that point is the sender's to
@@ -2031,12 +2036,12 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                     break
                 left -= len(data)
 
-        part, note, have = self._partial(path, size, mtime)
+        part, note, have = self._partial(path, known, mtime)
         if offset > have:
             skip()
             return self._json({"ok": False, "offset": have})
         why = fs.holding_back(extra=n)
-        full = None if why else fs.room_for(size - offset)
+        full = None if why else fs.room_for(n if grow else size - offset)
         if full and (fs._pending_staging_bytes() or not self.drive.uploader.is_idle()):
             why = f"its uploads have to free room first ({full})"
         if full and self._others_arriving(part):
@@ -2073,7 +2078,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         if left:
             raise ApiError(400, "upload was cut off")           # (nothing of it is kept: the sender sends the part again)
         with self._part_lock(part):
-            part, note, have = self._partial(path, size, mtime)
+            part, note, have = self._partial(path, known, mtime)
             if offset > have:                    # (it changed while the part was on its way)
                 return self._json({"ok": False, "offset": have})
             if not offset:
@@ -2086,13 +2091,13 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                     except OSError:
                         pass
                 with open(note, "w", encoding="utf-8") as f:
-                    json.dump({"path": path, "size": size, "mtime": mtime}, f)
+                    json.dump({"path": path, "size": known, "mtime": mtime}, f)
             with open(part, "r+b" if os.path.exists(part) else "w+b") as out:
                 out.truncate(offset)
                 out.seek(offset)
                 for data in body:
                     out.write(data)
-            if offset + n < size:
+            if offset + n < size or (grow and not end):
                 return self._json({"ok": True, "offset": offset + n})
             fs.adopt_file(path, part, mtime)
             self._drop_partial(part)
@@ -2254,7 +2259,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         self._stream(node, download=True)
 
     def _post_api_vault_object(self):
-        """A sealed object, sent in parts (as files are, see above): ?id=&size=&offset=."""
+        """A sealed object, sent in parts (as files are, see above): ?id=&size=&offset=. Or, while it is
+        being made (a recording: lite.py, live upload), ?id=&offset=&grow=1 and with the last part &end=1."""
         d = self._vault()
         q = self._query()
         path = self._object_path(q.get("id"))
@@ -2265,7 +2271,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         if size < 0 or offset < 0:
             raise ApiError(400, "bad size or offset")
         d.index.makedirs(posixpath.dirname(path))
-        self._take_part(path, size, offset, None)
+        self._take_part(path, size, offset, None, grow=bool(q.get("grow")), end=bool(q.get("end")))
 
     # ------------------------------------------------------------ end-to-end accounts: moving one into another
     # (transfer.py). The account that receives asks (open), the one that moves out answers (peer, send);

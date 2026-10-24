@@ -9,6 +9,9 @@
                                 chosen on the host's dashboard, on its Sync page (litesync.py)
     lite autoupdate on|off      pull newer versions by itself (a git checkout); a running Lite always starts
                                 again with new code (a git pull) within a minute
+    lite recorder on|off|new    live upload into an end-to-end encrypted account: a recorder on this
+                                computer (the Discord call recorder) sends to Lite, which seals it in
+                                (litelive.py); shows the address and the key to give the recorder
     lite status | ls | get | put | disconnect, and lite menu for all of this as a menu
 
 Nothing of the drive lives on this computer: no bot token, no encryption key, no index, no cache on
@@ -929,10 +932,13 @@ def cmd_mount(args):
     log.info("Showing the drive of %s on %s", client.address, mp)
     from .litesync import Supervisor
     syncing = Supervisor().start()           # folder syncing, when it is on, runs in here too
+    recorder = start_recorder(s)             # and live upload, when it is on
     try:
         fuse.FUSE(LiteFS(client), mp, **kwargs)
     finally:
         syncing.stop()
+        if recorder:
+            recorder.stop()
         if _mount_pid() in (None, os.getpid()):          # (not the one of the program that started after it)
             try:
                 os.remove(_pid_file())
@@ -1123,11 +1129,102 @@ def cmd_sync(args):
         return 0
     _logging(getattr(args, "verbose", False))
     sup = litesync.Supervisor()
+    recorder = start_recorder(s)
     try:
         while sup.check():
             time.sleep(2.0)
     finally:
         sup._release()
+        if recorder:
+            recorder.stop()
+    return 0
+
+
+# ------------------------------------------------------------ live upload (litelive.py)
+def _recorder_port(s):
+    from .litelive import PORT
+    return int(s.get("recorder_port") or PORT)
+
+
+def _recorder_up(port):
+    """Is something (a Lite program) taking recordings on this computer?"""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def start_recorder(s):
+    """Lite's recorder endpoint, in the Lite program that runs (None when live upload is off, the account
+    isn't end-to-end encrypted, or another Lite program has it already)."""
+    if not s.get("recorder_key") or not s.get("e2e"):
+        return None
+    from .litelive import RecorderServer, VaultRecordings
+    port = _recorder_port(s)
+    if _recorder_up(port):
+        return None
+    try:
+        recs = VaultRecordings(lambda: vault_from(load_settings()),
+                               folder_of=lambda: load_settings().get("recorder_folder") or "/Recordings")
+        return RecorderServer(recs, lambda: load_settings().get("recorder_key") or "", port).start()
+    except OSError as e:
+        log.warning("Live upload can't listen on port %d: %s", port, e)
+        return None
+
+
+def cmd_recorder(args):
+    """The recorder key, and the address a recorder on this computer sends to."""
+    s = load_settings()
+    action = args.state or "show"
+    if action == "off":
+        s.pop("recorder_key", None)
+        save_settings(s)
+        print("[OK] Live upload is OFF: no recorder can send to Lite any more.")
+        return 0
+    if action == "run":                      # only the recorder, in this program (Lite starts it so in the background)
+        if not s.get("recorder_key"):
+            print(f"[INFO] Live upload is OFF. Turn it on first: '{me()} recorder on'.")
+            return 1
+        _logging(getattr(args, "verbose", False))
+        recorder = start_recorder(s)
+        if recorder is None:
+            print("[INFO] Live upload is already running on this computer." if s.get("e2e") else
+                  "[ERROR] Live upload through Lite is for an end-to-end encrypted account.")
+            return 0 if s.get("e2e") else 1
+        try:
+            while load_settings().get("recorder_key"):
+                time.sleep(5.0)
+        finally:
+            recorder.stop()
+        return 0
+    client_from(s)                           # only when there is a host
+    if not s.get("e2e"):
+        print("[ERROR] This computer is signed in to the owner's drive, not an end-to-end encrypted account: a recorder "
+              "sends to the host itself (its recorder key: 'recorder-key' on the computer that runs the drive).")
+        return 1
+    if action in ("on", "new") and (action == "new" or not s.get("recorder_key")):
+        s["recorder_key"] = secrets.token_urlsafe(32)
+        save_settings(s)
+        print("[OK] A new recorder key was made" + (" (an older one no longer works)." if action == "new" else "."))
+    if not s.get("recorder_key"):
+        print(f"[OK] Live upload is OFF. Turn it on: '{me()} recorder on'.")
+        return 0
+    port = _recorder_port(s)
+    if action in ("on", "new") and not _recorder_up(port) and not _mount_pid():
+        _spawn("recorder", "run")
+        for _ in range(25):
+            if _recorder_up(port):
+                break
+            time.sleep(0.2)
+    running = _recorder_up(port)
+    print(f"Server URL:    http://127.0.0.1:{port}")
+    print(f"Recorder key:  {s['recorder_key']}")
+    print(f"Files go to:   {s.get('recorder_folder') or '/Recordings'} in your account ({s.get('host')}), sealed here")
+    print("Live upload is " + ("running." if running else
+                               f"ON but not running: it runs while Lite does ('{me()} mount', or '{me()} recorder on')."))
+    if not autostart_enabled():
+        print(f"It stops when this computer does. To have it start with the computer: '{me()} autostart on'.")
     return 0
 
 
@@ -1524,6 +1621,9 @@ def main(argv, verbose=False):
     p.add_argument("-b", "--background", action="store_true", help="With run: in the background")
     p = sub.add_parser("autoupdate", help="Update by itself (a git checkout): on, off or status")
     p.add_argument("state", nargs="?", choices=["on", "off", "status"])
+    p = sub.add_parser("recorder", help="Live upload into an end-to-end encrypted account (the Discord call recorder): "
+                                        "show, on, new, off")
+    p.add_argument("state", nargs="?", choices=["show", "on", "new", "off", "run"])
     sub.add_parser("renew", help=argparse.SUPPRESS)
     sub.add_parser("menu", help="All of this as a menu")
     args = parser.parse_args(argv)
@@ -1534,7 +1634,8 @@ def main(argv, verbose=False):
     try:
         return {"connect": cmd_connect, "mount": cmd_mount, "stop": cmd_stop, "status": cmd_status, "ls": cmd_ls,
                 "get": cmd_get, "put": cmd_put, "import": cmd_import, "disconnect": cmd_disconnect, "autostart": cmd_autostart,
-                "sync": cmd_sync, "menu": cmd_menu, "autoupdate": cmd_autoupdate, "renew": cmd_renew}[args.action](args)
+                "sync": cmd_sync, "menu": cmd_menu, "autoupdate": cmd_autoupdate, "renew": cmd_renew,
+                "recorder": cmd_recorder}[args.action](args)
     except HostError as e:
         print(f"[ERROR] {e}")
         return 1

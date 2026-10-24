@@ -25,12 +25,12 @@ const Native = (VencordNative as any)?.pluginHelpers?.DDriveRecorder as PluginNa
 export const settings = definePluginSettings({
     serverUrl: {
         type: OptionType.STRING,
-        description: "DDrive Server URL: the address of its dashboard (e.g. http://127.0.0.1:8765)",
-        default: "http://127.0.0.1:8765"
+        description: "Where recordings go: DDrive Lite on this computer (http://127.0.0.1:8766, for an end-to-end encrypted account), or a DDrive dashboard address",
+        default: "http://127.0.0.1:8766"
     },
     recorderKey: {
         type: OptionType.STRING,
-        description: "DDrive Recorder Key (DDrive dashboard: Settings > Live upload > Make a key, then Copy)",
+        description: "Recorder Key: from 'lite recorder on' on this computer (or, for the owner's drive, Settings > Live upload)",
         default: ""
     },
     folderName: {

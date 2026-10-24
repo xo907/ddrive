@@ -5,9 +5,9 @@
 
   Usage:
     powershell -ExecutionPolicy Bypass -File install-recorder.ps1 [-Branch auto|stable|ptb|canary] [-Uninstall] [-Restart] [-Yes]
-                                      [-ServerUrl http://127.0.0.1:8765] [-RecorderKey <key>]
-    The recorder key: DDrive dashboard, Settings > Live upload; or on the computer that runs the drive:
-    run.bat recorder-key (./run.sh recorder-key).
+                                      [-ServerUrl http://127.0.0.1:8766] [-RecorderKey <key>]
+    The address and key: 'run.bat lite recorder on' on this computer (into an end-to-end encrypted account,
+    through DDrive Lite); or, into the owner's drive, Settings > Live upload / 'run.bat recorder-key' where it runs.
 #>
 param(
   [ValidateSet('auto', 'stable', 'ptb', 'canary')]
@@ -261,8 +261,8 @@ try {
   Write-Host ''
   Write-Host '  [+] DDrive Call & Screenshare Recorder is installed!' -ForegroundColor Green
   Write-Host '  1. Open Discord Settings -> Vencord -> Plugins -> DDriveRecorder' -ForegroundColor White
-  Write-Host '  2. Enter your DDrive Server URL (default http://127.0.0.1:8765) and Recorder Key' -ForegroundColor White
-  Write-Host '     (the key: DDrive Settings -> Live upload, or run.bat recorder-key where the drive runs)' -ForegroundColor White
+  Write-Host '  2. Enter the Server URL (default http://127.0.0.1:8766: DDrive Lite) and Recorder Key' -ForegroundColor White
+  Write-Host '     (both are shown by: run.bat lite recorder on)' -ForegroundColor White
   Write-Host '  3. In any voice call, click the Record button in the Voice bar' -ForegroundColor White
   Write-Host '  4. If anyone shares their screen, it records the screenshare automatically' -ForegroundColor White
   Write-Host '  5. Minimizing the window will NOT pause recording (anti-throttle active)' -ForegroundColor White

@@ -742,6 +742,20 @@ class Vault:
         size = len(data) if data is not None else size
         key, oid = os.urandom(32), new_id()
         self._store(oid, key, data, read, size, stop=stop, hear=hear)
+        self.put_object(path, oid, key, size, mtime)
+
+    def put_object(self, path, oid, key, size, mtime=None):
+        """Make the file at `path` the object `oid` that is on the host already, sealed with `key`
+        (put, or a recording sealed while it was made: litelive.py), replacing what was there."""
+        parent, name = posixpath.split("/" + path.strip("/"))
+        up = self.resolve(parent)
+        if up is None or not up["dir"]:
+            raise VaultError(f"Not found: {parent}")
+        old = self.resolve(path)
+        if old is not None and old["dir"]:
+            raise VaultError(f"{path} is a folder")
+        if old is None and self._locked_here(up["id"], name):
+            raise VaultError(f"{path} is password-locked, and this device can't open it: nothing is put there in the clear")
         entry = {"id": new_id(), "parent": up["id"], "name": name, "dir": False, "at": time.time(), "by": self.name}
         dropped = []
         if old is not None:                      # replaced: what it was is kept as an earlier version

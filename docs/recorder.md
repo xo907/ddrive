@@ -48,14 +48,22 @@ Install-Recorder.cmd -Uninstall
 ### 2. Configure in Discord
 1. Open Discord **User Settings** -> scroll to **Vencord** -> **Plugins**.
 2. Find **DDriveRecorder** (or search "DDrive").
-3. Set your **DDrive Server URL**: the address of the DDrive dashboard (`http://127.0.0.1:8765` when DDrive runs on the same computer, its default port).
-4. Set your **Recorder Key**. Get it in the DDrive dashboard under **Settings** > **Live upload** (**Make a key**, then **Copy**), or in a terminal on the computer that runs the drive:
-   ```cmd
-   run.bat recorder-key
-   ```
-   (`./run.sh recorder-key` on Linux or a Pi; `recorder-key new` makes a new one, `recorder-key off` turns live upload off.)
+3. Get the **Server URL** and **Recorder Key**. Where the recordings should go decides where they come from:
+   - **Your end-to-end encrypted account** (an account or admin account on a DDrive dashboard): through DDrive Lite on this computer,
+     signed in to that account (`lite connect`). The host can't put anything into such an account, so Lite seals the recording here,
+     a piece at a time, and sends it on as it is made. In a terminal, in the DDrive folder:
+     ```cmd
+     run.bat lite recorder on
+     ```
+     It shows the Server URL (`http://127.0.0.1:8766`, this computer only) and the key, and starts it. It runs while Lite runs (with the
+     drive letter, folder syncing, or by itself); `lite autostart on` has it start with the computer. `lite recorder new` makes a new key,
+     `lite recorder off` turns it off. The host has to be DDrive 3.20.0 or newer.
+   - **The owner's drive**: the Server URL is the drive's dashboard address (`http://127.0.0.1:8765` on the computer that runs it),
+     and the key is in the dashboard under **Settings** > **Live upload** (**Make a key**, then **Copy**), or in a terminal on that
+     computer: `run.bat recorder-key` (`./run.sh recorder-key` on Linux or a Pi).
 
-   Both can also be given to the installer: `Install-Recorder.cmd -ServerUrl http://127.0.0.1:8765 -RecorderKey <key>`.
+   Put both into the plugin's settings, or give them to the installer: `Install-Recorder.cmd -ServerUrl http://127.0.0.1:8766 -RecorderKey <key>`.
+4. Recordings go to `/Recordings/<folder>` (the plugin's folder setting, `Discord Calls` unless changed).
 5. If the **Record** button doesn't show in the voice panel, use the Vencord toolbox (top right of Discord): **DDriveRecorder** > **Start / stop DDrive recording**.
 
 ### 3. Record a Call
