@@ -174,6 +174,25 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(self.errors, [])
 
     # ------------------------------------------------------------ an end-to-end encrypted account
+    def test_the_recorder_key_is_made_in_the_settings(self):
+        self.sign_in_owner()
+        p = self.page
+        p.goto(self.base + "/#/settings")
+        p.click("#recorder-settings button:has-text('Make a key')")
+        p.wait_for_selector("text=New key made")
+        key = p.input_value("#recorder-settings input[readonly]")
+        self.assertTrue(key)
+        self.assertEqual(self.web.cfg.recorder_key, key)
+        r = self.ctx.request.post(self.base + "/api/rec/open", headers={"Authorization": "Bearer " + key},
+                                  data={"name": "call.webm", "mime": "audio/webm"})
+        self.assertEqual(r.status, 200, r.text())
+        r = self.ctx.request.post(self.base + "/api/rec/open", headers={"Authorization": "Bearer wrong"}, data={"name": "x.webm"})
+        self.assertEqual(r.status, 401)
+        p.click("#recorder-settings button:has-text('Turn off')")
+        p.wait_for_selector("text=Live upload is off")
+        self.assertEqual(p.input_value("#recorder-settings input[readonly]"), "")
+        self.assertEqual(self.errors, [])
+
     def test_every_computer_is_updated_from_the_settings(self):
         self.web.computers.heard("", {"device": "pi1", "name": "pi-xo", "version": "3.0.0", "kind": "git", "result": ""})
         self.web.computers.heard("", {"device": "pc2", "name": "laptop", "version": "3.0.0", "kind": "exe"})

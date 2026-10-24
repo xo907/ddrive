@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.19.1 (2026-10-24)
+
+- **Settings has the Live upload section now.** 3.19.0 told you to make a recorder key in Settings, Live upload, but the page had no such section. It is there now (owner only): make a key, copy it, make a new one or turn live upload off, pick the recordings folder, and see what is arriving. It also shows the server URL to give the recorder.
+
 ## 3.19.0 (2026-10-24)
 
 - **Live upload: recordings go into the drive while they are being made.** Make a recorder key in Settings, Live upload, and a program can stream a file in as it records it (`/api/rec/open`, `/data`, `/close`); the key can only add new files to the recordings folder (`/Recordings` unless you pick another), nothing else of the drive. A file that only grew isn't kept as an earlier version. Comes with a Vencord plugin that records Discord calls and screenshares straight into DDrive, and `Install-Recorder.cmd` to set it up: see docs/recorder.md.

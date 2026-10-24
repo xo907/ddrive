@@ -108,7 +108,8 @@ RETIRED_POST = frozenset("""logout account/delete accounts/e2e locks/unlock lock
 # How the owner signs in: only the owner's to see or change (an answer with one of these is never
 # compressed either).
 OWNER_ONLY = frozenset(("/api/signin/passkey/options", "/api/signin/passkey/register", "/api/signin/passkey/remove",
-                        "/api/signin/phrase", "/api/webdav/password", "/api/erase"))
+                        "/api/signin/phrase", "/api/webdav/password", "/api/erase",
+                        "/api/recorder"))
 
 # What an admin account (accounts.py) may ask of the drive itself, next to what any end-to-end
 # encrypted account may ask about its own files: the settings, the accounts and other admins, health

@@ -2528,14 +2528,62 @@ async function renderSettings() {
            h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))]).flat(),
        h("div", { id: "discord-settings" }),
        h("div", { id: "signin-settings" }),
+       h("div", { id: "recorder-settings" }),
        h("div", { id: "computers-settings" }),
        h("div", { id: "accounts-settings" }),
        h("div", { id: "erase-settings" }));
   if (!SERVER) discordSection($("#discord-settings"));      // (the owner's Discord account: not an admin's)
   signInSection($("#signin-settings"));
+  if (!SERVER) recorderSection($("#recorder-settings"));   // the key writes into the owner's drive
   computersSection($("#computers-settings"));
   accountsSection($("#accounts-settings"));
   if (!SERVER) eraseSection($("#erase-settings"));          // the owner's alone
+}
+
+// Live upload (liverec.py): a program (the Discord recorder plugin, say) streams a file in while it makes
+// it, signed in with the recorder key alone, which can only add new files to the recordings folder.
+async function recorderSection(el) {
+  let info = await api("/api/recorder").catch(() => null);
+  if (!info || !el) return;
+  const keyBox = h("input", { readonly: true, spellcheck: "false", autocomplete: "off", onfocus: (e) => e.target.select() });
+  const keyBtn = h("button", { class: "btn", type: "button", onclick: () => change({ key: "new" }, "New key made: programs using the old one must get this one") });
+  const offBtn = h("button", { class: "btn danger", type: "button", onclick: () => change({ key: "off" }, "Live upload is off") }, "Turn off");
+  const copyBtn = h("button", { class: "btn", type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(info.key); } catch { keyBox.select(); document.execCommand("copy"); }
+    toast("Key copied");
+  } }, "Copy");
+  const folder = h("input", { spellcheck: "false", onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+                              onchange: () => change({ folder: folder.value.trim() }, "Saved") });
+  const url = h("code", {}, location.origin);
+  const live = h("div", { class: "s" });
+  async function change(body, done) {
+    const r = await attempt(() => api("/api/recorder", body));
+    if (r) { info = r; show(); toast(done); }
+  }
+  function show() {
+    const on = !!info.key;
+    keyBox.value = on ? info.key : "";
+    keyBox.placeholder = "Off: no key yet";
+    keyBtn.textContent = on ? "New key" : "Make a key";
+    offBtn.hidden = copyBtn.hidden = !on;
+    folder.value = info.folder;
+    live.textContent = (info.live || []).length
+      ? "Arriving now: " + info.live.map((r) => `${r.path} (${size(r.bytes)})${r.error ? " — " + r.error : ""}`).join(", ")
+      : "";
+  }
+  show();
+  el.append(h("h2", {}, "Live upload"),
+    h("div", { class: "settings" },
+      h("div", { class: "set-row" },
+        h("div", { class: "set-text" }, h("div", { class: "t" }, "Recorder key"),
+          h("div", { class: "s" }, "Lets a program (like the DDrive call recorder for Discord) send files in while it makes them. "
+            + "It can only add new files to the folder below, nothing else of the drive. Server URL: ", url),
+          live),
+        h("div", { class: "set-ctl wide" }, keyBox, copyBtn, keyBtn, offBtn)),
+      h("div", { class: "set-row" },
+        h("div", { class: "set-text" }, h("div", { class: "t" }, "Recordings folder"),
+          h("div", { class: "s" }, "Where files sent with the recorder key go.")),
+        h("div", { class: "set-ctl wide" }, folder))));
 }
 
 // The owner's hard reset: every file and account, here and in every channel, erased for good; the bots,
