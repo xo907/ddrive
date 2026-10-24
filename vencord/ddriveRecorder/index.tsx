@@ -43,6 +43,14 @@ export const settings = definePluginSettings({
         description: "Automatically start recording when joining a voice call",
         default: false
     },
+    format: {
+        type: OptionType.SELECT,
+        description: "File format (MP4 when this Discord can record it, else WebM)",
+        options: [
+            { label: "MP4", value: "mp4", default: true },
+            { label: "WebM", value: "webm" }
+        ]
+    },
     recordScreenshare: {
         type: OptionType.BOOLEAN,
         description: "Record screenshare video when anyone is sharing their screen in the call",
@@ -468,21 +476,23 @@ async function begin() {
 
         const combinedStream = new MediaStream(tracks);
 
-        // 4. Select MIME type
-        const mimeType = isVideo
-            ? (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
-                ? "video/webm;codecs=vp8,opus"
-                : "video/webm")
-            : (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-                ? "audio/webm;codecs=opus"
-                : "audio/webm");
+        // 4. Select MIME type: MP4 when Discord's Chromium can make it (and it is wanted), else WebM
+        const mp4 = settings.store.format !== "webm";
+        const wanted = isVideo
+            ? [...(mp4 ? ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4;codecs=avc1,opus", "video/mp4"] : []),
+                "video/webm;codecs=vp8,opus", "video/webm"]
+            : [...(mp4 ? ["audio/mp4;codecs=mp4a.40.2", "audio/mp4;codecs=opus", "audio/mp4"] : []),
+                "audio/webm;codecs=opus", "audio/webm"];
+        const mimeType = wanted.find(t => MediaRecorder.isTypeSupported(t)) ?? wanted[wanted.length - 1];
+        const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+        if (mp4 && ext !== "mp4") console.warn("[DDriveRecorder] This Discord can't record MP4: recording WebM");
 
         // 5. Generate clean file name
         const cleanName = channelTitle.replace(/[\x00-\x1f/\\:*?"<>|]+/g, " ").trim() || "Discord_Call";
         const now = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
         const dateTag = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-        const fileName = `${cleanName}_${dateTag}.${isVideo ? "webm" : "webm"}`;
+        const fileName = `${cleanName}_${dateTag}.${ext}`;
 
         // 6. Open stream on DDrive (/api/rec/open)
         const openRes = await Native?.openLiveRecording?.({

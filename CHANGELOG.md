@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.3 (2026-10-24)
+
+- **Call recordings are MP4.** The Discord call recorder records MP4 (H.264 video, AAC sound) when Discord can, which plays almost everywhere; a Discord too old for it records WebM as before. The plugin's Format setting can ask for WebM.
+
 ## 3.20.2 (2026-10-24)
 
 - **The call recorder's recordings reach DDrive.** A recorded part was handed from Discord's page to the desktop side of the plugin as bytes, and arrived as 1 byte: the recording on screen grew, the one in DDrive didn't. Parts now go as text, and the plugin checks that each arrived whole; it also knows how much DDrive has saved.
