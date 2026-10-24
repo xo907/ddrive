@@ -101,7 +101,9 @@
     margin-left: 2px;
 }
 
-/* the Record button in the call's control bar, next to Disconnect (sized like it in index.tsx) */
+/* the Record button in the call's control bar, next to Disconnect (as big as it: set in index.tsx).
+   Dressed like the bar's own groups of buttons: dark, a thin edge, an icon; while recording, a red edge,
+   a pulsing red dot and the time (not red all over: that is Disconnect, next to it). */
 #ddrive-rec-callbar {
     display: flex;
     align-items: center;
@@ -111,62 +113,103 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 0 18px;
-    border: none;
+    gap: 10px;
+    box-sizing: border-box;
+    padding: 0 20px;
+    border: 1px solid rgb(255 255 255 / 8%);
     cursor: pointer;
+    color: #f2f3f5;
+    background: #111214;
+    font-family: var(--font-primary, inherit);
+    font-size: 16px;
     font-weight: 600;
-    font-size: 15px;
-    color: #fff;
-    background: #2b2d31;
-    transition: background 0.15s ease, transform 0.1s ease;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.ddrive-callbar-btn:hover { background: #35373c; }
-.ddrive-callbar-btn:active { transform: scale(0.97); }
+.ddrive-callbar-btn:hover {
+    background: #1e1f22;
+}
+
+.ddrive-callbar-btn:focus-visible {
+    outline: 2px solid #00a8fc;
+    outline-offset: 2px;
+}
+
 .ddrive-callbar-btn:disabled {
     cursor: progress;
-    opacity: 0.85;
+}
+
+.ddrive-callbar-text:empty {
+    display: none;
+}
+
+/* the record icon: a ring with a red dot in it */
+.ddrive-callbar-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    box-sizing: border-box;
+    border: 2px solid currentcolor;
+    border-radius: 50%;
 }
 
 .ddrive-callbar-dot {
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: #ed4245;
-    box-shadow: 0 0 0 3px rgb(237 66 69 / 25%);
+    background: #f23f43;
 }
 
 .ddrive-callbar-btn.recording {
-    background: #ed4245;
-    font-variant-numeric: tabular-nums;
+    border-color: rgb(242 63 67 / 70%);
+    box-shadow: 0 0 0 1px rgb(242 63 67 / 35%), 0 0 14px rgb(242 63 67 / 30%);
 }
 
-.ddrive-callbar-btn.recording:hover { background: #c03537; }
+.ddrive-callbar-btn.recording .ddrive-callbar-icon {
+    border-color: #f23f43;
+}
 
 .ddrive-callbar-btn.recording .ddrive-callbar-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 3px;
-    background: #fff;
-    box-shadow: none;
     animation: ddrive-callbar-pulse 1.4s ease-in-out infinite;
+}
+
+.ddrive-callbar-btn.starting .ddrive-callbar-icon,
+.ddrive-callbar-btn.saving .ddrive-callbar-icon {
+    border-color: rgb(255 255 255 / 25%);
+    border-top-color: #f2f3f5;
+    animation: ddrive-callbar-spin 0.8s linear infinite;
 }
 
 .ddrive-callbar-btn.starting .ddrive-callbar-dot,
 .ddrive-callbar-btn.saving .ddrive-callbar-dot {
-    background: transparent;
-    border: 2px solid #fff;
-    border-top-color: transparent;
-    box-shadow: none;
-    animation: ddrive-callbar-spin 0.8s linear infinite;
+    visibility: hidden;
+}
+
+.ddrive-callbar-btn.saving .ddrive-callbar-text,
+.ddrive-callbar-btn.starting .ddrive-callbar-text {
+    color: #b5bac1;
+    font-weight: 500;
 }
 
 @keyframes ddrive-callbar-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.4;
+        transform: scale(0.8);
+    }
 }
 
 @keyframes ddrive-callbar-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }

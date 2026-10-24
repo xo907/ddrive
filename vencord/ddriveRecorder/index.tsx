@@ -251,6 +251,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
     }
     const dest = audioCtx.createMediaStreamDestination();
     let hasConnected = false;
+    const heard: { name: string; node: AudioNode; }[] = [];
 
     // 1. Microphone capture (user's voice)
     try {
@@ -267,6 +268,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
         if (micStream.getAudioTracks().length > 0) {
             const micSource = audioCtx.createMediaStreamSource(micStream);
             micSource.connect(dest);
+            heard.push({ name: `microphone (${micStream.getAudioTracks()[0].label})`, node: micSource });
             hasConnected = true;
         }
     } catch (e) {
@@ -297,8 +299,13 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
             if (audioTracks.length > 0) {
                 const sysSource = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
                 sysSource.connect(dest);
+                heard.push({ name: `computer sound (${audioTracks[0].label})`, node: sysSource });
                 hasConnected = true;
+            } else {
+                console.warn("[DDriveRecorder] Computer sound: the desktop capture came without sound");
             }
+        } else {
+            console.warn("[DDriveRecorder] Computer sound: no screen to take the sound of");
         }
     } catch (e) {
         console.warn(`[DDriveRecorder] Desktop loopback audio fallback: ${(e as any)?.name}: ${(e as any)?.message}`);
@@ -318,7 +325,47 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
         }
     }
 
+    console.info(`[DDriveRecorder] Recording sound from: ${heard.map(h => h.name).join(", ") || "nothing"}`);
+    watchLevels(audioCtx, heard);
     return { stream: dest.stream, ctx: audioCtx };
+}
+
+/** For the first 20 seconds, how loud each sound is (Discord's log): silent computer sound means the
+ * call plays somewhere the recorder can't hear (another output device than Windows' default). */
+function watchLevels(ctx: AudioContext, heard: { name: string; node: AudioNode; }[]) {
+    const meters = heard.map(h => {
+        const a = ctx.createAnalyser();
+        a.fftSize = 2048;
+        h.node.connect(a);
+        return { name: h.name, a, peak: 0 };
+    });
+    const buf = new Float32Array(2048);
+    let n = 0;
+    const timer = setInterval(() => {
+        for (const m of meters) {
+            m.a.getFloatTimeDomainData(buf);
+            for (const v of buf) m.peak = Math.max(m.peak, Math.abs(v));
+        }
+        if (++n % 20 === 0) {
+            console.info(`[DDriveRecorder] Sound levels (0 = silent, 1 = loudest): ${meters.map(m => `${m.name}: ${m.peak.toFixed(3)}`).join("; ")}`);
+            meters.forEach(m => { m.peak = 0; });
+        }
+        if (n >= 80 || ctx.state === "closed") clearInterval(timer);
+    }, 250);
+}
+
+/** Discord plays the call on the output device chosen in its settings; the computer sound the recorder
+ * takes is that of Windows' default device. When they differ, the others in the call aren't recorded. */
+function checkOutputDevice() {
+    const out = (MediaEngineStore as any)?.getOutputDeviceId?.();
+    if (out && out !== "default") {
+        console.warn(`[DDriveRecorder] Discord plays the call on output device ${out}, not Windows' default`);
+        showToast({
+            text: "The others in the call may not be recorded: in Discord, set Voice & Video > Output Device to Default "
+                + "(and pick your headset as Windows' default instead).",
+            variant: "critical"
+        });
+    }
 }
 
 // ------------------------------------------------------------- Upload to DDrive
@@ -457,6 +504,7 @@ async function begin() {
         }
 
         // 2. Audio Capture
+        checkOutputDevice();
         const { stream: audioStream, ctx: audioCtx } = await captureCallAudio();
         currentAudioContext = audioCtx;
 
@@ -673,7 +721,7 @@ function barLabel(): { text: string; title: string; } {
                 + `${formatBytes(s.savedBytes)} saved in DDrive. Click to stop and save.`
         };
     }
-    return { text: "Record", title: "Record this call into DDrive" };
+    return { text: "", title: "Record this call into DDrive" };
 }
 
 function renderBar() {
@@ -711,7 +759,7 @@ function placeBar() {
     btn.style.height = `${Math.round(r.height)}px`;
     btn.style.minWidth = `${Math.round(r.width)}px`;
     btn.style.borderRadius = getComputedStyle(disc).borderRadius || "8px";
-    btn.innerHTML = '<span class="ddrive-callbar-dot"></span><span class="ddrive-callbar-text"></span>';
+    btn.innerHTML = '<span class="ddrive-callbar-icon"><span class="ddrive-callbar-dot"></span></span><span class="ddrive-callbar-text"></span>';
     btn.addEventListener("click", e => {
         e.preventDefault();
         e.stopPropagation();

@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.4 (2026-10-24)
+
+- **The call recorder's Record button looks like the call's own buttons**: dark, a thin edge and a record icon; while it records, a red edge, a pulsing red dot and the time (not red all over, which is Disconnect next to it); a turning ring while it starts or saves.
+- **Why the others in a call can be missing from a recording.** The recorder takes the computer's sound from Windows' default output device; Discord plays the call (voices and streams) on the device chosen in its own settings. When that isn't Default, the recorder now says so as it starts. For the first 20 seconds it also writes in Discord's log how loud the microphone and the computer's sound are.
+
 ## 3.20.3 (2026-10-24)
 
 - **Call recordings are MP4.** The Discord call recorder records MP4 (H.264 video, AAC sound) when Discord can, which plays almost everywhere; a Discord too old for it records WebM as before. The plugin's Format setting can ask for WebM.
