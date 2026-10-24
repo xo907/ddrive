@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.23.0 (2026-10-24)
+
+- **Leave people out of call recordings.** Right-click someone (yourself too) > **Exclude from DDrive recordings**, again to take it back; it works during a recording too. You: your microphone isn't recorded. Someone else: Discord mixes everyone's voice into one sound before anything else can have it, so one voice can't be taken out of it; instead the call's sound is muted in the recording while they talk (and 0.4 s after), which leaves out whoever talks at the same time too. The list is also in the plugin's settings (user IDs).
+
 ## 3.22.0 (2026-10-24)
 
 - **The call recorder records Discord's sound only.** It recorded everything the computer played, so a YouTube video in the browser went into the call's recording. Now it takes only what Discord plays (the others in the call, streams, the soundboard) besides your microphone, with Windows' process loopback (Windows 10 2004 or newer): a small helper, built on the computer the first time with the C# compiler Windows has, hands Discord's sound to the plugin. This also doesn't depend on Discord's output device any more. The Call sound setting has Whole computer for the old way.

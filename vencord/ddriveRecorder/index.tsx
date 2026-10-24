@@ -4,16 +4,21 @@
  * Zero disk usage, no background pauses when minimized
  */
 
+import { NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
+import type { User } from "@vencord/discord-types";
 import {
     ChannelStore,
+    FluxDispatcher,
     MediaEngineStore,
+    Menu,
     React,
     RTCConnectionStore,
     showToast,
     useEffect,
+    UserStore,
     useState,
     WindowStore
 } from "@webpack/common";
@@ -55,6 +60,12 @@ export const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Record screenshare video when anyone is sharing their screen in the call",
         default: true
+    },
+    excludedUsers: {
+        type: OptionType.STRING,
+        description: "People left out of recordings (user IDs, separated by commas; easier: right-click someone > Exclude from DDrive recordings). "
+            + "You: your microphone isn't recorded. Someone else: the call's sound is left out while they talk (and so is anyone talking at the same time).",
+        default: ""
     },
     callSound: {
         type: OptionType.SELECT,
@@ -269,6 +280,82 @@ function findActiveScreenshare(): { videoEl: HTMLVideoElement | null; videoTrack
     return { videoEl: null, videoTrack: null };
 }
 
+// ------------------------------------------------------------- People left out of recordings
+// Discord mixes everyone's voice into one sound before anything else gets it, so one person can't be
+// taken out of it. What can be done: you (your microphone isn't recorded), and for anyone else, the
+// call's sound is muted in the recording while they talk (Discord says who talks: SPEAKING), and for
+// HANG ms after, which leaves out whoever talks at the same time too.
+const HANG = 400;
+const talking = new Map<string, number>(); // user -> until when (Infinity: talking now)
+let gateTimer: ReturnType<typeof setInterval> | null = null;
+let gateNodes: { mic: GainNode; call: GainNode; } | null = null;
+
+function excludedSet(): Set<string> {
+    return new Set((settings.store.excludedUsers || "").split(/[\s,]+/).filter(Boolean));
+}
+
+function setExcluded(userId: string, on: boolean) {
+    const ids = excludedSet();
+    if (on) ids.add(userId);
+    else ids.delete(userId);
+    settings.store.excludedUsers = [...ids].join(", ");
+}
+
+function onSpeaking(e: { userId?: string; speakingFlags?: number; speaking?: boolean; }) {
+    if (!e?.userId) return;
+    const on = e.speakingFlags !== undefined ? !!e.speakingFlags : !!e.speaking;
+    talking.set(e.userId, on ? Infinity : Date.now() + HANG);
+}
+
+/** The microphone and the call's sound each go through a gate of their own (made once per recording). */
+function gates(ctx: AudioContext, dest: AudioNode) {
+    if (gateNodes && gateNodes.mic.context === ctx) return gateNodes;
+    const mic = ctx.createGain(), call = ctx.createGain();
+    mic.connect(dest);
+    call.connect(dest);
+    gateNodes = { mic, call };
+    const apply = () => {
+        const ids = excludedSet();
+        const me = UserStore?.getCurrentUser?.()?.id;
+        const now = Date.now();
+        const quiet = [...ids].some(id => id !== me && (talking.get(id) ?? 0) > now);
+        mic.gain.setTargetAtTime(me && ids.has(me) ? 0 : 1, ctx.currentTime, 0.015);
+        call.gain.setTargetAtTime(quiet ? 0 : 1, ctx.currentTime, 0.015);
+    };
+    apply();
+    if (gateTimer) clearInterval(gateTimer);
+    gateTimer = setInterval(apply, 50);
+    return gateNodes;
+}
+
+function stopGates() {
+    if (gateTimer) clearInterval(gateTimer);
+    gateTimer = null;
+    gateNodes = null;
+}
+
+const userContextMenu: NavContextMenuPatchCallback = (children, { user }: { user?: User; }) => {
+    if (!user) return;
+    const on = excludedSet().has(user.id);
+    const me = UserStore?.getCurrentUser?.()?.id === user.id;
+    children.push(
+        <Menu.MenuCheckboxItem
+            id="vc-ddrive-rec-exclude"
+            label="Exclude from DDrive recordings"
+            checked={on}
+            action={() => {
+                setExcluded(user.id, !on);
+                showToast({
+                    text: !on
+                        ? (me ? "Your microphone is left out of DDrive recordings" : `${user.username} is left out of DDrive recordings (the call's sound is muted while they talk)`)
+                        : `${me ? "You are" : user.username + " is"} recorded again`,
+                    variant: "success"
+                });
+            }}
+        />
+    );
+};
+
 // ------------------------------------------------------------- Discord's own sound
 // What Discord plays (the others in the call, streams, the soundboard), and nothing of other programs:
 // Windows' process loopback, by a small helper of the desktop side (native.ts, tapStart), which hands it
@@ -395,7 +482,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
         captureTracks.push(...micStream.getTracks());
         if (micStream.getAudioTracks().length > 0) {
             const micSource = audioCtx.createMediaStreamSource(micStream);
-            micSource.connect(dest);
+            micSource.connect(gates(audioCtx, dest).mic);
             heard.push({ name: `microphone (${micStream.getAudioTracks()[0].label})`, node: micSource });
             hasConnected = true;
         }
@@ -408,7 +495,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
     if (discordOnly) {
         const node = await discordSound(audioCtx);
         if (node) {
-            node.connect(dest);
+            node.connect(gates(audioCtx, dest).call);
             heard.push({ name: "Discord's sound", node });
             hasConnected = true;
         }
@@ -435,7 +522,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
             captureTracks.push(...audioTracks);
             if (audioTracks.length > 0) {
                 const sysSource = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
-                sysSource.connect(dest);
+                sysSource.connect(gates(audioCtx, dest).call);
                 heard.push({ name: `computer sound (${audioTracks[0].label})`, node: sysSource });
                 hasConnected = true;
             } else {
@@ -872,6 +959,7 @@ function cleanupRecording() {
     currentRecordedVideo = null;
     currentCompositor?.stop();
     stopDiscordSound();
+    stopGates();
     currentCompositor = null;
 
     for (const t of captureTracks) t.stop(); // the microphone and desktop audio this recording opened
@@ -1073,6 +1161,10 @@ export default definePlugin({
     settings,
 
     // also in the Vencord toolbox (the icon at the top right), should the voice panel button not show
+    contextMenus: {
+        "user-context": userContextMenu
+    },
+
     toolboxActions: {
         "Start / stop DDrive recording"() {
             if (recState.isRecording) stopRecording();
@@ -1083,6 +1175,7 @@ export default definePlugin({
     start() {
         setupVisibilityHooks();
         startBar();
+        FluxDispatcher.subscribe("SPEAKING", onSpeaking);
 
         // Listen for call state changes: stop recording if call ends, or auto-record
         if (RTCConnectionStore) {
@@ -1092,6 +1185,7 @@ export default definePlugin({
 
     stop() {
         stopBar();
+        FluxDispatcher.unsubscribe("SPEAKING", onSpeaking);
         if (recState.isRecording) {
             stopRecording();
         }
