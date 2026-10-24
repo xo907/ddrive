@@ -36,6 +36,7 @@ SEND_AT = vault.PART              # sealed bytes go to the host in parts of this
 HELD_MAX = 6 * vault.PART         # more than this not on the host yet: the recorder is asked to wait
 PART_MAX = 16 * 1024 * 1024       # the most one request of the recorder may send
 GIVE_UP = 30 * 60                 # the host can't be reached for this long: the recording is given up
+KEEP_FROM = 4096                  # smaller recordings are only a file's beginning (a recorder that stalled): not kept
 
 
 class _Rec:
@@ -154,7 +155,7 @@ class VaultRecordings:
                 return {"ok": False, "offset": rec.offset}
             if not rec.closing:
                 rec.closing = True
-                if rec.offset:
+                if rec.offset >= KEEP_FROM:
                     rec.sealed += vault.seal(rec.key, bytes(rec.plain), vault._label(rec.n, True))
                     rec.plain.clear()
                     rec.last_sealed = True
@@ -198,7 +199,9 @@ class VaultRecordings:
                 with rec.lock:
                     while not (len(rec.sealed) >= SEND_AT or rec.closing):
                         rec.lock.wait(5)
-                    if rec.closing and not rec.last_sealed:          # nothing was recorded
+                    if rec.closing and not rec.last_sealed:          # nothing (worth keeping) was recorded
+                        if rec.offset:
+                            log.info("Recording %s: only %d bytes arrived, not kept", rec.path, rec.offset)
                         break
                     end = rec.closing and len(rec.sealed) <= SEND_AT
                     part = bytes(rec.sealed[:SEND_AT])

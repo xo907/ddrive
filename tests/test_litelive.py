@@ -80,6 +80,11 @@ class LiteLiveTest(test_vault.VaultTest):
         self.assertTrue(closed["done"])
         self.assertIsNone(self.new_device().resolve("/Recordings/empty.webm"))       # no empty file is left
         self.assertEqual(self.rec("/api/rec/data", b"x", query=f"?id={rid}&offset=0")[0], 404)
+        # a recorder that stalled after the file's beginning (1257 bytes of an MP4): no broken file is kept
+        rid = self.rec("/api/rec/open", json.dumps({"name": "stalled.mp4"}).encode())[1]["id"]
+        self.assertTrue(self.rec("/api/rec/data", os.urandom(1257), query=f"?id={rid}&offset=0")[1]["ok"])
+        self.assertTrue(self.rec("/api/rec/close", query=f"?id={rid}&offset=1257&wait=30")[1]["done"])
+        self.assertIsNone(self.new_device().resolve("/Recordings/stalled.mp4"))
 
     def test_the_host_takes_a_growing_object_only_in_order(self):
         client = lite.HostClient(self.address, auth=self.auth)

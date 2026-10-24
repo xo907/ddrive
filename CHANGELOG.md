@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.5 (2026-10-24)
+
+- **No more broken 1 KB recordings of calls with a stream.** The recorder recorded the stream's own video, and that gives no frames while Discord doesn't show it (minimized, another view) or once Discord has swapped the element it is shown in; MediaRecorder then writes nothing at all, not even the sound, and the file stopped at its first 1257 bytes. Now the stream is drawn onto a canvas 30 times a second (black while there is none, following the stream to wherever Discord shows it) and the canvas is recorded, whose frames never stop. It also takes the biggest video on screen (the stream being watched), not the first it finds.
+- A recording that has made next to nothing after 10 seconds is started again a safer way (WebM, then sound only), and says so.
+- Lite keeps no recording that is only a file's beginning (under 4 KB).
+
 ## 3.20.4 (2026-10-24)
 
 - **The call recorder's Record button looks like the call's own buttons**: dark, a thin edge and a record icon; while it records, a red edge, a pulsing red dot and the time (not red all over, which is Disconnect next to it); a turning ring while it starts or saves.

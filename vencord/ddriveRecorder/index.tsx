@@ -224,7 +224,10 @@ function stopWatchdog() {
 
 // ------------------------------------------------------------- Audio & Video Capture
 function findActiveScreenshare(): { videoEl: HTMLVideoElement | null; videoTrack: MediaStreamTrack | null } {
-    const videos = Array.from(document.querySelectorAll<HTMLVideoElement>("video"));
+    // the biggest one showing on screen first (the stream being watched, not a camera tile or a preview)
+    const videos = Array.from(document.querySelectorAll<HTMLVideoElement>("video"))
+        .filter(v => v.videoWidth > 0 || v.srcObject instanceof MediaStream)
+        .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
     for (const v of videos) {
         if (v.srcObject instanceof MediaStream) {
             const tracks = v.srcObject.getVideoTracks();
@@ -243,6 +246,47 @@ function findActiveScreenshare(): { videoEl: HTMLVideoElement | null; videoTrack
     }
     return { videoEl: null, videoTrack: null };
 }
+
+// ------------------------------------------------------------- Video: the stream drawn onto a canvas
+// MediaRecorder writes nothing at all (not even the sound) while a video track it records gives no
+// frames, and the stream's own video gives none while Discord doesn't show it (minimized, another view)
+// or after Discord swapped its video element: such recordings stopped at the file's first 1257 bytes.
+// So the stream is drawn onto a canvas 30 times a second, black while there's none, and the canvas is
+// recorded: its frames never stop, and it follows the stream to whatever element shows it now.
+interface Compositor { track: MediaStreamTrack; video: () => HTMLVideoElement | null; stop: () => void; }
+
+function makeCompositor(first: HTMLVideoElement): Compositor {
+    const w0 = first.videoWidth || 1280, h0 = first.videoHeight || 720;
+    const scale = Math.min(1, 1920 / w0, 1080 / h0);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(2, Math.round(w0 * scale / 2) * 2);
+    canvas.height = Math.max(2, Math.round(h0 * scale / 2) * 2);
+    const g = canvas.getContext("2d", { alpha: false })!;
+    let video: HTMLVideoElement | null = first;
+    let looked = 0;
+    const draw = () => {
+        const now = Date.now();
+        if (!video || !video.isConnected || !video.videoWidth || now - looked > 2000) {
+            looked = now;
+            video = findActiveScreenshare().videoEl ?? (video?.isConnected ? video : null);
+        }
+        g.fillStyle = "#000";
+        g.fillRect(0, 0, canvas.width, canvas.height);
+        if (video && video.videoWidth) {
+            const k = Math.min(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
+            const w = video.videoWidth * k, h = video.videoHeight * k;
+            try {
+                g.drawImage(video, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+            } catch (_) {}
+        }
+    };
+    draw();
+    const timer = setInterval(draw, 1000 / 30);
+    const track = canvas.captureStream(30).getVideoTracks()[0];
+    return { track, video: () => video, stop: () => { clearInterval(timer); track.stop(); } };
+}
+
+let currentCompositor: Compositor | null = null;
 
 async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioContext }> {
     const audioCtx = new AudioContext();
@@ -459,19 +503,26 @@ async function drain(up: Upload, ms: number) {
 let starting = false; // a start is under way (it waits for DDrive): another one isn't begun meanwhile
 let autoChannel: string | null = null; // the call auto-record last started for (or tried to): once per call
 
-export async function startRecording() {
+// How a recording is made: 0 as the settings say (MP4), 1 WebM, 2 WebM with sound only. A recording
+// that has made next to nothing after STALL_AFTER is given up (DDrive keeps no file of it) and started
+// again one step safer.
+const STALL_AFTER = 10000;
+const STALL_BYTES = 16 * 1024;
+let restartAt: number | null = null;
+
+export async function startRecording(level = 0) {
     if (recState.isRecording || starting) return;
     starting = true;
     updateState({ phase: "starting" });
     try {
-        await begin();
+        await begin(level);
     } finally {
         starting = false;
         if (recState.phase === "starting") updateState({ phase: recState.isRecording ? "recording" : "idle" });
     }
 }
 
-async function begin() {
+async function begin(level: number) {
 
     const { serverUrl, recorderKey, folderName, recordScreenshare, keepAliveWhenMinimized } = settings.store;
 
@@ -508,12 +559,13 @@ async function begin() {
         const { stream: audioStream, ctx: audioCtx } = await captureCallAudio();
         currentAudioContext = audioCtx;
 
-        // 3. Screenshare Video Detection
+        // 3. Screenshare Video Detection (drawn onto a canvas: see makeCompositor)
         let videoTrack: MediaStreamTrack | null = null;
-        if (recordScreenshare) {
+        if (recordScreenshare && level < 2) {
             const screen = findActiveScreenshare();
-            if (screen.videoTrack) {
-                videoTrack = screen.videoTrack;
+            if (screen.videoEl) {
+                currentCompositor = makeCompositor(screen.videoEl);
+                videoTrack = currentCompositor.track;
                 currentRecordedVideo = screen.videoEl;
             }
         }
@@ -525,7 +577,7 @@ async function begin() {
         const combinedStream = new MediaStream(tracks);
 
         // 4. Select MIME type: MP4 when Discord's Chromium can make it (and it is wanted), else WebM
-        const mp4 = settings.store.format !== "webm";
+        const mp4 = settings.store.format !== "webm" && level === 0;
         const wanted = isVideo
             ? [...(mp4 ? ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4;codecs=avc1,opus", "video/mp4"] : []),
                 "video/webm;codecs=vp8,opus", "video/webm"]
@@ -597,7 +649,9 @@ async function begin() {
                     wait: 30
                 });
 
-                if (closeRes && closeRes.ok) {
+                if (restartAt !== null) {
+                    // (a stalled one: nothing worth keeping, DDrive drops it)
+                } else if (closeRes && closeRes.ok) {
                     showToast({ text: `Call recorded to DDrive: ${closeRes.path || recPath}`, variant: "success" });
                 } else {
                     showToast({ text: `Recording finished: ${closeRes?.error || "Uploaded"}`, variant: "default" });
@@ -606,8 +660,26 @@ async function begin() {
                 console.error("[DDriveRecorder] Error closing recording:", err);
             } finally {
                 cleanupRecording();
+                const again = restartAt;
+                restartAt = null;
+                if (again !== null && RTCConnectionStore?.isConnected?.()) startRecording(again);
             }
         };
+
+        recorder.onerror = (e: any) => {
+            console.error(`[DDriveRecorder] The recorder stopped: ${e?.error?.name}: ${e?.error?.message}`);
+            showToast({ text: `The recording stopped: ${e?.error?.message || "the recorder failed"}`, variant: "critical" });
+        };
+
+        // Nothing (or next to nothing) made after a while: start again a safer way
+        setTimeout(() => {
+            if (currentUpload !== up || up.total >= STALL_BYTES || recState.phase !== "recording" || level >= 2) return;
+            console.warn(`[DDriveRecorder] ${mimeType} made only ${up.total} bytes in ${STALL_AFTER / 1000} s: starting again `
+                + (level === 0 ? "as WebM" : "with sound only"));
+            showToast({ text: level === 0 ? "MP4 didn't work here: recording as WebM" : "Video didn't work here: recording the sound only", variant: "default" });
+            restartAt = level + 1;
+            if (recorder.state !== "inactive") recorder.stop();
+        }, STALL_AFTER);
 
         // Start emitting chunks every 1.5s directly to memory and DDrive
         recorder.start(1500);
@@ -654,6 +726,8 @@ function cleanupRecording() {
     currentMediaRecorder = null;
     currentUpload = null;
     currentRecordedVideo = null;
+    currentCompositor?.stop();
+    currentCompositor = null;
 
     for (const t of captureTracks) t.stop(); // the microphone and desktop audio this recording opened
     captureTracks = [];
