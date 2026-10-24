@@ -56,6 +56,14 @@ export const settings = definePluginSettings({
         description: "Record screenshare video when anyone is sharing their screen in the call",
         default: true
     },
+    callSound: {
+        type: OptionType.SELECT,
+        description: "What is recorded besides your microphone",
+        options: [
+            { label: "Discord only: the call, streams and soundboard (not other programs)", value: "discord", default: true },
+            { label: "Whole computer: everything this computer plays", value: "computer" }
+        ]
+    },
     localCopy: {
         type: OptionType.SELECT,
         description: "Also write the recording to this computer as it is made: kept when DDrive couldn't take all of it (or always)",
@@ -261,6 +269,68 @@ function findActiveScreenshare(): { videoEl: HTMLVideoElement | null; videoTrack
     return { videoEl: null, videoTrack: null };
 }
 
+// ------------------------------------------------------------- Discord's own sound
+// What Discord plays (the others in the call, streams, the soundboard), and nothing of other programs:
+// Windows' process loopback, by a small helper of the desktop side (native.ts, tapStart), which hands it
+// over as 48 kHz 16-bit stereo. It is played into the recording from a buffer of up to a second.
+const TAP_RATE = 48000;
+let tapTimer: ReturnType<typeof setInterval> | null = null;
+let tapNode: ScriptProcessorNode | null = null;
+
+async function discordSound(ctx: AudioContext): Promise<AudioNode | null> {
+    const started = await Native!.tapStart();
+    if (!started.ok) {
+        console.warn(`[DDriveRecorder] Discord's own sound can't be taken: ${started.error}`);
+        showToast({ text: `Discord's sound can't be recorded here (${started.error}): your microphone only`, variant: "critical" });
+        return null;
+    }
+    const CAP = TAP_RATE * 2;
+    const ring = new Float32Array(CAP * 2);
+    let written = 0, read = 0, warned = false;
+    const step = TAP_RATE / ctx.sampleRate;
+    tapTimer = setInterval(async () => {
+        const got = await Native!.tapRead();
+        if (got.data) {
+            const bin = atob(got.data);
+            for (let i = 0; i + 3 < bin.length; i += 4) {
+                const l = (bin.charCodeAt(i) | bin.charCodeAt(i + 1) << 8) << 16 >> 16;
+                const r = (bin.charCodeAt(i + 2) | bin.charCodeAt(i + 3) << 8) << 16 >> 16;
+                const at = (written % CAP) * 2;
+                ring[at] = l / 32768;
+                ring[at + 1] = r / 32768;
+                written++;
+            }
+            if (written - read > TAP_RATE) read = written - TAP_RATE / 5; // (fell behind: keep it near)
+        }
+        if (!got.alive && !warned) {
+            warned = true;
+            console.warn(`[DDriveRecorder] Discord's sound stopped: ${got.error || "the helper ended"}`);
+        }
+    }, 40);
+    const node = ctx.createScriptProcessor(2048, 1, 2);
+    node.onaudioprocess = e => {
+        const L = e.outputBuffer.getChannelData(0), R = e.outputBuffer.getChannelData(1);
+        for (let i = 0; i < L.length; i++) {
+            if (written - read < 2) { L[i] = R[i] = 0; continue; }
+            const f = Math.floor(read), k = read - f;
+            const a = (f % CAP) * 2, b = ((f + 1) % CAP) * 2;
+            L[i] = ring[a] + (ring[b] - ring[a]) * k;
+            R[i] = ring[a + 1] + (ring[b + 1] - ring[a + 1]) * k;
+            read += step;
+        }
+    };
+    tapNode = node;
+    return node;
+}
+
+function stopDiscordSound() {
+    if (tapTimer) clearInterval(tapTimer);
+    tapTimer = null;
+    tapNode?.disconnect();
+    tapNode = null;
+    Native?.tapStop?.();
+}
+
 // ------------------------------------------------------------- Video: the stream drawn onto a canvas
 // MediaRecorder writes nothing at all (not even the sound) while a video track it records gives no
 // frames, and the stream's own video gives none while Discord doesn't show it (minimized, another view)
@@ -333,8 +403,17 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
         console.warn(`[DDriveRecorder] Microphone capture note: ${(e as any)?.name}: ${(e as any)?.message}`);
     }
 
-    // 2. Desktop audio loopback (captures other call participants & shared audio)
-    try {
+    // 2. The call's sound: Discord's own (settings: callSound), or everything the computer plays
+    const discordOnly = (settings.store.callSound ?? "discord") === "discord";
+    if (discordOnly) {
+        const node = await discordSound(audioCtx);
+        if (node) {
+            node.connect(dest);
+            heard.push({ name: "Discord's sound", node });
+            hasConnected = true;
+        }
+    }
+    if (!discordOnly) try {
         const sources = await Native?.getDesktopSources?.();
         if (sources && sources.length > 0) {
             const desktopStream = await navigator.mediaDevices.getUserMedia({
@@ -370,7 +449,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
     }
 
     // 3. Fallback: connect DOM media elements (HTMLAudioElement / HTMLVideoElement)
-    if (!hasConnected) {
+    if (!hasConnected && !discordOnly) {
         const mediaElements = Array.from(document.querySelectorAll<HTMLMediaElement>("audio, video"));
         for (const el of mediaElements) {
             try {
@@ -593,7 +672,7 @@ async function begin(level: number) {
         }
 
         // 2. Audio Capture
-        checkOutputDevice();
+        if ((settings.store.callSound ?? "discord") === "computer") checkOutputDevice();
         const { stream: audioStream, ctx: audioCtx } = await captureCallAudio();
         currentAudioContext = audioCtx;
 
@@ -792,6 +871,7 @@ function cleanupRecording() {
     currentUpload = null;
     currentRecordedVideo = null;
     currentCompositor?.stop();
+    stopDiscordSound();
     currentCompositor = null;
 
     for (const t of captureTracks) t.stop(); // the microphone and desktop audio this recording opened
