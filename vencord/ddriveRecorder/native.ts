@@ -4,9 +4,11 @@
  * Zero disk usage, no background pauses when minimized
  */
 
-import { BrowserWindow, desktopCapturer, IpcMainInvokeEvent, powerSaveBlocker } from "electron";
+import { app, BrowserWindow, desktopCapturer, IpcMainInvokeEvent, powerSaveBlocker } from "electron";
+import fs from "fs";
 import http from "http";
 import https from "https";
+import path from "path";
 import { URL } from "url";
 
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
@@ -110,6 +112,48 @@ export async function getDesktopSources(_: IpcMainInvokeEvent): Promise<Array<{ 
         console.error("[DDriveRecorder Native] getDesktopSources error:", e);
         return [];
     }
+}
+
+// ------------------------------------------------------------- The copy on this computer
+// Written as the recording is made, so that it is all here when DDrive (Lite, or the host behind it)
+// can't take it; removed at the end when DDrive got all of it (unless a copy is always wanted).
+const localFiles = new Map<string, { fd: number; path: string; }>();
+
+export async function localOpen(_: IpcMainInvokeEvent, opts: { folder: string; name: string; }): Promise<{ ok: boolean; id?: string; path?: string; error?: string; }> {
+    try {
+        const dir = opts.folder?.trim() || path.join(app.getPath("videos"), "DDrive Recordings");
+        fs.mkdirSync(dir, { recursive: true });
+        const ext = path.extname(opts.name), stem = opts.name.slice(0, opts.name.length - ext.length);
+        let file = path.join(dir, opts.name);
+        for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${stem} (${n})${ext}`);
+        const fd = fs.openSync(file, "wx");
+        const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        localFiles.set(id, { fd, path: file });
+        return { ok: true, id, path: file };
+    } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+    }
+}
+
+export async function localWrite(_: IpcMainInvokeEvent, opts: { id: string; chunk64: string; }): Promise<{ ok: boolean; error?: string; }> {
+    const f = localFiles.get(opts.id);
+    if (!f) return { ok: false, error: "the file isn't open" };
+    try {
+        fs.writeSync(f.fd, Buffer.from(opts.chunk64, "base64"));
+        return { ok: true };
+    } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+    }
+}
+
+export async function localClose(_: IpcMainInvokeEvent, opts: { id: string; keep: boolean; }): Promise<{ kept: boolean; path?: string; }> {
+    const f = localFiles.get(opts.id);
+    if (!f) return { kept: false };
+    localFiles.delete(opts.id);
+    try { fs.closeSync(f.fd); } catch { }
+    if (opts.keep) return { kept: true, path: f.path };
+    try { fs.unlinkSync(f.path); } catch { }
+    return { kept: false };
 }
 
 /**

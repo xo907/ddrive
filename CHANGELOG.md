@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.21.0 (2026-10-24)
+
+- **The call recorder keeps a copy on the computer when DDrive can't take it.** A new setting, On this computer: *When DDrive fails* (the default) writes the recording to `Videos\DDrive Recordings` as it is made, and removes it at the end if DDrive got all of it, or keeps it and says where if it didn't (Lite or the host unreachable, or given up on partway); *Always* keeps it either way; *Off* is DDrive only, as before. With a copy here, a recording also starts when DDrive can't be reached at all, and goes on when DDrive stops taking it, or falls more than 256 MB behind, instead of stopping. The folder can be chosen.
+
 ## 3.20.6 (2026-10-24)
 
 - **The call recorder starts at once.** Lite read the account's whole list of files from the host before a recording could begin, which takes minutes with a big account on a slow host, and the Record button showed Starting... all that time. Now Lite asks nothing of the host to begin (it reads the list in the background when it starts, and sees to the folder and a free name when the recording is put into the account), and the plugin gives up with a message after 20 seconds without an answer.

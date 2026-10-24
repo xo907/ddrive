@@ -56,6 +56,20 @@ export const settings = definePluginSettings({
         description: "Record screenshare video when anyone is sharing their screen in the call",
         default: true
     },
+    localCopy: {
+        type: OptionType.SELECT,
+        description: "Also write the recording to this computer as it is made: kept when DDrive couldn't take all of it (or always)",
+        options: [
+            { label: "When DDrive fails: kept only if DDrive didn't get all of it", value: "fallback", default: true },
+            { label: "Always: keep a copy on this computer too", value: "always" },
+            { label: "Off: DDrive only", value: "off" }
+        ]
+    },
+    localFolder: {
+        type: OptionType.STRING,
+        description: "Folder for the copies on this computer (empty: Videos\\DDrive Recordings)",
+        default: ""
+    },
     keepAliveWhenMinimized: {
         type: OptionType.BOOLEAN,
         description: "Prevent Discord from pausing screenshare or audio when window is minimized",
@@ -427,7 +441,12 @@ interface Upload {
     pumping: Promise<void> | null;
     fatal: string | null;
     onFatal: (why: string) => void;
+    local: string | null; // the copy on this computer (its id with the desktop side), or none
+    localPath: string;
+    localFailed: boolean;
 }
+
+const MEMORY_MAX = 256 * 1024 * 1024; // more than this not in DDrive yet, with a copy here: DDrive is given up on
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const FATAL = new Set([400, 401, 403, 404, 409, 410, 413]);
@@ -446,8 +465,22 @@ function addPart(up: Upload, blob: Blob) {
     up.reading = up.reading.then(async () => {
         if (!blob.size) return;
         const data = await readBase64(blob);
-        up.queue.push({ offset: up.total, size: blob.size, data });
+        if (up.local && !up.localFailed) { // the copy on this computer first: it is what is left if DDrive fails
+            const w = await Native!.localWrite({ id: up.local, chunk64: data });
+            if (!w.ok) {
+                up.localFailed = true;
+                showToast({ text: `The copy on this computer couldn't be written: ${w.error}`, variant: "critical" });
+            }
+        }
         up.total += blob.size;
+        if (up.fatal) return; // (DDrive was given up on: the copy here has it all)
+        up.queue.push({ offset: up.total - blob.size, size: blob.size, data });
+        const waiting = up.queue.reduce((n, p) => n + p.size, 0);
+        if (up.local && !up.localFailed && waiting > MEMORY_MAX) {
+            up.fatal = `DDrive is ${Math.round(waiting / 2 ** 20)} MB behind`;
+            up.onFatal(up.fatal);
+            return;
+        }
         kick(up);
     }).catch(e => console.error("[DDriveRecorder] Could not read a recorded part:", e));
 }
@@ -480,6 +513,11 @@ async function pump(up: Upload) {
         }
         if (FATAL.has(res.status)) {
             up.fatal = res.error || `HTTP ${res.status}`;
+            up.onFatal(up.fatal);
+            break;
+        }
+        if (up.local && !up.localFailed && tries >= 30) { // DDrive hasn't answered for minutes: the copy here goes on alone
+            up.fatal = `no answer from ${up.serverUrl}`;
             up.onFatal(up.fatal);
             break;
         }
@@ -594,7 +632,13 @@ async function begin(level: number) {
         const dateTag = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
         const fileName = `${cleanName}_${dateTag}.${ext}`;
 
-        // 6. Open stream on DDrive (/api/rec/open)
+        // 6. The copy on this computer (settings: localCopy), then the stream on DDrive (/api/rec/open)
+        const localMode = settings.store.localCopy ?? "fallback";
+        let local: { ok: boolean; id?: string; path?: string; error?: string; } | null = null;
+        if (localMode !== "off") {
+            local = await Native.localOpen({ folder: settings.store.localFolder || "", name: fileName });
+            if (!local.ok) showToast({ text: `No copy on this computer: ${local.error}`, variant: "critical" });
+        }
         const openRes = await Promise.race([
             Native.openLiveRecording({
                 serverUrl,
@@ -603,20 +647,29 @@ async function begin(level: number) {
                 name: fileName,
                 mime: mimeType
             }),
-            sleep(20000).then(() => ({ ok: false, id: undefined, error: `no answer from ${serverUrl} in 20 seconds` }))
+            sleep(20000).then(() => ({ ok: false, id: undefined, path: undefined, error: `no answer from ${serverUrl} in 20 seconds` }))
         ]);
 
+        const localOk = !!(local?.ok && local.id);
         if (!openRes || !openRes.ok || !openRes.id) {
-            throw new Error(openRes?.error || "Failed to initiate live recording stream on DDrive");
+            const why = openRes?.error || "DDrive didn't answer";
+            if (!localOk) throw new Error(why);
+            showToast({ text: `DDrive can't take it (${why}): recording to this computer only`, variant: "critical" });
         }
 
-        const recPath = openRes.path || fileName;
+        const recPath = openRes?.path || fileName;
         const up: Upload = {
-            serverUrl, recorderKey, id: openRes.id, queue: [], total: 0, acked: 0,
-            reading: Promise.resolve(), pumping: null, fatal: null,
+            serverUrl, recorderKey, id: openRes?.id || "", queue: [], total: 0, acked: 0,
+            reading: Promise.resolve(), pumping: null, fatal: openRes?.ok && openRes.id ? null : "DDrive couldn't be reached",
+            local: localOk ? local!.id! : null, localPath: local?.path || "", localFailed: false,
             onFatal: why => {
-                showToast({ text: `DDrive stopped taking the recording: ${why}`, variant: "critical" });
-                stopRecording();
+                if (up.local && !up.localFailed) {
+                    up.queue = [];
+                    showToast({ text: `DDrive stopped taking the recording (${why}): it goes on, on this computer`, variant: "critical" });
+                } else {
+                    showToast({ text: `DDrive stopped taking the recording: ${why}`, variant: "critical" });
+                    stopRecording();
+                }
             }
         };
         currentUpload = up;
@@ -640,24 +693,33 @@ async function begin(level: number) {
         recorder.onstop = async () => {
             try {
                 // the last part arrives just before this: let it (and anything still on its way) get to DDrive
-                await drain(up, 5 * 60 * 1000);
-                if (up.queue.length && !up.fatal) {
+                const hasLocal = !!up.local && !up.localFailed;
+                await drain(up, hasLocal ? 60 * 1000 : 5 * 60 * 1000);
+                if (up.queue.length && !up.fatal && !hasLocal) {
                     showToast({ text: "DDrive couldn't be reached: the end of the recording wasn't saved.", variant: "critical" });
                 }
-                const closeRes = await Native.closeLiveRecording({
+                const closeRes = up.id ? await Native.closeLiveRecording({
                     serverUrl,
                     recorderKey,
                     id: up.id,
                     offset: up.acked,
                     wait: 30
-                });
+                }) : null;
+                const whole = !!closeRes?.ok && !up.fatal && up.acked === up.total;
+                const keep = !!up.local && restartAt === null && (localMode === "always" || !whole);
+                const kept = up.local ? await Native.localClose({ id: up.local, keep: keep && up.total > 0 }) : null;
 
                 if (restartAt !== null) {
                     // (a stalled one: nothing worth keeping, DDrive drops it)
-                } else if (closeRes && closeRes.ok) {
-                    showToast({ text: `Call recorded to DDrive: ${closeRes.path || recPath}`, variant: "success" });
+                } else if (whole) {
+                    showToast({
+                        text: `Call recorded to DDrive: ${closeRes!.path || recPath}` + (kept?.kept ? ` (and to ${kept.path})` : ""),
+                        variant: "success"
+                    });
+                } else if (kept?.kept) {
+                    showToast({ text: `DDrive didn't get all of it: the recording is on this computer, ${kept.path}`, variant: "critical" });
                 } else {
-                    showToast({ text: `Recording finished: ${closeRes?.error || "Uploaded"}`, variant: "default" });
+                    showToast({ text: `Recording finished: ${closeRes?.error || up.fatal || "Uploaded"}`, variant: "default" });
                 }
             } catch (err: any) {
                 console.error("[DDriveRecorder] Error closing recording:", err);
