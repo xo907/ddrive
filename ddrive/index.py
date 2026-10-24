@@ -457,11 +457,13 @@ class Index:
     def get_chunks(self, nid):
         return self._all("SELECT * FROM chunks WHERE node_id=? ORDER BY idx", (nid,))
 
-    def replace_chunks(self, nid, chunks, version, parity=None):
+    def replace_chunks(self, nid, chunks, version, parity=None, append=False):
         """Atomically swap a file's chunk list and publish it. Returns False if the file changed meanwhile.
 
         parity: {"k": group size, "g": [[gid, [[message_id, size, sha256], ...]], ...]}, one entry
-        per group of `k` consecutive chunks, or None for a file without spare pieces."""
+        per group of `k` consecutive chunks, or None for a file without spare pieces.
+        append: the file only grew (a recording written live, liverec.py): when the old pieces are the
+        start of the new ones, the shorter file is not kept as an earlier version, and it isn't an edit."""
         with self.tx() as db:
             row = db.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
             if row is None or row["version"] != version:
@@ -470,7 +472,8 @@ class Index:
             size = sum(c["size"] for c in chunks)
             new_mids = [c["message_id"] for c in chunks]
             vid = None
-            if old and [c[0] for c in old] != new_mids:
+            grew = append and [c[0] for c in old] == new_mids[:len(old)]
+            if old and [c[0] for c in old] != new_mids and not grew:
                 vid = self._add_version(db, row, old, "replaced")
             db.execute("DELETE FROM chunks WHERE node_id=?", (nid,))
             db.executemany(
@@ -491,7 +494,7 @@ class Index:
             if parity:
                 op["x"] = parity
             self._queue(db, op)
-            if not old or [c[0] for c in old] != new_mids:
+            if not old or ([c[0] for c in old] != new_mids and not grew):
                 self._act(db, "edit" if old else "add", self._path(db, nid), size, False, row["uid"])
         return True
 

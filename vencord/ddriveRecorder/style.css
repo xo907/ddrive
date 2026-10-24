@@ -1,0 +1,100 @@
+/* Telegram-style sleek call and screenshare recorder styles */
+
+.ddrive-rec-container {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.ddrive-rec-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+    border: 1px solid transparent;
+    outline: none;
+    line-height: 1.4;
+}
+
+.ddrive-rec-btn:hover {
+    transform: scale(1.02);
+}
+
+.ddrive-rec-btn.idle {
+    background-color: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    color: var(--header-secondary, #b5bac1);
+}
+
+.ddrive-rec-btn.idle:hover {
+    background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.14));
+    color: var(--header-primary, #ffffff);
+}
+
+.ddrive-rec-btn.recording {
+    background-color: rgba(237, 66, 69, 0.18);
+    color: #ff5c5f;
+    border-color: rgba(237, 66, 69, 0.45);
+}
+
+.ddrive-rec-btn.recording:hover {
+    background-color: rgba(237, 66, 69, 0.28);
+    color: #ffffff;
+    border-color: rgba(237, 66, 69, 0.7);
+}
+
+.ddrive-rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #ed4245;
+    display: inline-block;
+    animation: ddrive-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ddrive-pulse {
+    0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(237, 66, 69, 0.7);
+    }
+    70% {
+        transform: scale(1.15);
+        box-shadow: 0 0 0 5px rgba(237, 66, 69, 0);
+    }
+    100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(237, 66, 69, 0);
+    }
+}
+
+.ddrive-rec-timer {
+    font-family: var(--font-code, Consolas, "Courier New", monospace);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.ddrive-rec-mode-badge {
+    font-size: 9px;
+    text-transform: uppercase;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    letter-spacing: 0.3px;
+}
+
+.ddrive-rec-stats {
+    font-size: 10px;
+    color: var(--text-muted, #949ba4);
+    margin-left: 2px;
+}

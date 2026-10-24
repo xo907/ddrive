@@ -53,6 +53,7 @@ from .findxweb import FindXHandlers
 from .logbuf import QUIET
 from .webplus import ApiErrorProxy, Fetches, PlusHandlers, housekeeping
 from .transfer import MoveError, Moves
+from .liverec import LiveRecordingError, LiveRecordings
 
 log = logging.getLogger("ddrive.web")
 
@@ -67,6 +68,7 @@ NOTES = "/Notes"          # where notes are kept on the drive (ordinary files, s
 _BACKGROUND_ROUTES = ("/api/status", "/api/activity", "/api/queue", "/api/log", "/api/sync", "/api/check", "/api/locks", "/api/notes",
                       "/api/chat", "/api/sync/tree", "/api/lite/sync/poll", "/api/lite/sync/report", "/api/upload/part",
                       "/api/vault/sync", "/api/vault/sync/poll", "/api/vault/sync/report")
+REC_PART_MAX = 16 * 1024 * 1024   # the most a live upload sends at once (/api/rec/data)
 PART_MAX = 64 * 1024 * 1024   # the largest part of a file sent in parts (/api/upload/part)
 PART_DAYS = 7.0               # a file of which only some parts came is given up after this long
 _MEDIA_EXT = ("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "mp4", "m4v", "webm", "mov", "mkv", "avi")
@@ -228,7 +230,9 @@ class WebServer:
         self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
         self.updates = updates.Updates(self.cfg)    # whether a newer DDrive is out, and updating to it (updates.py)
         self.account_devices = AccountDevices(os.path.join(self.cfg.resolved_data_dir, "account-devices.json"))   # who uses an end-to-end account (accountdevices.py)
-        self.computers = updates.Computers(os.path.join(self.cfg.resolved_data_dir, "lite-update.json"))   # DDrive Lite computers: update them all
+        self.computers = updates.Computers(os.path.join(self.cfg.resolved_data_dir, "lite-update.json"))
+        # files streamed in while they are being made, written into the drive as they arrive (liverec.py)
+        self.recordings = LiveRecordings(drive, folder_of=lambda: self.cfg.recorder_folder or "/Recordings")   # DDrive Lite computers: update them all
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -266,6 +270,7 @@ class WebServer:
         threading.Thread(target=bye, name="EraseDone", daemon=True).start()
 
     def stop(self):
+        self.recordings.stop()            # recordings in progress keep what has arrived
         self.updates.stop()
         self.findx.close()                # (kept for the next start: the dashboard shows the phones at once)
         self.findx_circles.close()
@@ -297,7 +302,7 @@ class WebServer:
             try:
                 saved = Config.load()
                 for k in ("web_user", "web_password", "web_passkeys", "signup_mode", "account_quota_bytes", "accounts_max",
-                          "operator_name", "operator_contact", "legal_region"):
+                          "operator_name", "operator_contact", "legal_region", "recorder_key", "recorder_folder"):
                     setattr(self.cfg, k, getattr(saved, k))
             except (Exception, SystemExit) as e:
                 log.warning("Could not read the dashboard's settings from the config: %s", e)
@@ -891,6 +896,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                 return self._static(route.lstrip("/") or "index.html")
             if method == "GET" and route == "/api/monitor":      # a status bot, with the monitor key: numbers only
                 return self._monitor()
+            if route.startswith("/api/rec/"):                    # live upload, with the recorder key
+                return self._recorder(method, route)
             who = self._who()
             if who is None:
                 return self._error(401, "Signed out. Reload the page to sign in.")
@@ -1645,6 +1652,67 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                 snap = monitor.snapshot(app)
                 app.monitor_cache = (time.time(), snap)
         self._json(snap, fresh=True)
+
+    # ------------------------------------------------------------ live upload (liverec.py)
+    # A program on another computer (or this one) streams a file in while it makes it, signed in with the
+    # recorder key alone: it can only add new files to the recordings folder, nothing else of the drive.
+    def _recorder(self, method, route):
+        app = self.server.app
+        app._reload_cfg()
+        key = app.cfg.recorder_key or ""
+        scheme, _, given = (self.headers.get("Authorization") or "").partition(" ")
+        if not key or scheme.lower() != "bearer" or not hmac.compare_digest(given.strip().encode(), key.encode()):
+            if app.note_unknown(b"recorder", self._addr()):
+                log.warning("A live upload from %s used a wrong or no recorder key (Settings, Live upload).", self._addr())
+            return self._error(401, "Wrong recorder key." if key else "Live upload is off: make a key in Settings, Live upload.")
+        if method != "POST":
+            return self._error(405, "POST only")
+        q = self._query()
+        recs = app.recordings
+        try:
+            if route == "/api/rec/open":
+                b = self._body_json()
+                return self._json(recs.open(b.get("folder"), b.get("name"), b.get("mime", "")))
+            try:
+                offset = int(q["offset"]) if q.get("offset") not in (None, "") else None
+                wait = min(float(q.get("wait") or 0), 60.0)
+            except ValueError:
+                raise ApiError(400, "bad offset") from None
+            if route == "/api/rec/data":
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > REC_PART_MAX:
+                    raise ApiError(413, "that part is too big")
+                body = self.rfile.read(n) if n else b""
+                if len(body) < n or offset is None or offset < 0:
+                    raise ApiError(400, "the part was cut off" if len(body) < n else "bad offset")
+                return self._json(recs.data(q.get("id"), offset, body))
+            if route == "/api/rec/close":
+                return self._json(recs.close(q.get("id"), offset, wait))
+        except LiveRecordingError as e:
+            raise ApiError(e.status, str(e)) from None
+        return self._error(404, "not found")
+
+    def _get_api_recorder(self):
+        """Settings, Live upload: the key, where the files go, and what is arriving now."""
+        cfg = self.server.app.cfg
+        self._json({"key": cfg.recorder_key or "", "folder": cfg.recorder_folder or "/Recordings",
+                    "live": self.server.app.recordings.status()})
+
+    def _post_api_recorder(self):
+        b = self._body_json()
+        changes = {}
+        if b.get("key") == "new":
+            changes["recorder_key"] = secrets.token_urlsafe(32)
+        elif b.get("key") == "off":
+            changes["recorder_key"] = ""
+        if "folder" in b:
+            folder = "/" + "/".join(p for p in str(b["folder"] or "").replace("\\", "/").split("/") if p.strip())
+            if folder == "/":
+                raise ApiError(400, "Pick a folder for the recordings (not the top of the drive).")
+            changes["recorder_folder"] = folder
+        if changes:
+            self.server.app.save_cfg(**changes)
+        self._get_api_recorder()
 
     def _get_api_queue(self):
         """The Queue page asks this every second while it is open. An account gets its own (for an

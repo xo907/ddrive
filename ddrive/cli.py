@@ -404,7 +404,7 @@ def cmd_approve_keys(args):
 
 
 _SECRET_FIELDS = {"bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens", "spare_bot_tokens",
-                  "web_token", "web_password", "discord_user_token", "monitor_key"}
+                  "web_token", "web_password", "discord_user_token", "monitor_key", "recorder_key"}
 _LIST_COMMANDS = {"extra_bot_tokens": "bots add <token>", "hidden_folders": "hide <folder>", "sync_jobs": "sync add",
                   "spare_channels": "spare add <channel id>", "spare_bot_tokens": "spare add <channel id> <bot token>",
                   "old_encryption_keys": "add-old-key", "web_user": "webdav-password",

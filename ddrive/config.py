@@ -77,7 +77,8 @@ def config_path() -> str:
 
 MiB = 1024 * 1024
 SECRET_FIELDS = ("bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens", "spare_bot_tokens",
-                 "web_token", "web_password", "discord_user_token", "monitor_key")
+                 "web_token", "web_password", "discord_user_token", "monitor_key",
+                 "recorder_key")
 _warned = set()
 
 
@@ -171,6 +172,8 @@ class Config:
     discord_user_token: str = ""       # your own Discord account, for the message logger and archiver (dashboard: Settings)
     protect_config: bool = True        # keep the secrets in this file encrypted for this computer and account
     monitor_key: str = ""              # lets a status bot read /api/monitor (numbers only, no names); 'monitor-key' makes one
+    recorder_key: str = ""             # lets a program stream files into the drive as it makes them (/api/rec, nothing else); dashboard: Settings
+    recorder_folder: str = "/Recordings"   # where files streamed in with the recorder key go
 
     protect_error = None               # why the protected secrets could not be read (not saved)
     _unreadable = None
