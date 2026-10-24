@@ -145,7 +145,10 @@ export async function openLiveRecording(_: IpcMainInvokeEvent, opts: {
         const errMsg = res.json?.error || res.data || `HTTP ${res.status}`;
         return { ok: false, error: errMsg };
     } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+        return {
+            ok: false,
+            error: `nothing answers at ${opts.serverUrl} (${e?.message || e}). For DDrive Lite, run: run.bat lite recorder on`
+        };
     }
 }
 

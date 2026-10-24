@@ -379,8 +379,20 @@ async function drain(up: Upload, ms: number) {
 }
 
 // ------------------------------------------------------------- Recording Lifecycle
+let starting = false; // a start is under way (it waits for DDrive): another one isn't begun meanwhile
+let autoChannel: string | null = null; // the call auto-record last started for (or tried to): once per call
+
 export async function startRecording() {
-    if (recState.isRecording) return;
+    if (recState.isRecording || starting) return;
+    starting = true;
+    try {
+        await begin();
+    } finally {
+        starting = false;
+    }
+}
+
+async function begin() {
 
     const { serverUrl, recorderKey, folderName, recordScreenshare, keepAliveWhenMinimized } = settings.store;
 
@@ -678,14 +690,18 @@ export default definePlugin({
     },
 
     onRTCChange() {
+        // (this is told of every change of the voice connection, many a second at times)
         const connected = RTCConnectionStore?.isConnected?.();
+        const channelId = connected ? RTCConnectionStore.getChannelId?.() ?? null : null;
         if (recState.isRecording && !connected) {
             // Left call while recording: finalize and close
             stopRecording();
-        } else if (!recState.isRecording && connected && settings.store.autoRecord) {
-            // Joined call with autoRecord enabled
+        } else if (connected && channelId !== autoChannel && settings.store.autoRecord && !recState.isRecording && !starting) {
+            // Joined a call with autoRecord enabled: tried once for this call, also when it doesn't start
+            autoChannel = channelId;
             startRecording();
         }
+        if (!connected) autoChannel = null;
     },
 
     patches: [

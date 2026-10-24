@@ -178,7 +178,9 @@ function Inject-Vencord([string]$vencordDir) {
 
 function Enable-Plugin([string]$vencordDir) {
   Write-Step 'Enabling DDriveRecorder in settings'
-  $settingsDir = Join-Path $vencordDir 'settings'
+  # Where Vencord in Discord keeps its settings (src/main/utils/constants.ts): not the source folder
+  $dataDir = if ($env:VENCORD_USER_DATA_DIR) { $env:VENCORD_USER_DATA_DIR } else { Join-Path $env:APPDATA 'Vencord' }
+  $settingsDir = Join-Path $dataDir 'settings'
   $settingsFile = Join-Path $settingsDir 'settings.json'
   New-Item -ItemType Directory -Force $settingsDir | Out-Null
 

@@ -1211,7 +1211,7 @@ def cmd_recorder(args):
         print(f"[OK] Live upload is OFF. Turn it on: '{me()} recorder on'.")
         return 0
     port = _recorder_port(s)
-    if action in ("on", "new") and not _recorder_up(port) and not _mount_pid():
+    if action in ("on", "new") and not _recorder_up(port):   # (a Lite program started before there was a key has none)
         _spawn("recorder", "run")
         for _ in range(25):
             if _recorder_up(port):

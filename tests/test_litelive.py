@@ -92,6 +92,12 @@ class LiteLiveTest(test_vault.VaultTest):
         self.assertEqual((got["ok"], got.get("done"), got["size"]), (True, True, 15))
 
 
+# The host and the account as the vault tests have them, but not their tests (they run in test_vault).
+for _name in dir(test_vault.VaultTest):
+    if _name.startswith("test") and _name not in LiteLiveTest.__dict__:
+        setattr(LiteLiveTest, _name, None)
+
+
 class LiteCommandTest(helpers.unittest.TestCase):
     def test_the_recorder_key_is_made_and_turned_off(self):
         settings = {"host": "http://127.0.0.1:1", "e2e": True}

@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.1 (2026-10-24)
+
+- **The call recorder's "Starting live call recording…" no longer comes up over and over.** With Automatically start recording on, it tried to start at every change of the voice connection (Discord has many a second), and again after each try that didn't work. Now it tries once per call, and one start at a time.
+- `lite recorder on` starts Lite's recorder when nothing is taking recordings yet, also when Lite is already running (it started before there was a key, and so without one).
+- The recorder's installer puts the address and key where Vencord in Discord reads its settings (`%APPDATA%\Vencord`), not in Vencord's source folder.
+- When nothing answers at the recorder's address, it says so, and how to start Lite's recorder.
+
 ## 3.20.0 (2026-10-24)
 
 - **Live upload into your end-to-end encrypted account, through DDrive Lite.** The host can't put anything into such an account (it can't seal for it), so recordings went only into the owner's drive. Now `lite recorder on`, on a computer where Lite is signed in to the account, makes a recorder key and listens on `http://127.0.0.1:8766` (that computer only): a recorder there (the Discord call recorder) sends to it as it would to a drive, and Lite seals what arrives a piece (1 MiB) at a time and sends it on to the host while the recording goes on, held in memory, never on the disk. The account gets the file, in `/Recordings`, when the recording ends (or a few minutes after the recorder stops sending). It runs in whichever Lite program runs (the drive letter, folder syncing, or its own), so `lite autostart on` covers it. The host takes the sealed recording as an object that grows (its size isn't known until the end); that needs the host to have 3.20.0 too.
