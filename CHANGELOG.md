@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.23.1 (2026-10-24)
+
+- **The call recorder's copy on the computer is kept until DDrive has the recording for sure.** It was removed as soon as Lite had taken all of it, but Lite may still be handing it to the host then, and gives it up after 30 minutes without the host: such a recording was then nowhere. Now the copy is removed only when DDrive says the recording is in the account; when it isn't yet, the copy stays and the plugin says so.
+
 ## 3.23.0 (2026-10-24)
 
 - **Leave people out of call recordings.** Right-click someone (yourself too) > **Exclude from DDrive recordings**, again to take it back; it works during a recording too. You: your microphone isn't recorded. Someone else: Discord mixes everyone's voice into one sound before anything else can have it, so one voice can't be taken out of it; instead the call's sound is muted in the recording while they talk (and 0.4 s after), which leaves out whoever talks at the same time too. The list is also in the plugin's settings (user IDs).

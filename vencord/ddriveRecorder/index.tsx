@@ -871,7 +871,8 @@ async function begin(level: number) {
                     offset: up.acked,
                     wait: 30
                 }) : null;
-                const whole = !!closeRes?.ok && !up.fatal && up.acked === up.total;
+                // (in DDrive only once it says done: Lite may still be handing it to the host, and could give up)
+                const whole = !!closeRes?.ok && !!closeRes?.done && !up.fatal && up.acked === up.total;
                 const keep = !!up.local && restartAt === null && (localMode === "always" || !whole);
                 const kept = up.local ? await Native.localClose({ id: up.local, keep: keep && up.total > 0 }) : null;
 
@@ -882,6 +883,8 @@ async function begin(level: number) {
                         text: `Call recorded to DDrive: ${closeRes!.path || recPath}` + (kept?.kept ? ` (and to ${kept.path})` : ""),
                         variant: "success"
                     });
+                } else if (kept?.kept && closeRes?.ok && !closeRes.done && !up.fatal) {
+                    showToast({ text: `DDrive is still storing it (the host is slow); a copy is kept on this computer, ${kept.path}`, variant: "default" });
                 } else if (kept?.kept) {
                     showToast({ text: `DDrive didn't get all of it: the recording is on this computer, ${kept.path}`, variant: "critical" });
                 } else {
