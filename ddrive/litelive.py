@@ -60,8 +60,9 @@ class _Rec:
 class VaultRecordings:
     """The recordings being sealed into one account right now."""
 
-    def __init__(self, open_vault, folder_of=None):
+    def __init__(self, open_vault, folder_of=None, client=None):
         self._open_vault = open_vault     # () -> vault.Vault of the account (its list read)
+        self._client = client             # the host, for the sealed bytes (without reading the list first)
         self.folder_of = folder_of or (lambda: "/Recordings")
         self._v = None
         self._vlock = threading.Lock()
@@ -108,16 +109,10 @@ class VaultRecordings:
         base = "/" + "/".join(clean_name(p, "Recordings") for p in self.folder_of().split("/") if p.strip())
         parts = [clean_name(p) for p in str(folder or "").replace("\\", "/").split("/") if p.strip()]
         where = posixpath.join(base, *parts) if parts else base
-        try:
-            with self._vlock:
-                v = self._vault()
-                self._makedirs(v, where)
-                name = self._free(v, where, clean_name(name))
-        except vault.VaultError as e:
-            raise LiveRecordingError(409, str(e)) from None
-        except Exception as e:
-            raise LiveRecordingError(503, f"The host can't be reached: {e}") from None
-        rec = _Rec(secrets.token_urlsafe(18), where, name)
+        # Nothing is asked of the host here: the recorder can start at once, also while the host is slow or
+        # away (the account's list of files can take minutes to read). The folder and a free name are seen
+        # to when the recording is put into the account, at the end.
+        rec = _Rec(secrets.token_urlsafe(18), where, clean_name(name))
         with self._lock:
             self._recs[rec.id] = rec
         threading.Thread(target=self._send, args=(rec,), name="LiteRec-send", daemon=True).start()
@@ -209,7 +204,7 @@ class VaultRecordings:
                 if not part and not end:
                     continue
                 try:
-                    got = json.loads(self._v.client.request(
+                    got = json.loads(self._host().request(
                         "POST", f"/api/vault/object?id={rec.oid}&offset={at}&grow=1" + ("&end=1" if end else ""), part,
                         {"Content-Type": "application/octet-stream"}))
                 except Exception as e:
@@ -230,11 +225,7 @@ class VaultRecordings:
                     del rec.sealed[:max(0, have - rec.sent)]
                     rec.sent = max(rec.sent, have)
                 if got.get("done"):
-                    with self._vlock:
-                        v = self._vault()
-                        rec.name = self._free(v, rec.folder, rec.name)
-                        rec.path = posixpath.join(rec.folder, rec.name)
-                        v.put_object(rec.path, rec.oid, rec.key, rec.offset, time.time())
+                    self._add(rec)
                     break
         except Exception as e:
             rec.failed = f"It couldn't be saved: {e}"
@@ -244,6 +235,46 @@ class VaultRecordings:
             with self._lock:
                 self._recs.pop(rec.id, None)
             log.info("Recording %s finished: %d bytes%s", rec.path, rec.offset, f" ({rec.failed})" if rec.failed else "")
+
+    def _host(self):
+        if self._client is None:              # (none given: the one of the account's list, read for it)
+            with self._vlock:
+                self._client = self._vault().client
+        return self._client
+
+    def _add(self, rec):
+        """Put the finished recording into the account's list of files (its folder made, a free name),
+        trying again while the host can't be reached."""
+        since = time.time()
+        while True:
+            try:
+                with self._vlock:
+                    v = self._vault()
+                    self._makedirs(v, rec.folder)
+                    rec.name = self._free(v, rec.folder, rec.name)
+                    rec.path = posixpath.join(rec.folder, rec.name)
+                    v.put_object(rec.path, rec.oid, rec.key, rec.offset, time.time())
+                return
+            except vault.VaultError:
+                raise
+            except Exception as e:
+                if time.time() - since > GIVE_UP:
+                    raise
+                log.warning("Recording %s: couldn't add it to the account yet (%s); trying again", rec.path, e)
+                with self._vlock:
+                    self._v = None                # (read the list again: it may be half read)
+                time.sleep(15)
+
+    def warm(self):
+        """Read the account's list of files now, in the background, so that the end of the first
+        recording doesn't wait for it."""
+        def run():
+            try:
+                with self._vlock:
+                    self._vault()
+            except Exception as e:
+                log.info("Live upload: the account's files will be read when a recording ends (%s)", e)
+        threading.Thread(target=run, name="LiteRecordings-warm", daemon=True).start()
 
     def _reap(self):
         while not self._stop.wait(15):

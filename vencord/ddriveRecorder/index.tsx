@@ -595,13 +595,16 @@ async function begin(level: number) {
         const fileName = `${cleanName}_${dateTag}.${ext}`;
 
         // 6. Open stream on DDrive (/api/rec/open)
-        const openRes = await Native?.openLiveRecording?.({
-            serverUrl,
-            recorderKey,
-            folder: folderName || "Discord Calls",
-            name: fileName,
-            mime: mimeType
-        });
+        const openRes = await Promise.race([
+            Native.openLiveRecording({
+                serverUrl,
+                recorderKey,
+                folder: folderName || "Discord Calls",
+                name: fileName,
+                mime: mimeType
+            }),
+            sleep(20000).then(() => ({ ok: false, id: undefined, error: `no answer from ${serverUrl} in 20 seconds` }))
+        ]);
 
         if (!openRes || !openRes.ok || !openRes.id) {
             throw new Error(openRes?.error || "Failed to initiate live recording stream on DDrive");

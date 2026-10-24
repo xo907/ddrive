@@ -18,7 +18,7 @@ KEY = "recorder-test-key"
 class LiteLiveTest(test_vault.VaultTest):
     def setUp(self):
         super().setUp()
-        self.recs = litelive.VaultRecordings(self.new_device)
+        self.recs = litelive.VaultRecordings(self.new_device, client=lite.HostClient(self.address, auth=self.auth))
         self.server = litelive.RecorderServer(self.recs, lambda: KEY, port=0).start()
 
     def tearDown(self):

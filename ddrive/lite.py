@@ -1166,8 +1166,11 @@ def start_recorder(s):
         return None
     try:
         recs = VaultRecordings(lambda: vault_from(load_settings()),
-                               folder_of=lambda: load_settings().get("recorder_folder") or "/Recordings")
-        return RecorderServer(recs, lambda: load_settings().get("recorder_key") or "", port).start()
+                               folder_of=lambda: load_settings().get("recorder_folder") or "/Recordings",
+                               client=client_from(s))
+        server = RecorderServer(recs, lambda: load_settings().get("recorder_key") or "", port).start()
+        recs.warm()
+        return server
     except OSError as e:
         log.warning("Live upload can't listen on port %d: %s", port, e)
         return None

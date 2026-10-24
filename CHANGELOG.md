@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.6 (2026-10-24)
+
+- **The call recorder starts at once.** Lite read the account's whole list of files from the host before a recording could begin, which takes minutes with a big account on a slow host, and the Record button showed Starting... all that time. Now Lite asks nothing of the host to begin (it reads the list in the background when it starts, and sees to the folder and a free name when the recording is put into the account), and the plugin gives up with a message after 20 seconds without an answer.
+- A finished recording is put into the account again and again while the host can't be reached (for up to 30 minutes), not given up at the first try.
+
 ## 3.20.5 (2026-10-24)
 
 - **No more broken 1 KB recordings of calls with a stream.** The recorder recorded the stream's own video, and that gives no frames while Discord doesn't show it (minimized, another view) or once Discord has swapped the element it is shown in; MediaRecorder then writes nothing at all, not even the sound, and the file stopped at its first 1257 bytes. Now the stream is drawn onto a canvas 30 times a second (black while there is none, following the stream to wherever Discord shows it) and the canvas is recorded, whose frames never stop. It also takes the biggest video on screen (the stream being watched), not the first it finds.
