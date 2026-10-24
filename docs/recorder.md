@@ -48,8 +48,15 @@ Install-Recorder.cmd -Uninstall
 ### 2. Configure in Discord
 1. Open Discord **User Settings** -> scroll to **Vencord** -> **Plugins**.
 2. Find **DDriveRecorder** (or search "DDrive").
-3. Set your **DDrive Server URL** (e.g. `http://127.0.0.1:8080`).
-4. Set your **Recorder Key** (generated in DDrive Dashboard under **Settings** > **Live upload**).
+3. Set your **DDrive Server URL**: the address of the DDrive dashboard (`http://127.0.0.1:8765` when DDrive runs on the same computer, its default port).
+4. Set your **Recorder Key**. Get it in the DDrive dashboard under **Settings** > **Live upload** (**Make a key**, then **Copy**), or in a terminal on the computer that runs the drive:
+   ```cmd
+   run.bat recorder-key
+   ```
+   (`./run.sh recorder-key` on Linux or a Pi; `recorder-key new` makes a new one, `recorder-key off` turns live upload off.)
+
+   Both can also be given to the installer: `Install-Recorder.cmd -ServerUrl http://127.0.0.1:8765 -RecorderKey <key>`.
+5. If the **Record** button doesn't show in the voice panel, use the Vencord toolbox (top right of Discord): **DDriveRecorder** > **Start / stop DDrive recording**.
 
 ### 3. Record a Call
 1. Join any voice channel, DM, or Group Call.

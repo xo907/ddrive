@@ -1,17 +1,22 @@
 <#
-  DDrive Call & Screenshare Recorder — Vencord Injector (Windows)
+  DDrive Call & Screenshare Recorder - Vencord Injector (Windows)
   Live-streams Discord call audio & screenshare video straight to DDrive in memory.
   Zero disk usage, no background pauses when minimized.
 
   Usage:
     powershell -ExecutionPolicy Bypass -File install-recorder.ps1 [-Branch auto|stable|ptb|canary] [-Uninstall] [-Restart] [-Yes]
+                                      [-ServerUrl http://127.0.0.1:8765] [-RecorderKey <key>]
+    The recorder key: DDrive dashboard, Settings > Live upload; or on the computer that runs the drive:
+    run.bat recorder-key (./run.sh recorder-key).
 #>
 param(
   [ValidateSet('auto', 'stable', 'ptb', 'canary')]
   [string]$Branch = 'auto',
   [switch]$Uninstall,
   [switch]$Restart,
-  [switch]$Yes
+  [switch]$Yes,
+  [string]$ServerUrl = '',
+  [string]$RecorderKey = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +39,7 @@ function Write-Banner {
   Write-Host ''
   Write-Host '  =======================================================' -ForegroundColor Cyan
   Write-Host '   DDrive Live Call & Screenshare Recorder for Vencord   ' -ForegroundColor White
-  Write-Host '   Zero Disk Usage · Live Stream to DDrive · No Pauses   ' -ForegroundColor DarkGray
+  Write-Host '   Zero Disk Usage - Live Stream to DDrive - No Pauses   ' -ForegroundColor DarkGray
   Write-Host '  =======================================================' -ForegroundColor Cyan
   Write-Host ''
 }
@@ -193,6 +198,14 @@ function Enable-Plugin([string]$vencordDir) {
   } else {
     $settings.plugins | Add-Member -NotePropertyName $PluginName -NotePropertyValue ([pscustomobject]@{ enabled = $true })
   }
+  # the server URL and recorder key, when given here (otherwise they are set in Discord)
+  $plugin = $settings.plugins.$PluginName
+  foreach ($pair in @(@('serverUrl', $ServerUrl), @('recorderKey', $RecorderKey))) {
+    if ($pair[1]) {
+      if ($plugin.PSObject.Properties[$pair[0]]) { $plugin.($pair[0]) = $pair[1] }
+      else { $plugin | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] }
+    }
+  }
 
   $json = $settings | ConvertTo-Json -Depth 64
   [System.IO.File]::WriteAllText($settingsFile, $json, (New-Object System.Text.UTF8Encoding $false))
@@ -211,7 +224,7 @@ function Remove-Plugin([string]$vencordDir) {
   Write-Done 'Vencord updated without DDriveRecorder'
 }
 
-# ───────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 try {
   Write-Banner
@@ -247,8 +260,9 @@ try {
 
   Write-Host ''
   Write-Host '  [+] DDrive Call & Screenshare Recorder is installed!' -ForegroundColor Green
-  Write-Host '  1. Open Discord Settings -> Plugins -> DDrive Call Recorder' -ForegroundColor White
-  Write-Host '  2. Enter your DDrive Server URL and Recorder Key' -ForegroundColor White
+  Write-Host '  1. Open Discord Settings -> Vencord -> Plugins -> DDriveRecorder' -ForegroundColor White
+  Write-Host '  2. Enter your DDrive Server URL (default http://127.0.0.1:8765) and Recorder Key' -ForegroundColor White
+  Write-Host '     (the key: DDrive Settings -> Live upload, or run.bat recorder-key where the drive runs)' -ForegroundColor White
   Write-Host '  3. In any voice call, click the Record button in the Voice bar' -ForegroundColor White
   Write-Host '  4. If anyone shares their screen, it records the screenshare automatically' -ForegroundColor White
   Write-Host '  5. Minimizing the window will NOT pause recording (anti-throttle active)' -ForegroundColor White

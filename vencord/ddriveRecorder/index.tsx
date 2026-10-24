@@ -8,7 +8,6 @@ import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import {
-    ApplicationStreamingStore,
     ChannelStore,
     MediaEngineStore,
     React,
@@ -26,17 +25,17 @@ const Native = (VencordNative as any)?.pluginHelpers?.DDriveRecorder as PluginNa
 export const settings = definePluginSettings({
     serverUrl: {
         type: OptionType.STRING,
-        description: "DDrive Server URL (e.g. http://127.0.0.1:8080)",
-        default: "http://127.0.0.1:8080"
+        description: "DDrive Server URL: the address of its dashboard (e.g. http://127.0.0.1:8765)",
+        default: "http://127.0.0.1:8765"
     },
     recorderKey: {
         type: OptionType.STRING,
-        description: "DDrive Recorder Key (from DDrive Settings > Live upload)",
+        description: "DDrive Recorder Key (DDrive dashboard: Settings > Live upload > Make a key, then Copy)",
         default: ""
     },
     folderName: {
         type: OptionType.STRING,
-        description: "Folder name under /Recordings",
+        description: "Folder inside DDrive's recordings folder (/Recordings unless changed in DDrive)",
         default: "Discord Calls"
     },
     autoRecord: {
@@ -85,10 +84,10 @@ function updateState(partial: Partial<RecState>) {
 }
 
 let currentMediaRecorder: MediaRecorder | null = null;
-let currentRecId: string | null = null;
-let currentOffset = 0;
+let currentUpload: Upload | null = null;
 let currentRecordedVideo: HTMLVideoElement | null = null;
 let currentAudioContext: AudioContext | null = null;
+let captureTracks: MediaStreamTrack[] = [];
 let durationInterval: NodeJS.Timeout | null = null;
 let watchdogInterval: NodeJS.Timeout | null = null;
 
@@ -252,6 +251,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
                 autoGainControl: false
             }
         });
+        captureTracks.push(...micStream.getTracks());
         if (micStream.getAudioTracks().length > 0) {
             const micSource = audioCtx.createMediaStreamSource(micStream);
             micSource.connect(dest);
@@ -281,6 +281,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
             // Stop video track immediately: we only need the loopback audio track here
             desktopStream.getVideoTracks().forEach(t => t.stop());
             const audioTracks = desktopStream.getAudioTracks();
+            captureTracks.push(...audioTracks);
             if (audioTracks.length > 0) {
                 const sysSource = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
                 sysSource.connect(dest);
@@ -308,32 +309,101 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
     return { stream: dest.stream, ctx: audioCtx };
 }
 
+// ------------------------------------------------------------- Upload to DDrive
+// Parts go to DDrive one at a time, in order. A part stays here until DDrive has it: when DDrive is slow
+// (it asks to wait), can't be reached for a while, or says it has less than was sent, it is sent again
+// from where DDrive is. Only an answer that can't get better (wrong key, recording gone) stops it.
+interface Upload {
+    serverUrl: string;
+    recorderKey: string;
+    id: string;
+    queue: { offset: number; data: Uint8Array; }[];
+    total: number; // bytes recorded
+    acked: number; // bytes DDrive has
+    reading: Promise<void>; // parts of the recorder being read, in order
+    pumping: Promise<void> | null;
+    fatal: string | null;
+    onFatal: (why: string) => void;
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const FATAL = new Set([400, 401, 403, 404, 409, 410, 413]);
+
+function addPart(up: Upload, blob: Blob) {
+    up.reading = up.reading.then(async () => {
+        const data = new Uint8Array(await blob.arrayBuffer());
+        if (!data.byteLength) return;
+        up.queue.push({ offset: up.total, data });
+        up.total += data.byteLength;
+        kick(up);
+    }).catch(e => console.error("[DDriveRecorder] Could not read a recorded part:", e));
+}
+
+function kick(up: Upload) {
+    if (!up.pumping) up.pumping = pump(up).finally(() => { up.pumping = null; });
+}
+
+async function pump(up: Upload) {
+    let tries = 0;
+    while (up.queue.length && !up.fatal) {
+        const part = up.queue[0];
+        if (part.offset + part.data.byteLength <= up.acked) { up.queue.shift(); continue; }
+        const res = await Native!.sendLiveChunk({
+            serverUrl: up.serverUrl, recorderKey: up.recorderKey, id: up.id, offset: part.offset, chunk: part.data
+        });
+        if (res.status === 200 && typeof res.offset === "number") {
+            up.acked = Math.max(up.acked, res.offset);
+            tries = 0;
+            if (!res.ok && res.wait) await sleep(1000); // DDrive is still sending earlier pieces to Discord
+            continue; // (not ok, no wait: DDrive has up to res.offset; go on from there)
+        }
+        if (FATAL.has(res.status)) {
+            up.fatal = res.error || `HTTP ${res.status}`;
+            up.onFatal(up.fatal);
+            break;
+        }
+        tries++; // can't reach DDrive (or it is busy): try again
+        if (tries === 3) console.warn("[DDriveRecorder] DDrive isn't answering, still trying:", res.error);
+        await sleep(Math.min(10000, 1000 * tries));
+    }
+}
+
+/** Every part recorded is in DDrive (or it can't be): wait for that, at most `ms`. */
+async function drain(up: Upload, ms: number) {
+    const end = Date.now() + ms;
+    await up.reading;
+    while ((up.queue.length || up.pumping) && !up.fatal && Date.now() < end) {
+        kick(up);
+        await Promise.race([up.pumping, sleep(1000)]);
+    }
+}
+
 // ------------------------------------------------------------- Recording Lifecycle
 export async function startRecording() {
     if (recState.isRecording) return;
 
     const { serverUrl, recorderKey, folderName, recordScreenshare, keepAliveWhenMinimized } = settings.store;
 
-    if (!recorderKey) {
-        showToast("DDrive Recorder Key is required. Set it in Settings > Plugins > DDrive Call Recorder.", {
-            variant: "danger"
-        });
+    if (!recorderKey || !serverUrl) {
+        showToast({ text: "Set your DDrive Server URL and Recorder Key in Settings > Vencord > Plugins > DDriveRecorder.", variant: "critical" });
+        return;
+    }
+    if (!Native) {
+        showToast({ text: "DDriveRecorder's desktop part is missing: Vencord has to be rebuilt with the plugin (Install-Recorder.cmd).", variant: "critical" });
         return;
     }
 
     if (!RTCConnectionStore?.isConnected?.()) {
-        showToast("Connect to a voice call or channel before recording.", {
-            variant: "danger"
-        });
+        showToast({ text: "Connect to a voice call or channel before recording.", variant: "critical" });
         return;
     }
 
     const channelId = RTCConnectionStore.getChannelId();
-    const channel = ChannelStore?.getChannel?.(channelId);
+    const channel = channelId ? ChannelStore?.getChannel?.(channelId) : null;
     const channelTitle = channel?.name || "Call";
 
     try {
-        showToast("Starting live call recording...", { variant: "info" });
+        showToast({ text: "Starting live call recording...", variant: "default" });
 
         // 1. Enable Anti-Throttling & Watchdog
         if (keepAliveWhenMinimized) {
@@ -391,10 +461,16 @@ export async function startRecording() {
             throw new Error(openRes?.error || "Failed to initiate live recording stream on DDrive");
         }
 
-        const recId = openRes.id;
         const recPath = openRes.path || fileName;
-        currentRecId = recId;
-        currentOffset = 0;
+        const up: Upload = {
+            serverUrl, recorderKey, id: openRes.id, queue: [], total: 0, acked: 0,
+            reading: Promise.resolve(), pumping: null, fatal: null,
+            onFatal: why => {
+                showToast({ text: `DDrive stopped taking the recording: ${why}`, variant: "critical" });
+                stopRecording();
+            }
+        };
+        currentUpload = up;
 
         // 7. Setup MediaRecorder
         const recorder = new MediaRecorder(combinedStream, {
@@ -405,46 +481,32 @@ export async function startRecording() {
 
         currentMediaRecorder = recorder;
 
-        recorder.ondataavailable = async (e: BlobEvent) => {
-            if (e.data && e.data.size > 0 && currentRecId === recId) {
-                const chunkOffset = currentOffset;
-                const buffer = new Uint8Array(await e.data.arrayBuffer());
-                currentOffset += buffer.byteLength;
-
-                updateState({ uploadedBytes: currentOffset });
-
-                const res = await Native?.sendLiveChunk?.({
-                    serverUrl,
-                    recorderKey,
-                    id: recId,
-                    offset: chunkOffset,
-                    chunk: buffer
-                });
-
-                if (res && !res.ok) {
-                    console.warn("[DDriveRecorder] Live upload status:", res.error);
-                }
+        recorder.ondataavailable = (e: BlobEvent) => {
+            if (e.data && e.data.size > 0 && currentUpload === up) {
+                addPart(up, e.data);
+                updateState({ uploadedBytes: up.total + e.data.size });
             }
         };
 
         recorder.onstop = async () => {
             try {
-                const closeRes = await Native?.closeLiveRecording?.({
+                // the last part arrives just before this: let it (and anything still on its way) get to DDrive
+                await drain(up, 5 * 60 * 1000);
+                if (up.queue.length && !up.fatal) {
+                    showToast({ text: "DDrive couldn't be reached: the end of the recording wasn't saved.", variant: "critical" });
+                }
+                const closeRes = await Native.closeLiveRecording({
                     serverUrl,
                     recorderKey,
-                    id: recId,
-                    offset: currentOffset,
+                    id: up.id,
+                    offset: up.acked,
                     wait: 30
                 });
 
                 if (closeRes && closeRes.ok) {
-                    showToast(`Call recorded to DDrive: ${closeRes.path || recPath}`, {
-                        variant: "success"
-                    });
+                    showToast({ text: `Call recorded to DDrive: ${closeRes.path || recPath}`, variant: "success" });
                 } else {
-                    showToast(`Recording finished: ${closeRes?.error || "Uploaded"}`, {
-                        variant: "info"
-                    });
+                    showToast({ text: `Recording finished: ${closeRes?.error || "Uploaded"}`, variant: "default" });
                 }
             } catch (err: any) {
                 console.error("[DDriveRecorder] Error closing recording:", err);
@@ -470,20 +532,18 @@ export async function startRecording() {
             updateState({ duration: recState.duration + 1 });
         }, 1000);
 
-        showToast(`Recording live to DDrive: ${isVideo ? "Screenshare + Voice" : "Voice call"} (0 disk used)`, {
-            variant: "success"
-        });
+        showToast({ text: `Recording live to DDrive: ${isVideo ? "Screenshare + Voice" : "Voice call"} (0 disk used)`, variant: "success" });
     } catch (e: any) {
         cleanupRecording();
-        showToast(`Could not start recording: ${e?.message || e}`, { variant: "danger" });
+        showToast({ text: `Could not start recording: ${e?.message || e}`, variant: "critical" });
     }
 }
 
 export async function stopRecording() {
     if (!recState.isRecording || !currentMediaRecorder) return;
-    showToast("Finalizing live upload to DDrive...", { variant: "info" });
+    showToast({ text: "Finalizing live upload to DDrive...", variant: "default" });
     if (currentMediaRecorder.state !== "inactive") {
-        currentMediaRecorder.stop();
+        currentMediaRecorder.stop(); // (a second press while it stops does nothing)
     }
 }
 
@@ -495,10 +555,11 @@ function cleanupRecording() {
     stopWatchdog();
 
     currentMediaRecorder = null;
-    currentRecId = null;
-    currentOffset = 0;
+    currentUpload = null;
     currentRecordedVideo = null;
 
+    for (const t of captureTracks) t.stop(); // the microphone and desktop audio this recording opened
+    captureTracks = [];
     if (currentAudioContext && currentAudioContext.state !== "closed") {
         currentAudioContext.close().catch(() => {});
         currentAudioContext = null;
@@ -590,6 +651,14 @@ export default definePlugin({
     managedStyle: style,
     settings,
 
+    // also in the Vencord toolbox (the icon at the top right), should the voice panel button not show
+    toolboxActions: {
+        "Start / stop DDrive recording"() {
+            if (recState.isRecording) stopRecording();
+            else startRecording();
+        }
+    },
+
     start() {
         setupVisibilityHooks();
 
@@ -623,8 +692,9 @@ export default definePlugin({
         {
             find: '"RTCConnectionMenu"',
             replacement: {
-                match: /("RTCConnectionMenu".{0,300}?lineClamp:1,children:)(\i)(?=,|}\))/,
-                replace: "$1[$2,$self.renderRecordButton()]"
+                // (CallTimer patches the same spot: after it, children is already an array)
+                match: /("RTCConnectionMenu".{0,300}?lineClamp:1,children:)(?:(\i)(?=,|}\))|\[)/,
+                replace: (_, pre, child) => child ? `${pre}[${child},$self.renderRecordButton()]` : `${pre}[$self.renderRecordButton(),`
             }
         }
     ],

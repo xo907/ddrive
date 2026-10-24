@@ -2563,6 +2563,27 @@ def cmd_monitor_key(args):
     return 0
 
 
+def cmd_recorder_key(args):
+    """The key a recorder (the Discord call recorder, say) streams files into the drive with (liverec.py)."""
+    import secrets as _secrets
+    cfg = Config.load()
+    if args.action == "off":
+        cfg.recorder_key = ""
+        cfg.save()
+        print("[OK] Live upload is off: no recorder can send files in any more.")
+        return 0
+    if args.action == "new" or not cfg.recorder_key:
+        cfg.recorder_key = _secrets.token_urlsafe(32)
+        cfg.save()
+        print("[OK] A new recorder key was made (an older one no longer works).")
+    print(f"Recorder key:  {cfg.recorder_key}")
+    print(f"Server URL:    http://127.0.0.1:{cfg.web_port}  (from another computer: this one's address, or your domain)")
+    print(f"Files go to:   {cfg.recorder_folder or '/Recordings'}")
+    print("It only lets a recorder add new files to that folder, nothing else of the drive.")
+    print("A running drive picks it up by itself: no restart needed.")
+    return 0
+
+
 def cmd_purge(args):
     """Delete deleted files for good (no recovery afterwards)."""
     setup_logging(args.verbose)
@@ -2942,6 +2963,8 @@ def main():
 
     p_mkey = subparsers.add_parser("monitor-key", help="The key a status bot reads the drive's status with: show, new, off")
     p_mkey.add_argument("action", nargs="?", default="show", choices=["show", "new", "off"])
+    p_rkey = subparsers.add_parser("recorder-key", help="The key a recorder streams files into the drive with: show, new, off")
+    p_rkey.add_argument("action", nargs="?", default="show", choices=["show", "new", "off"])
     p_sbot = subparsers.add_parser("statusbot", add_help=False,
                                    help="A Discord bot that shows how the drive is doing: statusbot setup, statusbot, statusbot test")
     p_sbot.add_argument("rest", nargs=argparse.REMAINDER)
@@ -2956,6 +2979,8 @@ def main():
         return statusbot_main(args.rest)
     if args.command == "monitor-key":
         return cmd_monitor_key(args)
+    if args.command == "recorder-key":
+        return cmd_recorder_key(args)
     if args.command == "lite":
         from .lite import main as lite_main
         return lite_main(args.rest, args.verbose)

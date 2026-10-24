@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.19.2 (2026-10-24)
+
+- **The recorder key from a terminal.** `run.bat recorder-key` (`./run.sh recorder-key`) on the computer that runs the drive shows the key (making one if there is none), with the server URL and the folder; `recorder-key new` makes a new one, `recorder-key off` turns live upload off. A running drive picks it up by itself.
+- **The Discord call recorder no longer loses parts of a recording.** It sent the parts of a recording all at once, so they could arrive out of order, and a part DDrive asked to have again later (while it was still sending earlier pieces to Discord) was dropped after a few seconds: from there on DDrive took nothing more, and stopping closed the file before its last part was in. Now parts go one at a time, in order, and each is kept until DDrive has it (a DDrive that can't be reached for a while is tried again); stopping waits for the last one. Its messages show again (they used an older way of showing them that Vencord no longer has), the default server address is DDrive's own (port 8765, not 8080), it lets go of the microphone when it stops, and it works alongside Vencord's CallTimer. The Vencord toolbox has Start / stop DDrive recording, should the button not show in the voice panel. The installer can be given the address and the key (`-ServerUrl`, `-RecorderKey`).
+
 ## 3.19.1 (2026-10-24)
 
 - **Settings has the Live upload section now.** 3.19.0 told you to make a recorder key in Settings, Live upload, but the page had no such section. It is there now (owner only): make a key, copy it, make a new one or turn live upload off, pick the recordings folder, and see what is arriving. It also shows the server URL to give the recorder.

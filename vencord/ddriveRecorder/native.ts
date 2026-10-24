@@ -150,8 +150,9 @@ export async function openLiveRecording(_: IpcMainInvokeEvent, opts: {
 }
 
 /**
- * Send an in-memory chunk directly to DDrive (/api/rec/data)
- * Retries automatically if DDrive signals upload throttling (wait)
+ * Send one part to DDrive (/api/rec/data), once. The page decides what to do with the answer:
+ * ok -> DDrive has everything up to `offset`; not ok with `wait` -> send it again in a moment;
+ * not ok with an `offset` -> DDrive has up to there, go on from it; status 0 -> DDrive couldn't be reached.
  */
 export async function sendLiveChunk(_: IpcMainInvokeEvent, opts: {
     serverUrl: string;
@@ -159,40 +160,27 @@ export async function sendLiveChunk(_: IpcMainInvokeEvent, opts: {
     id: string;
     offset: number;
     chunk: Uint8Array;
-}): Promise<{ ok: boolean; offset: number; wait?: string; error?: string }> {
+}): Promise<{ ok: boolean; status: number; offset?: number; wait?: string; error?: string }> {
     try {
         const base = opts.serverUrl.replace(/\/+$/, "");
         const url = `${base}/api/rec/data?id=${encodeURIComponent(opts.id)}&offset=${opts.offset}`;
         const buffer = Buffer.from(opts.chunk.buffer, opts.chunk.byteOffset, opts.chunk.byteLength);
-
-        // Retry if DDrive indicates Discord upload queue is catching up
-        for (let attempt = 0; attempt < 8; attempt++) {
-            const res = await request(url, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${opts.recorderKey}`,
-                    "Content-Type": "application/octet-stream",
-                    "Content-Length": buffer.length
-                },
-                body: buffer,
-                timeout: 30000
-            });
-
-            if (res.status === 200 && res.json) {
-                if (res.json.wait) {
-                    await new Promise(r => setTimeout(r, 600));
-                    continue;
-                }
-                return { ok: !!res.json.ok, offset: res.json.offset ?? opts.offset };
-            }
-            if (res.status >= 400) {
-                const errMsg = res.json?.error || res.data || `HTTP ${res.status}`;
-                return { ok: false, offset: opts.offset, error: errMsg };
-            }
+        const res = await request(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${opts.recorderKey}`,
+                "Content-Type": "application/octet-stream",
+                "Content-Length": buffer.length
+            },
+            body: buffer,
+            timeout: 60000
+        });
+        if (res.status === 200 && res.json) {
+            return { ok: !!res.json.ok, status: 200, offset: res.json.offset, wait: res.json.wait };
         }
-        return { ok: false, offset: opts.offset, error: "Upload wait timeout exceeded" };
+        return { ok: false, status: res.status, error: res.json?.error || res.data || `HTTP ${res.status}` };
     } catch (e: any) {
-        return { ok: false, offset: opts.offset, error: e?.message || String(e) };
+        return { ok: false, status: 0, error: e?.message || String(e) };
     }
 }
 

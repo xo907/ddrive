@@ -1,5 +1,5 @@
 @echo off
-rem DDrive Call & Screenshare Recorder — Vencord Injector
+rem DDrive Call & Screenshare Recorder - Vencord Injector
 rem Live-streams Discord voice calls and screenshares to DDrive in memory.
 title DDrive Recorder Installer for Vencord
 setlocal
