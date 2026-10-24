@@ -230,9 +230,9 @@ class WebServer:
         self.findx_circles = FindXCircles(os.path.join(self.cfg.resolved_data_dir, "findx-circles.json"))   # family and friends (findxcircles.py)
         self.updates = updates.Updates(self.cfg)    # whether a newer DDrive is out, and updating to it (updates.py)
         self.account_devices = AccountDevices(os.path.join(self.cfg.resolved_data_dir, "account-devices.json"))   # who uses an end-to-end account (accountdevices.py)
-        self.computers = updates.Computers(os.path.join(self.cfg.resolved_data_dir, "lite-update.json"))
+        self.computers = updates.Computers(os.path.join(self.cfg.resolved_data_dir, "lite-update.json"))   # DDrive Lite computers: update them all
         # files streamed in while they are being made, written into the drive as they arrive (liverec.py)
-        self.recordings = LiveRecordings(drive, folder_of=lambda: self.cfg.recorder_folder or "/Recordings")   # DDrive Lite computers: update them all
+        self.recordings = LiveRecordings(drive, folder_of=lambda: self.cfg.recorder_folder or "/Recordings")
 
     # ------------------------------------------------------------ lifecycle
     def start(self):

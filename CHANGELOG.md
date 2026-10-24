@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.19.0 (2026-10-24)
+
+- **Live upload: recordings go into the drive while they are being made.** Make a recorder key in Settings, Live upload, and a program can stream a file in as it records it (`/api/rec/open`, `/data`, `/close`); the key can only add new files to the recordings folder (`/Recordings` unless you pick another), nothing else of the drive. A file that only grew isn't kept as an earlier version. Comes with a Vencord plugin that records Discord calls and screenshares straight into DDrive, and `Install-Recorder.cmd` to set it up: see docs/recorder.md.
+
 ## 3.18.1 (2026-10-21)
 
 - **Upload a folder that loses its folders says so.** On a computer, Upload a folder (and dragging a folder onto the page) keeps every folder inside, however deep: tested now in both kinds of account. A phone's picker, and the DDrive app's, can only choose files, not a folder, so the files came without the folders they were in and were all put loose into the open folder. Now the page says so, and puts them into one new folder of their own (named as you like) instead.
