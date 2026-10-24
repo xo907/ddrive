@@ -162,12 +162,17 @@ export async function sendLiveChunk(_: IpcMainInvokeEvent, opts: {
     recorderKey: string;
     id: string;
     offset: number;
-    chunk: Uint8Array;
-}): Promise<{ ok: boolean; status: number; offset?: number; wait?: string; error?: string }> {
+    chunk64?: string; // the part as base64 (what the plugin sends)
+    chunk?: Uint8Array | ArrayBuffer;
+}): Promise<{ ok: boolean; status: number; offset?: number; wait?: string; error?: string; sent?: number }> {
     try {
         const base = opts.serverUrl.replace(/\/+$/, "");
         const url = `${base}/api/rec/data?id=${encodeURIComponent(opts.id)}&offset=${opts.offset}`;
-        const buffer = Buffer.from(opts.chunk.buffer, opts.chunk.byteOffset, opts.chunk.byteLength);
+        const c: any = opts.chunk;
+        const buffer = typeof opts.chunk64 === "string" ? Buffer.from(opts.chunk64, "base64")
+            : c instanceof ArrayBuffer ? Buffer.from(c)
+                : ArrayBuffer.isView(c) ? Buffer.from(c.buffer, c.byteOffset, c.byteLength)
+                    : Buffer.from(Object.values(c ?? {}) as number[]);
         const res = await request(url, {
             method: "POST",
             headers: {
@@ -179,7 +184,7 @@ export async function sendLiveChunk(_: IpcMainInvokeEvent, opts: {
             timeout: 60000
         });
         if (res.status === 200 && res.json) {
-            return { ok: !!res.json.ok, status: 200, offset: res.json.offset, wait: res.json.wait };
+            return { ok: !!res.json.ok, status: 200, offset: res.json.offset, wait: res.json.wait, sent: buffer.length };
         }
         return { ok: false, status: res.status, error: res.json?.error || res.data || `HTTP ${res.status}` };
     } catch (e: any) {

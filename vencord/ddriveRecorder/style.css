@@ -30,25 +30,25 @@
 }
 
 .ddrive-rec-btn.idle {
-    background-color: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    background-color: var(--background-modifier-accent, rgb(255 255 255 / 8%));
     color: var(--header-secondary, #b5bac1);
 }
 
 .ddrive-rec-btn.idle:hover {
-    background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.14));
-    color: var(--header-primary, #ffffff);
+    background-color: var(--background-modifier-hover, rgb(255 255 255 / 14%));
+    color: var(--header-primary, #fff);
 }
 
 .ddrive-rec-btn.recording {
-    background-color: rgba(237, 66, 69, 0.18);
+    background-color: rgb(237 66 69 / 18%);
     color: #ff5c5f;
-    border-color: rgba(237, 66, 69, 0.45);
+    border-color: rgb(237 66 69 / 45%);
 }
 
 .ddrive-rec-btn.recording:hover {
-    background-color: rgba(237, 66, 69, 0.28);
-    color: #ffffff;
-    border-color: rgba(237, 66, 69, 0.7);
+    background-color: rgb(237 66 69 / 28%);
+    color: #fff;
+    border-color: rgb(237 66 69 / 70%);
 }
 
 .ddrive-rec-dot {
@@ -63,15 +63,17 @@
 @keyframes ddrive-pulse {
     0% {
         transform: scale(0.95);
-        box-shadow: 0 0 0 0 rgba(237, 66, 69, 0.7);
+        box-shadow: 0 0 0 0 rgb(237 66 69 / 70%);
     }
+
     70% {
         transform: scale(1.15);
-        box-shadow: 0 0 0 5px rgba(237, 66, 69, 0);
+        box-shadow: 0 0 0 5px rgb(237 66 69 / 0%);
     }
+
     100% {
         transform: scale(0.95);
-        box-shadow: 0 0 0 0 rgba(237, 66, 69, 0);
+        box-shadow: 0 0 0 0 rgb(237 66 69 / 0%);
     }
 }
 
@@ -88,8 +90,8 @@
     font-weight: 700;
     padding: 1px 4px;
     border-radius: 3px;
-    background: rgba(255, 255, 255, 0.15);
-    color: #ffffff;
+    background: rgb(255 255 255 / 15%);
+    color: #fff;
     letter-spacing: 0.3px;
 }
 
@@ -97,4 +99,74 @@
     font-size: 10px;
     color: var(--text-muted, #949ba4);
     margin-left: 2px;
+}
+
+/* the Record button in the call's control bar, next to Disconnect (sized like it in index.tsx) */
+#ddrive-rec-callbar {
+    display: flex;
+    align-items: center;
+}
+
+.ddrive-callbar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 18px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 15px;
+    color: #fff;
+    background: #2b2d31;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.ddrive-callbar-btn:hover { background: #35373c; }
+.ddrive-callbar-btn:active { transform: scale(0.97); }
+.ddrive-callbar-btn:disabled {
+    cursor: progress;
+    opacity: 0.85;
+}
+
+.ddrive-callbar-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ed4245;
+    box-shadow: 0 0 0 3px rgb(237 66 69 / 25%);
+}
+
+.ddrive-callbar-btn.recording {
+    background: #ed4245;
+    font-variant-numeric: tabular-nums;
+}
+
+.ddrive-callbar-btn.recording:hover { background: #c03537; }
+
+.ddrive-callbar-btn.recording .ddrive-callbar-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: #fff;
+    box-shadow: none;
+    animation: ddrive-callbar-pulse 1.4s ease-in-out infinite;
+}
+
+.ddrive-callbar-btn.starting .ddrive-callbar-dot,
+.ddrive-callbar-btn.saving .ddrive-callbar-dot {
+    background: transparent;
+    border: 2px solid #fff;
+    border-top-color: transparent;
+    box-shadow: none;
+    animation: ddrive-callbar-spin 0.8s linear infinite;
+}
+
+@keyframes ddrive-callbar-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+@keyframes ddrive-callbar-spin {
+    to { transform: rotate(360deg); }
 }

@@ -58,17 +58,21 @@ export const settings = definePluginSettings({
 // ------------------------------------------------------------- Live Recording State
 interface RecState {
     isRecording: boolean;
+    phase: "idle" | "starting" | "recording" | "saving";
     duration: number;
     isVideo: boolean;
-    uploadedBytes: number;
+    uploadedBytes: number; // recorded
+    savedBytes: number; // of that, in DDrive
     channelName: string;
 }
 
 let recState: RecState = {
     isRecording: false,
+    phase: "idle",
     duration: 0,
     isVideo: false,
     uploadedBytes: 0,
+    savedBytes: 0,
     channelName: ""
 };
 
@@ -258,7 +262,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
             hasConnected = true;
         }
     } catch (e) {
-        console.warn("[DDriveRecorder] Microphone capture note:", e);
+        console.warn(`[DDriveRecorder] Microphone capture note: ${(e as any)?.name}: ${(e as any)?.message}`);
     }
 
     // 2. Desktop audio loopback (captures other call participants & shared audio)
@@ -289,7 +293,7 @@ async function captureCallAudio(): Promise<{ stream: MediaStream; ctx: AudioCont
             }
         }
     } catch (e) {
-        console.warn("[DDriveRecorder] Desktop loopback audio fallback:", e);
+        console.warn(`[DDriveRecorder] Desktop loopback audio fallback: ${(e as any)?.name}: ${(e as any)?.message}`);
     }
 
     // 3. Fallback: connect DOM media elements (HTMLAudioElement / HTMLVideoElement)
@@ -317,7 +321,7 @@ interface Upload {
     serverUrl: string;
     recorderKey: string;
     id: string;
-    queue: { offset: number; data: Uint8Array; }[];
+    queue: { offset: number; size: number; data: string; }[]; // data: base64
     total: number; // bytes recorded
     acked: number; // bytes DDrive has
     reading: Promise<void>; // parts of the recorder being read, in order
@@ -329,12 +333,22 @@ interface Upload {
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const FATAL = new Set([400, 401, 403, 404, 409, 410, 413]);
 
+// A part as base64 text. (Sent as bytes, it reached the desktop side of the plugin as 1 byte.)
+function readBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).slice(String(r.result).indexOf(",") + 1));
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(blob);
+    });
+}
+
 function addPart(up: Upload, blob: Blob) {
     up.reading = up.reading.then(async () => {
-        const data = new Uint8Array(await blob.arrayBuffer());
-        if (!data.byteLength) return;
-        up.queue.push({ offset: up.total, data });
-        up.total += data.byteLength;
+        if (!blob.size) return;
+        const data = await readBase64(blob);
+        up.queue.push({ offset: up.total, size: blob.size, data });
+        up.total += blob.size;
         kick(up);
     }).catch(e => console.error("[DDriveRecorder] Could not read a recorded part:", e));
 }
@@ -347,15 +361,23 @@ async function pump(up: Upload) {
     let tries = 0;
     while (up.queue.length && !up.fatal) {
         const part = up.queue[0];
-        if (part.offset + part.data.byteLength <= up.acked) { up.queue.shift(); continue; }
+        if (part.offset + part.size <= up.acked) { up.queue.shift(); continue; }
         const res = await Native!.sendLiveChunk({
-            serverUrl: up.serverUrl, recorderKey: up.recorderKey, id: up.id, offset: part.offset, chunk: part.data
+            serverUrl: up.serverUrl, recorderKey: up.recorderKey, id: up.id, offset: part.offset, chunk64: part.data
         });
+        if (res.status === 200 && res.sent !== undefined && res.sent !== part.size) {
+            up.fatal = `a part of ${part.size} bytes arrived as ${res.sent}`;
+            up.onFatal(up.fatal);
+            break;
+        }
         if (res.status === 200 && typeof res.offset === "number") {
+            const before = up.acked;
             up.acked = Math.max(up.acked, res.offset);
             tries = 0;
+            if (currentUpload === up) updateState({ savedBytes: up.acked });
             if (!res.ok && res.wait) await sleep(1000); // DDrive is still sending earlier pieces to Discord
-            continue; // (not ok, no wait: DDrive has up to res.offset; go on from there)
+            else if (!res.ok && up.acked === before) await sleep(500); // (DDrive has up to res.offset: go on from there)
+            continue;
         }
         if (FATAL.has(res.status)) {
             up.fatal = res.error || `HTTP ${res.status}`;
@@ -385,10 +407,12 @@ let autoChannel: string | null = null; // the call auto-record last started for 
 export async function startRecording() {
     if (recState.isRecording || starting) return;
     starting = true;
+    updateState({ phase: "starting" });
     try {
         await begin();
     } finally {
         starting = false;
+        if (recState.phase === "starting") updateState({ phase: recState.isRecording ? "recording" : "idle" });
     }
 }
 
@@ -532,9 +556,11 @@ async function begin() {
 
         updateState({
             isRecording: true,
+            phase: "recording",
             duration: 0,
             isVideo,
             uploadedBytes: 0,
+            savedBytes: 0,
             channelName: channelTitle
         });
 
@@ -553,7 +579,8 @@ async function begin() {
 
 export async function stopRecording() {
     if (!recState.isRecording || !currentMediaRecorder) return;
-    showToast({ text: "Finalizing live upload to DDrive...", variant: "default" });
+    showToast({ text: "Saving the recording to DDrive...", variant: "default" });
+    updateState({ phase: "saving" });
     if (currentMediaRecorder.state !== "inactive") {
         currentMediaRecorder.stop(); // (a second press while it stops does nothing)
     }
@@ -581,9 +608,11 @@ function cleanupRecording() {
 
     updateState({
         isRecording: false,
+        phase: "idle",
         duration: 0,
         isVideo: false,
         uploadedBytes: 0,
+        savedBytes: 0,
         channelName: ""
     });
 }
@@ -599,6 +628,109 @@ function formatBytes(bytes: number): string {
         return `${(bytes / 1024).toFixed(0)} KB`;
     }
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ------------------------------------------------------------- The button in the call's control bar
+// Discord's call view has a row of big buttons (microphone, camera, screen, ..., Disconnect). There is no
+// way in for a plugin there, so a Record button of the same size is put next to Disconnect in the page
+// itself, and put back whenever Discord draws the row again.
+const BAR_ID = "ddrive-rec-callbar";
+let barObserver: MutationObserver | null = null;
+let barQueued = false;
+
+function findDisconnect(): HTMLElement | null {
+    let best: HTMLElement | null = null;
+    let bestH = 0;
+    for (const b of document.querySelectorAll<HTMLElement>("button[aria-label], [role='button'][aria-label]")) {
+        if (b.closest(`#${BAR_ID}`)) continue;
+        if (!/^(disconnect|leave call|hang up|end call)$/i.test((b.getAttribute("aria-label") || "").trim())) continue;
+        const h = b.getBoundingClientRect().height;
+        if (h >= 36 && h > bestH) { best = b; bestH = h; } // (the call view's, not the small one in the voice panel)
+    }
+    return best;
+}
+
+function barLabel(): { text: string; title: string; } {
+    const s = recState;
+    if (s.phase === "starting") return { text: "Starting…", title: "Starting the recording" };
+    if (s.phase === "saving") {
+        return { text: "Saving…", title: `Saving to DDrive: ${formatBytes(s.savedBytes)} of ${formatBytes(s.uploadedBytes)} there` };
+    }
+    if (s.isRecording) {
+        return {
+            text: formatDuration(s.duration),
+            title: `Recording ${s.isVideo ? "screen + voice" : "voice"}: ${formatBytes(s.uploadedBytes)} recorded, `
+                + `${formatBytes(s.savedBytes)} saved in DDrive. Click to stop and save.`
+        };
+    }
+    return { text: "Record", title: "Record this call into DDrive" };
+}
+
+function renderBar() {
+    const btn = document.querySelector<HTMLButtonElement>(`#${BAR_ID} button`);
+    if (!btn) return;
+    const { text, title } = barLabel();
+    btn.className = `ddrive-callbar-btn ${recState.phase}`;
+    btn.setAttribute("aria-label", title);
+    btn.title = title;
+    btn.disabled = recState.phase === "starting" || recState.phase === "saving";
+    (btn.querySelector(".ddrive-callbar-text") as HTMLElement).textContent = text;
+}
+
+function placeBar() {
+    barQueued = false;
+    const disc = findDisconnect();
+    const have = document.getElementById(BAR_ID);
+    if (!disc) { have?.remove(); return; }
+    // next to the outermost wrapper Disconnect has of its own
+    let anchor: HTMLElement = disc;
+    while (anchor.parentElement && anchor.parentElement.childElementCount === 1 && anchor.parentElement !== document.body) {
+        anchor = anchor.parentElement;
+    }
+    const row = anchor.parentElement;
+    if (!row) return;
+    if (have && have.parentElement === row && have.nextElementSibling === anchor) return; // (already there)
+    have?.remove();
+    const r = disc.getBoundingClientRect();
+    const wrap = document.createElement("div");
+    wrap.id = BAR_ID;
+    const gap = getComputedStyle(row).columnGap;
+    if (!gap || gap === "normal" || gap === "0px") wrap.style.marginRight = "8px";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.style.height = `${Math.round(r.height)}px`;
+    btn.style.minWidth = `${Math.round(r.width)}px`;
+    btn.style.borderRadius = getComputedStyle(disc).borderRadius || "8px";
+    btn.innerHTML = '<span class="ddrive-callbar-dot"></span><span class="ddrive-callbar-text"></span>';
+    btn.addEventListener("click", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (recState.isRecording) stopRecording();
+        else startRecording();
+    });
+    wrap.appendChild(btn);
+    row.insertBefore(wrap, anchor);
+    renderBar();
+}
+
+function queueBar() {
+    if (barQueued) return;
+    barQueued = true;
+    requestAnimationFrame(placeBar);
+}
+
+function startBar() {
+    listeners.add(renderBar);
+    barObserver = new MutationObserver(queueBar);
+    barObserver.observe(document.body, { childList: true, subtree: true });
+    queueBar();
+}
+
+function stopBar() {
+    listeners.delete(renderBar);
+    barObserver?.disconnect();
+    barObserver = null;
+    document.getElementById(BAR_ID)?.remove();
 }
 
 // ------------------------------------------------------------- React UI Component
@@ -673,6 +805,7 @@ export default definePlugin({
 
     start() {
         setupVisibilityHooks();
+        startBar();
 
         // Listen for call state changes: stop recording if call ends, or auto-record
         if (RTCConnectionStore) {
@@ -681,6 +814,7 @@ export default definePlugin({
     },
 
     stop() {
+        stopBar();
         if (recState.isRecording) {
             stopRecording();
         }

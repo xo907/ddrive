@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.20.2 (2026-10-24)
+
+- **The call recorder's recordings reach DDrive.** A recorded part was handed from Discord's page to the desktop side of the plugin as bytes, and arrived as 1 byte: the recording on screen grew, the one in DDrive didn't. Parts now go as text, and the plugin checks that each arrived whole; it also knows how much DDrive has saved.
+- **A big Record button in the call's controls**, next to Disconnect and the same size: red with the time running while it records (click to stop and save), a spinner while it starts or saves; hold the pointer on it for how much is recorded and how much is saved in DDrive.
+- When the call's sound can't be taken from the computer, the reason is written in Discord's log.
+
 ## 3.20.1 (2026-10-24)
 
 - **The call recorder's "Starting live call recording…" no longer comes up over and over.** With Automatically start recording on, it tried to start at every change of the voice connection (Discord has many a second), and again after each try that didn't work. Now it tries once per call, and one start at a time.
