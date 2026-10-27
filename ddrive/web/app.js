@@ -4614,6 +4614,56 @@ function retiredNotice() {
   retiredDialog();
 }
 
+// The call recorder for Discord (vencord/ddriveRecorder), for an admin's own account: the key is made here
+// and shown once; the server keeps only its sha256 and hands that to the account's DDrive Lite, which
+// seals the recordings on the computer (the plugin sends to it at http://127.0.0.1:8766).
+const RECORDER_URL = "http://127.0.0.1:8766";
+function recorderRow(row) {
+  const text = h("span", {}, "Lets the DDrive call recorder for Discord put recordings into this account, through DDrive Lite on your computer (signed in to this account). Loading…");
+  const ctl = h("div", { style: "display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap" });
+  const base = "Lets the DDrive call recorder for Discord put recordings into this account, through DDrive Lite on your computer (signed in to this account), which seals them there. ";
+  async function load(r) {
+    r = r || await api("/api/account/recorder").catch(() => null);
+    if (!r) { text.textContent = base + "Couldn't ask the server."; return; }
+    const pcs = r.computers || [];
+    text.textContent = base + (r.on ? `A key was made ${when(r.at)}; it is shown only when made, so make a new one if it is lost (the old one stops working). ` : "No key yet. ")
+      + (pcs.length ? `Lite of this account is running on: ${pcs.join(", ")}.` : "No DDrive Lite of this account has been heard from lately: start it on the computer you record on.");
+    ctl.replaceChildren(
+      h("button", { class: "btn small", type: "button", onclick: make }, r.on ? "New key…" : "Make a key"),
+      r.on && h("button", { class: "btn danger small", type: "button", onclick: off }, "Turn off"));
+  }
+  async function make() {
+    const raw = crypto.getRandomValues(new Uint8Array(32));
+    const key = btoa(String.fromCharCode(...raw)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key))),
+                              (b) => b.toString(16).padStart(2, "0")).join("");
+    const r = await attempt(() => api("/api/account/recorder", { hash: digest }));
+    if (!r) return;
+    load(r);
+    const copy = (value, what) => async () => {
+      try { await navigator.clipboard.writeText(value); toast(`${what} copied`); } catch { toast("Select it and copy it by hand"); }
+    };
+    const field = (label, value, what) => h("div", { class: "field" }, h("div", { class: "fl" }, label),
+      h("div", { style: "display:flex;gap:8px" },
+        h("input", { readonly: true, value, spellcheck: "false", autocomplete: "off", style: "flex:1;font-family:var(--mono, monospace)", onfocus: (e) => e.target.select() }),
+        h("button", { class: "btn small", type: "button", onclick: copy(value, what) }, "Copy")));
+    const m = modal("Call recorder key",
+      h("p", {}, "In Discord: Settings > Vencord > Plugins > DDriveRecorder, paste these. The key is shown only now: it isn't kept anywhere you can see it again."),
+      field("Recorder Key", key, "Key"),
+      field("Server URL", RECORDER_URL, "Address"),
+      h("p", { class: "muted small" }, "DDrive Lite of this account takes it within about 15 seconds (it has to be 3.24.0 or newer, and running). Recordings go to /Recordings in this account."
+        + (r.computers && r.computers.length ? "" : " No Lite of this account is running right now.")),
+      h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: () => m.close() }, "Done")));
+  }
+  async function off() {
+    if (!await ask({ title: "Turn the call recorder key off?", ok: "Turn off", danger: true, text: "A recorder using it can't send any more (a key made with 'lite recorder on' on a computer still works there)." })) return;
+    const r = await attempt(() => api("/api/account/recorder", { off: true }));
+    if (r) { load(r); toast("The call recorder key is off"); }
+  }
+  load();
+  return row("Call recorder for Discord", text, ctl);
+}
+
 // ------------------------------------------------------------------ your account (somebody signed in to one)
 async function renderAccount() {
   const a = await attempt(() => api("/api/account"));
@@ -4632,6 +4682,7 @@ async function renderAccount() {
                         + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
              a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
          a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+         status && status.admin && status.e2e && recorderRow(row),
          navRow(),
          liveRow(),
          !(status && status.retired) && row("Previews of Discord attachments", "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself. Remove all of those copies, everywhere in this account; the attachments stay.",

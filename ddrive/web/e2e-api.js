@@ -1335,7 +1335,7 @@
     await drop(objects);
   }
 
-  const PASS = /^(account|account\/delete|account\/devices(\/.*)?|changelog|vault(\/.*)?|findx(\/.*)?)$/;        // about the account itself (and FindX's sealed relay): the server's to answer
+  const PASS = /^(account|account\/delete|account\/devices(\/.*)?|account\/recorder|changelog|vault(\/.*)?|findx(\/.*)?)$/;        // about the account itself (and FindX's sealed relay): the server's to answer
 
   async function answer(url, init) {
     const name = url.pathname.slice(5).replace(/\/+$/, ""), method = (init.method || "GET").toUpperCase();

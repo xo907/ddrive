@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.24.0 (2026-10-27)
+
+- **Admins make the call recorder's key in the dashboard.** Your account > **Call recorder for Discord** > **Make a key** shows a key, with the Server URL, to paste into the DDriveRecorder plugin; no more `lite recorder on` in a terminal. The key is made in the browser and shown only once: the server keeps only its SHA-256 and hands that to every DDrive Lite signed in to the account, which picks it up within about 15 seconds, starts taking recordings if it wasn't, and still seals them on the computer. **New key** replaces it (the old one stops working), **Turn off** takes it away; a key made with `lite recorder on` keeps working next to it. The page also says which computers run Lite of the account. Both the host and Lite need 3.24.0.
+
 ## 3.23.1 (2026-10-24)
 
 - **The call recorder's copy on the computer is kept until DDrive has the recording for sure.** It was removed as soon as Lite had taken all of it, but Lite may still be handing it to the host then, and gives it up after 30 minutes without the host: such a recording was then nowhere. Now the copy is removed only when DDrive says the recording is in the account; when it isn't yet, the copy stays and the plugin says so.

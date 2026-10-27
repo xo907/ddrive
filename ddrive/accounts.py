@@ -670,6 +670,23 @@ class Accounts:
             rec = self._recs.get(str(aid or ""))
             return rec is not None and bool(rec.get("admin")) and bool(rec.get("e2e")) and not rec.get("disabled")
 
+    def recorder(self, aid, value=False):
+        """The call recorder's key of an account, as made on its page: {"hash": sha256 of the key, "at"}
+        (None: none). The key itself never comes here; the account's DDrive Lite gets the hash when it
+        checks in and lets a recorder that knows the key send to it. With `value` (a dict, or None to
+        take it away), that is set."""
+        with self._lock:
+            rec = self._recs.get(str(aid or ""))
+            if rec is None:
+                return None
+            if value is not False:
+                if value:
+                    rec["recorder"] = value
+                else:
+                    rec.pop("recorder", None)
+                self._save()
+            return rec.get("recorder")
+
     def retired(self, aid):
         """True for an account of the earlier kind, whose key this computer has: it can be read and
         moved into an end-to-end encrypted one, and nothing else."""

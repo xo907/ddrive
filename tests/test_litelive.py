@@ -120,3 +120,63 @@ class LiteCommandTest(helpers.unittest.TestCase):
             self.assertNotEqual(settings["recorder_key"], key)
             lite.main(["recorder", "off"])
             self.assertNotIn("recorder_key", settings)
+
+
+class DashboardKeyTest(test_vault.VaultTest):
+    """An admin makes the call recorder key on their account page: the host keeps only its sha256 and
+    hands that to the account's Lite when it checks in (lite/update); Lite's endpoint takes the key."""
+
+    def test_the_key_made_on_the_page_reaches_lite_as_a_hash(self):
+        import hashlib
+        from ddrive import accounts, litesync
+        client = lite.HostClient(self.address, auth=self.auth)
+        with self.assertRaises(lite.HostError):                     # not an admin: not theirs to make
+            client._json("/api/account/recorder")
+        aid = accounts.account_id(bytes.fromhex(self.auth))
+        recs = self.web.accounts
+        with recs._lock:
+            recs._recs[aid]["admin"] = True
+        key = "made-in-the-browser"
+        digest = hashlib.sha256(key.encode()).hexdigest()
+        self.assertEqual(client._json("/api/account/recorder"), {"on": False, "at": None, "computers": []})
+        with self.assertRaises(lite.HostError):
+            client._json("/api/account/recorder", {"hash": "not a hash"})
+        got = client._json("/api/account/recorder", {"hash": digest})
+        self.assertTrue(got["on"])
+        answer = client._json("/api/lite/update?device=pc1&name=PC")
+        self.assertEqual(answer["recorder"]["hash"], digest)
+        self.assertNotIn(key, json.dumps(answer))
+
+        settings = {"e2e": True, "host": self.address, "recorder_port": 0}
+        sup = litesync.Supervisor()
+        with mock.patch.object(lite, "load_settings", lambda: dict(settings)), \
+             mock.patch.object(lite, "save_settings", lambda s: (settings.clear(), settings.update(s))), \
+             mock.patch.object(lite, "start_recorder", lambda s: "started"), \
+             mock.patch.object(lite, "_recorder_up", lambda port: False):
+            sup.recorder_from(answer)
+            self.assertEqual(settings["recorder_hash"], digest)
+            self.assertEqual(sup._recorder, "started")
+            sup._recorder = None
+            sup.recorder_from({"at": 0})                            # (an older host says nothing: left alone)
+            self.assertEqual(settings["recorder_hash"], digest)
+            client._json("/api/account/recorder", {"off": True})
+            sup.recorder_from(client._json("/api/lite/update?device=pc1&name=PC"))
+            self.assertNotIn("recorder_hash", settings)
+
+        # Lite's endpoint: the key whose hash it has works, its own key too, others don't
+        server = litelive.RecorderServer(litelive.VaultRecordings(self.new_device, client=client), lambda: KEY,
+                                         port=0, hash_of=lambda: digest).start()
+        try:
+            def status(k):
+                conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=20)
+                conn.request("POST", "/api/rec/close?id=nothing", b"", {"Authorization": f"Bearer {k}"})
+                r = conn.getresponse()
+                r.read()
+                conn.close()
+                return r.status
+            self.assertNotEqual(status(key), 401)
+            self.assertNotEqual(status(KEY), 401)
+            self.assertEqual(status("wrong"), 401)
+            self.assertEqual(status(digest), 401)                    # (the hash itself is no key)
+        finally:
+            server.stop()

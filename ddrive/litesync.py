@@ -889,6 +889,29 @@ class Supervisor:
         self._asked = 0.0
         self._renew_at = 0.0                                 # when `lite renew` was started
         self._renew_tries = 0
+        self._recorder = None                                # the recorder endpoint this started (a key made in the dashboard)
+
+    def recorder_from(self, got):
+        """The host's answer says which call recorder key the account's page made (an admin's: {"hash",
+        "at"}, or None). Kept in the lite settings as recorder_hash, and the recorder endpoint is started
+        when nothing on this computer takes recordings yet. A host older than 3.24.0 says nothing."""
+        from . import lite
+        if not isinstance(got, dict) or "recorder" not in got:
+            return
+        rec = got["recorder"] if isinstance(got["recorder"], dict) else None
+        digest = str((rec or {}).get("hash") or "")
+        s = lite.load_settings()
+        if not s.get("e2e"):
+            return
+        if digest != (s.get("recorder_hash") or ""):
+            if digest:
+                s["recorder_hash"] = digest
+            else:
+                s.pop("recorder_hash", None)
+            lite.save_settings(s)
+            log.info("Call recorder key from the dashboard: %s", "new one" if digest else "turned off")
+        if digest and self._recorder is None and not lite._recorder_up(lite._recorder_port(s)):
+            self._recorder = lite.start_recorder(s)
 
     def renew_check(self):
         """Keep this program up to date: with `lite autoupdate on` (a git checkout), pull a newer DDrive twice a day; and
@@ -939,10 +962,15 @@ class Supervisor:
             sig = (s.get("host"), s.get("protected"), s.get("e2e"))
             if self._host[0] != sig:
                 self._host = (sig, lite.client_from(s))
-            return check_in(self._host[1], s, update_state(), self._phase() if phase is None else phase)
+            got = check_in(self._host[1], s, update_state(), self._phase() if phase is None else phase)
         except Exception as e:                   # (the host is away, or older than 3.16.0: asked again soon)
             log.debug("Checking in with the host: %s", e)
             return None
+        try:
+            self.recorder_from(got)
+        except Exception as e:
+            log.warning("Call recorder key from the dashboard: %s", e)
+        return got
 
     def told_to_update(self):
         """Ask the host whether its owner said to update every computer ("Update all computers" on its
@@ -1055,3 +1083,6 @@ class Supervisor:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=8)
+        if self._recorder is not None:
+            self._recorder.stop()
+            self._recorder = None

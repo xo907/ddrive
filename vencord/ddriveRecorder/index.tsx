@@ -35,7 +35,7 @@ export const settings = definePluginSettings({
     },
     recorderKey: {
         type: OptionType.STRING,
-        description: "Recorder Key: from 'lite recorder on' on this computer (or, for the owner's drive, Settings > Live upload)",
+        description: "Recorder Key: an admin makes one on their account page in the DDrive dashboard (Call recorder for Discord), or 'lite recorder on' on this computer (or, for the owner's drive, Settings > Live upload)",
         default: ""
     },
     folderName: {

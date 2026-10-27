@@ -89,9 +89,9 @@ ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move merge c
 
 # An end-to-end encrypted account (vault.py) only ever hands this computer sealed things, so of all of
 # the above it gets next to nothing: what it could ask for would need the files in the clear.
-E2E_GET = frozenset("""status account account/devices changelog queue lite/update vault vault/log vault/object vault/pending vault/sync vault/shares
+E2E_GET = frozenset("""status account account/devices account/recorder changelog queue lite/update vault vault/log vault/object vault/pending vault/sync vault/shares
     vault/move vault/move/peer vault/move/list""".split())
-E2E_POST = frozenset("""logout account/delete account/devices/block account/devices/strict account/devices/forget vault/log vault/snapshot vault/object vault/delete
+E2E_POST = frozenset("""logout account/delete account/devices/block account/devices/strict account/devices/forget account/recorder vault/log vault/snapshot vault/object vault/delete
     vault/move/open vault/move/send vault/move/finish vault/move/cancel
     vault/share vault/share/update vault/share/revoke vault/share/collect
     vault/sync/jobs vault/sync/tell vault/sync/ask vault/sync/forget
@@ -3549,7 +3549,38 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         """A running DDrive Lite asks this about once a minute: whether it was told to update. It says
         which version it runs, how it is installed and how its last update went (the Computers list)."""
         who = self._who()
-        self._json(self.server.app.computers.heard(who or "", self._query()))
+        got = self.server.app.computers.heard(who or "", self._query())
+        if who and self.server.app.accounts.admin_ok(who):     # the recorder key made on the admin's own page
+            got["recorder"] = self.server.app.accounts.recorder(who)
+        self._json(got)
+
+    # ------------------------------------------------------------ the call recorder, for an admin's own account
+    # The page makes the key and shows it once; this computer keeps only its sha256, which the admin's DDrive
+    # Lite gets when it checks in (lite/update) and checks a recorder's key with. The recordings are sealed
+    # by that Lite, so the key can't open anything here.
+    def _account_recorder(self):
+        if self._acct is None or not self._e2e or not self.server.app.accounts.admin_ok(self._acct.id):
+            raise ApiError(403, "The call recorder key is made by admin accounts.")
+        return self._acct.id
+
+    def _get_api_account_recorder(self):
+        rec = self.server.app.accounts.recorder(self._account_recorder()) or {}
+        computers = [c for c in self.server.app.computers.listing()["computers"] if c["who"] == self._acct.id]
+        self._json({"on": bool(rec), "at": rec.get("at"), "computers": [c["name"] for c in computers]})
+
+    def _post_api_account_recorder(self):
+        aid = self._account_recorder()
+        b = self._body_json()
+        if b.get("off"):
+            self.server.app.accounts.recorder(aid, None)
+            log.info("Admin account %s turned its call recorder key off.", aid)
+        else:
+            digest = str(b.get("hash") or "").lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ApiError(400, "That isn't a key's sha256.")
+            self.server.app.accounts.recorder(aid, {"hash": digest, "at": time.time()})
+            log.info("Admin account %s made a new call recorder key.", aid)
+        self._get_api_account_recorder()
 
     def _get_api_lite_computers(self):
         if self._acct is not None and not self._admin:

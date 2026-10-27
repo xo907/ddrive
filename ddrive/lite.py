@@ -922,6 +922,8 @@ def cmd_mount(args):
         os.makedirs(mp, exist_ok=True)
     with open(_pid_file(), "w") as f:
         f.write(str(os.getpid()))
+    from . import copies
+    copies.remember()                        # (a copy older than this one won't start)
     kwargs = {"foreground": True, "fsname": "DDriveLite"}
     if sys.platform in ("win32", "darwin"):
         kwargs["volname"] = "DDrive"
@@ -1128,6 +1130,8 @@ def cmd_sync(args):
         print("[INFO] Folder syncing is already running on this computer.")
         return 0
     _logging(getattr(args, "verbose", False))
+    from . import copies
+    copies.remember()                        # (a copy older than this one won't start)
     sup = litesync.Supervisor()
     recorder = start_recorder(s)
     try:
@@ -1158,7 +1162,7 @@ def _recorder_up(port):
 def start_recorder(s):
     """Lite's recorder endpoint, in the Lite program that runs (None when live upload is off, the account
     isn't end-to-end encrypted, or another Lite program has it already)."""
-    if not s.get("recorder_key") or not s.get("e2e"):
+    if not (s.get("recorder_key") or s.get("recorder_hash")) or not s.get("e2e"):
         return None
     from .litelive import RecorderServer, VaultRecordings
     port = _recorder_port(s)
@@ -1168,7 +1172,8 @@ def start_recorder(s):
         recs = VaultRecordings(lambda: vault_from(load_settings()),
                                folder_of=lambda: load_settings().get("recorder_folder") or "/Recordings",
                                client=client_from(s))
-        server = RecorderServer(recs, lambda: load_settings().get("recorder_key") or "", port).start()
+        server = RecorderServer(recs, lambda: load_settings().get("recorder_key") or "", port,
+                                hash_of=lambda: load_settings().get("recorder_hash") or "").start()
         recs.warm()
         return server
     except OSError as e:
@@ -1186,7 +1191,7 @@ def cmd_recorder(args):
         print("[OK] Live upload is OFF: no recorder can send to Lite any more.")
         return 0
     if action == "run":                      # only the recorder, in this program (Lite starts it so in the background)
-        if not s.get("recorder_key"):
+        if not (s.get("recorder_key") or s.get("recorder_hash")):
             print(f"[INFO] Live upload is OFF. Turn it on first: '{me()} recorder on'.")
             return 1
         _logging(getattr(args, "verbose", False))
@@ -1196,7 +1201,7 @@ def cmd_recorder(args):
                   "[ERROR] Live upload through Lite is for an end-to-end encrypted account.")
             return 0 if s.get("e2e") else 1
         try:
-            while load_settings().get("recorder_key"):
+            while any(load_settings().get(k) for k in ("recorder_key", "recorder_hash")):
                 time.sleep(5.0)
         finally:
             recorder.stop()
@@ -1210,8 +1215,15 @@ def cmd_recorder(args):
         s["recorder_key"] = secrets.token_urlsafe(32)
         save_settings(s)
         print("[OK] A new recorder key was made" + (" (an older one no longer works)." if action == "new" else "."))
+    if s.get("recorder_hash"):
+        print("A recorder key made on your account page in the dashboard works here too (it is shown there only once).")
     if not s.get("recorder_key"):
-        print(f"[OK] Live upload is OFF. Turn it on: '{me()} recorder on'.")
+        if not s.get("recorder_hash"):
+            print(f"[OK] Live upload is OFF here. Turn it on: '{me()} recorder on'.")
+            return 0
+        port = _recorder_port(s)
+        print(f"Server URL:    http://127.0.0.1:{port}")
+        print("Live upload is " + ("running." if _recorder_up(port) else "ON but not running: it runs while Lite does."))
         return 0
     port = _recorder_port(s)
     if action in ("on", "new") and not _recorder_up(port):   # (a Lite program started before there was a key has none)
@@ -1589,6 +1601,10 @@ def cmd_disconnect(args):
     return 0
 
 
+# What starts the drive, the folder syncing or live upload, or changes the account: not from an outdated copy.
+STARTS = frozenset("mount sync menu recorder autostart renew import put connect".split())
+
+
 def main(argv, verbose=False):
     if argv[:1] == ["lite"]:                 # how the lite-only program starts itself again in the background
         argv = argv[1:]
@@ -1634,6 +1650,14 @@ def main(argv, verbose=False):
     if not args.action:
         parser.print_help()
         return 0
+    if args.action in STARTS and not (args.action in ("sync", "autostart", "recorder") and args.state in (None, "status", "off", "show")):
+        from . import copies
+        refused = copies.refusal()           # an outdated copy of the program on this computer (copies.py)
+        if refused:
+            _logging(verbose)
+            log.error("%s", refused)
+            copies.tell(refused)
+            return 1
     try:
         return {"connect": cmd_connect, "mount": cmd_mount, "stop": cmd_stop, "status": cmd_status, "ls": cmd_ls,
                 "get": cmd_get, "put": cmd_put, "import": cmd_import, "disconnect": cmd_disconnect, "autostart": cmd_autostart,

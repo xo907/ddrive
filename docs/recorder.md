@@ -51,7 +51,11 @@ Install-Recorder.cmd -Uninstall
 3. Get the **Server URL** and **Recorder Key**. Where the recordings should go decides where they come from:
    - **Your end-to-end encrypted account** (an account or admin account on a DDrive dashboard): through DDrive Lite on this computer,
      signed in to that account (`lite connect`). The host can't put anything into such an account, so Lite seals the recording here,
-     a piece at a time, and sends it on as it is made. In a terminal, in the DDrive folder:
+     a piece at a time, and sends it on as it is made.
+     An **admin account** can make the key in the dashboard: the account page (**Your account**) > **Call recorder for Discord** >
+     **Make a key**. It shows the key once, with the Server URL (`http://127.0.0.1:8766`); the host keeps only a hash of it and hands
+     that to every DDrive Lite signed in to the account (3.24.0 or newer), which takes it within about 15 seconds and starts taking
+     recordings. **New key** replaces it, **Turn off** stops it. Or, in a terminal, in the DDrive folder:
      ```cmd
      run.bat lite recorder on
      ```

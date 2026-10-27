@@ -14,6 +14,7 @@ with what it sent after a while, like a drive does. If Lite itself is stopped ha
 is lost: the account only gets a file when it is finished.
 """
 
+import hashlib
 import hmac
 import json
 import logging
@@ -316,10 +317,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return self._json(413, {"error": "that part is too big"})
         body = self.rfile.read(n) if n else b""
-        key = self.server.key_of()
+        key, digest = self.server.key_of(), self.server.hash_of()
         scheme, _, given = (self.headers.get("Authorization") or "").partition(" ")
-        if not key or scheme.lower() != "bearer" or not hmac.compare_digest(given.strip().encode(), key.encode()):
-            return self._json(401, {"error": "Wrong recorder key." if key else "Live upload is off: run 'lite recorder on'."})
+        given = given.strip().encode()
+        ok = scheme.lower() == "bearer" and bool(given) and (
+            bool(key) and hmac.compare_digest(given, key.encode())
+            or bool(digest) and hmac.compare_digest(hashlib.sha256(given).hexdigest().encode(), digest.encode()))
+        if not ok:
+            return self._json(401, {"error": "Wrong recorder key." if key or digest else
+                                    "Live upload is off: make a key on your account page in the dashboard, or run 'lite recorder on'."})
         url = urllib.parse.urlparse(self.path)
         q = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query).items()}
         recs = self.server.recordings
@@ -344,11 +350,13 @@ class _Handler(BaseHTTPRequestHandler):
 class RecorderServer:
     """Lite's recorder endpoint on this computer (127.0.0.1 only): /api/rec/open, data and close."""
 
-    def __init__(self, recordings, key_of, port=PORT):
+    def __init__(self, recordings, key_of, port=PORT, hash_of=lambda: ""):
+        """key_of: the key made here ('lite recorder on'); hash_of: the sha256 of the one made on the
+        account's page in the dashboard (the host passes it on). A recorder may use either."""
         self.recordings = recordings
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
         self.httpd.daemon_threads = True
-        self.httpd.recordings, self.httpd.key_of = recordings, key_of
+        self.httpd.recordings, self.httpd.key_of, self.httpd.hash_of = recordings, key_of, hash_of
         self.port = self.httpd.server_address[1]
         self._thread = threading.Thread(target=self.httpd.serve_forever, name="LiteRecorder", daemon=True)
 
