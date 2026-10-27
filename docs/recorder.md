@@ -52,7 +52,7 @@ Install-Recorder.cmd -Uninstall
    - **Your end-to-end encrypted account** (an account or admin account on a DDrive dashboard): through DDrive Lite on this computer,
      signed in to that account (`lite connect`). The host can't put anything into such an account, so Lite seals the recording here,
      a piece at a time, and sends it on as it is made.
-     An **admin account** can make the key in the dashboard: the account page (**Your account**) > **Call recorder for Discord** >
+     An **admin account** can make the key in the dashboard: the account menu > **Account settings** > **Discord** > **Call recorder for Discord** >
      **Make a key**. It shows the key once, with the Server URL (`http://127.0.0.1:8766`); the host keeps only a hash of it and hands
      that to every DDrive Lite signed in to the account (3.24.0 or newer), which takes it within about 15 seconds and starts taking
      recordings. **New key** replaces it, **Turn off** stops it. Or, in a terminal, in the DDrive folder:
@@ -63,7 +63,7 @@ Install-Recorder.cmd -Uninstall
      drive letter, folder syncing, or by itself); `lite autostart on` has it start with the computer. `lite recorder new` makes a new key,
      `lite recorder off` turns it off. The host has to be DDrive 3.20.0 or newer.
    - **The owner's drive**: the Server URL is the drive's dashboard address (`http://127.0.0.1:8765` on the computer that runs it),
-     and the key is in the dashboard under **Settings** > **Live upload** (**Make a key**, then **Copy**), or in a terminal on that
+     and the key is in the dashboard under **Settings** > **Advanced** > **Live upload** (**Make a key**, then **Copy**), or in a terminal on that
      computer: `run.bat recorder-key` (`./run.sh recorder-key` on Linux or a Pi).
 
    Put both into the plugin's settings, or give them to the installer: `Install-Recorder.cmd -ServerUrl http://127.0.0.1:8766 -RecorderKey <key>`.

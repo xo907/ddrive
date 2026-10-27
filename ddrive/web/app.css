@@ -603,6 +603,21 @@ button.link { padding: 0; border: 0; background: none; color: var(--ink); text-d
 .set-text .t { font-weight: 500; }
 .set-text .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; max-width: 560px; }
 .set-text .s.faint { color: var(--faint); }
+/* settings in tabs: a list on the left, the tab's groups on the right (a bar along the top on a phone) */
+.set-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 40px; align-items: start; }
+.set-tabs { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.set-tab { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; text-decoration: none; }
+.set-tab:hover { background: var(--hover); color: var(--ink); }
+.set-tab.on { background: var(--hover); color: var(--ink); box-shadow: inset 2px 0 0 var(--ink); }
+.set-tab svg { width: 16px; height: 16px; flex: none; }
+.set-body { min-width: 0; }
+.set-body .set-title { font-size: 17px; font-weight: 600; margin: 2px 0 6px; color: var(--ink); }
+.set-note { font-size: 13px; margin: 0 0 18px; max-width: 620px; }
+.set-body h3, .set-body h2:not(.set-title) { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 30px 0 8px; }
+.set-body > .set-title + h3, .set-body > .set-note + h3, .set-body > .set-title + .set-section > :first-child,
+.set-body > .set-note + .set-section > :first-child, .set-body > .set-title + .settings { margin-top: 14px; }
+.set-section:empty { display: none; }
+.more-hint { font-size: inherit; margin-left: 2px; }
 .set-ctl.wide { width: min(320px, 45%); }
 .set-ctl input, .set-ctl select { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--line);
                                   border-radius: var(--radius); background: var(--panel); outline: none; }
@@ -647,6 +662,12 @@ button.link { padding: 0; border: 0; background: none; color: var(--ink); text-d
 
 @media (max-width: 760px) {
   .set-row { flex-wrap: wrap; gap: 10px; }
+  .set-layout { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .set-tabs { position: static; flex-direction: row; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px 4px;
+              border-bottom: 1px solid var(--line); gap: 4px; }
+  .set-tabs::-webkit-scrollbar { display: none; }
+  .set-tab { flex: none; white-space: nowrap; padding: 8px 10px; border-radius: 8px 8px 0 0; }
+  .set-tab.on { box-shadow: inset 0 -2px 0 var(--ink); }
   .set-ctl.wide { width: 100%; }
   .notes { grid-template-columns: minmax(0, 1fr); border: 0; border-radius: 0; background: none; min-height: 0; }
   .notes-side { border-right: 0; }

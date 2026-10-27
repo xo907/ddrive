@@ -178,7 +178,7 @@ class BrowserTest(helpers.DriveTest):
     def test_the_recorder_key_is_made_in_the_settings(self):
         self.sign_in_owner()
         p = self.page
-        p.goto(self.base + "/#/settings")
+        p.goto(self.base + "/#/settings/advanced")
         p.click("#recorder-settings button:has-text('Make a key')")
         p.wait_for_selector("text=New key made")
         key = p.input_value("#recorder-settings input[readonly]")
@@ -201,7 +201,7 @@ class BrowserTest(helpers.DriveTest):
                                       "phase": "Stopping the drive to start it again with DDrive 3.0.1…"})
         self.sign_in_owner()
         p = self.page
-        p.goto(self.base + "/#/settings")
+        p.goto(self.base + "/#/settings/computers")
         p.wait_for_selector("text=Update all computers >> nth=0")
         self.assertIn("pi-xo", p.inner_text("#computers-settings"))
         self.assertIn("updates by download only", p.inner_text("#computers-settings"))
@@ -222,7 +222,7 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Discord"})["status"], 200)
         aid = next(iter(self.web.accounts._recs))
         self.web.account_devices.heard(aid, {}, "192.168.1.50", "POST", "/api/vault/log")     # an old computer somewhere
-        p.goto(self.base + "/#/settings")
+        p.goto(self.base + "/#/settings/devices")
         p.wait_for_selector("text=Devices using this account")
         p.wait_for_selector("text=Discord (not locked)")
         box = p.locator("h2:has-text('Devices using this account') >> xpath=..")
@@ -538,6 +538,45 @@ class BrowserTest(helpers.DriveTest):
         self.assertFalse(p.locator("#bm-private").is_visible())
         self.assertEqual(self.errors, [])
 
+    def test_settings_are_in_tabs(self):
+        p = self.page
+        self.sign_up_e2e()
+        with self.web.accounts._lock:                      # (an admin: its account has the recorder, and the drive's settings)
+            for rec in self.web.accounts._recs.values():
+                rec["admin"] = True
+        p.goto(self.base + "/#/settings")
+        p.reload()
+        tabs = lambda: [t.strip() for t in p.locator(".set-tab").all_inner_texts()]
+        p.wait_for_selector(".set-tab.on")
+        self.assertEqual(tabs(), ["Account", "Preferences", "Discord", "Devices", "Move or delete"])
+        for tab, wait in [("account", "Manage the drive"), ("preferences", "In the menu"), ("discord", "Call recorder for Discord"),
+                          ("devices", "Devices using this account"), ("move", "Delete my account")]:
+            p.goto(self.base + "/#/settings/" + tab)
+            p.wait_for_selector(f".set-body >> text={wait}")
+            p.wait_for_timeout(300)
+            self.assertNotIn("false", p.inner_text(".set-body"))
+            self.assertEqual(p.inner_text(".set-tab.on").strip(), p.inner_text(".set-title").strip())
+        # managing the drive
+        p.goto(self.base + "/?server#/settings")
+        p.wait_for_selector(".set-tab.on")
+        self.assertEqual(tabs(), ["General", "Access and sign-in", "Storage", "Discord", "Accounts", "Sign-up", "Computers"])
+        for tab, wait in [("accounts", "Make an admin…"), ("signup", "Governing law"), ("storage", "Spare pieces (per 10 pieces)")]:
+            p.goto(self.base + "/?server#/settings/" + tab)
+            p.wait_for_selector(f".set-body >> text={wait}")
+            p.wait_for_timeout(300)
+            self.assertNotIn("false", p.inner_text(".set-body"))
+        self.assertEqual(p.locator(".set-body >> text=Governing law").count(), 0)          # (each tab has its own)
+        # a long hint shows its first sentence; the rest is one click away
+        before = p.locator(".set-body .more-hint").count()
+        self.assertGreater(before, 0)
+        p.locator(".set-body .more-hint").first.click()
+        self.assertEqual(p.locator(".set-body .more-hint").count(), before - 1)
+        # a phone: the tabs are a bar along the top
+        p.set_viewport_size({"width": 390, "height": 800})
+        box = p.locator(".set-tabs").bounding_box()
+        self.assertLess(box["height"], 80)
+        self.assertEqual(self.errors, [])
+
     def test_a_big_video_of_an_end_to_end_link_streams(self):
         p = self.page
         self.sign_up_e2e()
@@ -560,7 +599,7 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(whole[0], 206)                        # (an answer of a few pieces: the player asks for more)
         self.assertLess(whole[1], len(film))
         # The account's settings list its computers logged in to Discord (none here: no computer does Messages).
-        p.goto(self.base + "/#/settings")
+        p.goto(self.base + "/#/settings/discord")
         p.wait_for_selector("text=Computers logged in to Discord")
         p.wait_for_selector("text=None of your computers does Messages yet.")
         self.assertEqual(self.errors, [])

@@ -601,7 +601,7 @@ const pageItems = (list) => list.filter(([name]) => !notHere(name)).map(([name, 
   label, icon: ic, current: route.name === name || (also || []).includes(route.name), run: () => go("#/" + name) }));
 const inMenu = (list) => list.some(([name, , , also]) => route.name === name || (also || []).includes(route.name));
 const navState = (() => { try { return JSON.parse(localStorage.getItem("dd-nav") || "{}") || {}; } catch { return {}; } })();
-// The menu's pages. Any but Files can be left out of it (Settings › This browser), for a menu of only what
+// The menu's pages. Any but Files can be left out of it (Settings › General › This browser), for a menu of only what
 // is used; what is left out is in the Tools menu instead (the squares at the top), and its address works as ever.
 const NAV_PAGES = [["home", "Home", "home"], ["files", "Files", "folder"], ["gallery", "Gallery", "gallery"], ["starred", "Starred", "star"],
                    ["shared", "Shared", "link"], ["findx", "FindX", "place"], ["queue", "Queue", "queue"], ["deleted", "Deleted", "trash"]];
@@ -2452,7 +2452,7 @@ const SETTING_ROWS = [
   ["Web dashboard", [
     ["web_hosts", "Domain names", "Names this dashboard answers to behind a reverse proxy (e.g. drive.example.com). Several: separate with commas.", "list"],
     ["web_public_url", "Address for share links", "Used when you share from this computer itself, e.g. https://drive.example.com. Empty: the first domain name.", "text"],
-    ["webdav_enabled", "Other apps (WebDAV)", "File managers, “Map network drive”, rclone and backup apps can open the drive at /dav/, with a name and password you set for them under Sign-in.", "bool"],
+    ["webdav_enabled", "Other apps (WebDAV)", "File managers, “Map network drive”, rclone and backup apps can open the drive at /dav/, with a name and password you set for them below.", "bool"],
     ["web_lan", "On your network", "Phones and computers at home (and a reverse proxy on another machine) can open the dashboard.", "bool"],
   ]],
   ["Thumbnails", [
@@ -2497,6 +2497,41 @@ const SETTING_ROWS = [
   ]],
 ];
 
+// ------------------------------------------------------------------ settings in tabs
+// Settings are split into tabs (#/settings/<tab>): a list on the left on a wide screen, a bar along the top
+// on a phone. Each tab is a few short groups, so nothing has to be scrolled through to find a setting.
+
+/** Help text under a setting: a long one shows its first sentence, and the rest behind "More". */
+function hintEl(text) {
+  if (typeof text !== "string" || text.length < 170) return text;
+  const cut = text.search(/[.!?](\s|$)/);
+  if (cut < 30 || cut > 220) return text;
+  const rest = h("span", { hidden: true }, text.slice(cut + 1));
+  const more = h("button", { class: "link more-hint", type: "button", onclick: () => { rest.hidden = false; more.remove(); } }, "More");
+  return [text.slice(0, cut + 1), rest, " ", more];
+}
+/** A settings page: its title, and tabs [id, label, icon, draw(el), note]; the one in the address is shown. */
+function settingsTabs(title, lede, tabs) {
+  tabs = tabs.filter(Boolean);
+  const want = route.rest[0] || "";
+  const cur = tabs.find((t) => t[0] === want) || tabs[0];
+  const nav = h("nav", { class: "set-tabs", "aria-label": "Settings sections" },
+    tabs.map(([id, label, ic]) => h("a", { href: "#/settings/" + id, class: "set-tab" + (id === cur[0] ? " on" : ""), "aria-current": id === cur[0] ? "page" : null },
+      icon(ic), h("span", {}, label))));
+  const body = h("div", { class: "set-body" }, h("h2", { class: "set-title" }, cur[1]), cur[4] && h("p", { class: "muted set-note" }, cur[4]));
+  page(h("div", { class: "set-page" }, h("h1", {}, title), lede && h("p", { class: "lede" }, lede), h("div", { class: "set-layout" }, nav, body)));
+  cur[3](body);
+}
+/** What replaceChildren/append are given: without the parts left out (false, null), which they would write out. */
+const kids = (...parts) => parts.flat(Infinity).filter((x) => x != null && x !== false);
+/** A section that draws itself into an element of its own, once it is on the page (only the tab shown is:
+ *  the others' sections ask nothing of the server). */
+function section(draw, id) {
+  const el = h("div", { class: "set-section", id });
+  queueMicrotask(() => { if (el.isConnected) draw(el); });
+  return el;
+}
+
 async function renderSettings() {
   const data = await attempt(() => api("/api/settings"));
   if (!data) return;
@@ -2518,26 +2553,29 @@ async function renderSettings() {
                                onchange: (e) => save(key, type === "list" ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : e.target.value.trim()) });
     return input;
   };
-  page(h("h1", {}, SERVER ? "The drive's settings" : "Settings"),
-       h("p", { class: "lede" }, SERVER ? "You manage this drive as an admin. Changes are saved as you make them, for the computer that runs it. “My files” in the menu leads back to your own files."
-                                        : "Changes are saved as you make them, for this computer's drive."),
-       !SERVER && [h("h2", {}, "This browser"), h("div", { class: "settings" }, navRow(), liveRow())],
-       SETTING_ROWS.map(([title, rows]) => [h("h2", {}, title), h("div", { class: "settings" }, rows.map(([key, label, hint, type]) =>
-         h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hint),
-           data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
-           h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))]).flat(),
-       h("div", { id: "discord-settings" }),
-       h("div", { id: "signin-settings" }),
-       h("div", { id: "recorder-settings" }),
-       h("div", { id: "computers-settings" }),
-       h("div", { id: "accounts-settings" }),
-       h("div", { id: "erase-settings" }));
-  if (!SERVER) discordSection($("#discord-settings"));      // (the owner's Discord account: not an admin's)
-  signInSection($("#signin-settings"));
-  if (!SERVER) recorderSection($("#recorder-settings"));   // the key writes into the owner's drive
-  computersSection($("#computers-settings"));
-  accountsSection($("#accounts-settings"));
-  if (!SERVER) eraseSection($("#erase-settings"));          // the owner's alone
+  // (SETTING_ROWS by the title of its group; `as` names it on the page)
+  const group = (title, as) => {
+    const [, rows] = SETTING_ROWS.find(([t]) => t === title);
+    return [h("h3", {}, as || title), h("div", { class: "settings" }, rows.map(([key, label, hint, type]) =>
+      h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, label), hint && h("div", { class: "s" }, hintEl(hint)),
+        data.restart.includes(key) && h("div", { class: "s faint" }, "Takes effect after a restart")),
+        h("div", { class: "set-ctl" + (type === "bool" ? "" : " wide") }, control(key, type)))))];
+  };
+  const fill = (...parts) => (el) => el.append(...kids(parts));
+  settingsTabs(SERVER ? "Drive settings" : "Settings",
+    SERVER ? "You manage this drive as an admin. Changes are saved as you make them. “My files” in the menu goes back to your own files." : "Changes are saved as you make them.", [
+      ["general", "General", "settings", fill(
+        !SERVER && [h("h3", {}, "This browser"), h("div", { class: "settings" }, navRow(), liveRow())],
+        group("This computer", SERVER ? "The computer that runs the drive" : "This computer"))],
+      ["access", "Access and sign-in", "lock", fill(group("Web dashboard", "Addresses"), section(signInSection))],
+      ["storage", "Storage", "pie", fill(group("Storage", "Files and versions"), group("Protection", "Protection against lost pieces"), group("Thumbnails"))],
+      ["discord", "Discord", "message", fill(group("Discord", "Speed"), !SERVER && section(discordSection))],
+      ["accounts", "Accounts", "user", fill(section((el) => accountsSection(el, "people")))],
+      ["signup", "Sign-up", "enter", fill(section((el) => accountsSection(el, "signup")))],
+      ["computers", "Computers", "sync", fill(section(computersSection, "computers-settings")),
+       "Computers that run DDrive Lite with this drive or one of its accounts."],
+      !SERVER && ["advanced", "Advanced", "chip", fill(section(recorderSection, "recorder-settings"), section(eraseSection, "erase-settings"))],
+    ]);
 }
 
 // Live upload (liverec.py): a program (the Discord recorder plugin, say) streams a file in while it makes
@@ -2565,14 +2603,14 @@ async function recorderSection(el) {
     keyBox.value = on ? info.key : "";
     keyBox.placeholder = "Off: no key yet";
     keyBtn.textContent = on ? "New key" : "Make a key";
-    offBtn.hidden = copyBtn.hidden = !on;
+    offBtn.style.display = copyBtn.style.display = on ? "" : "none";      // (.btn shows itself whatever `hidden` says)
     folder.value = info.folder;
     live.textContent = (info.live || []).length
       ? "Arriving now: " + info.live.map((r) => `${r.path} (${size(r.bytes)})${r.error ? " — " + r.error : ""}`).join(", ")
       : "";
   }
   show();
-  el.append(h("h2", {}, "Live upload"),
+  el.append(h("h3", {}, "Live upload"),
     h("div", { class: "settings" },
       h("div", { class: "set-row" },
         h("div", { class: "set-text" }, h("div", { class: "t" }, "Recorder key"),
@@ -4607,26 +4645,30 @@ async function computersSection(into) {
         : h("div", { class: "set-row sub" }, h("div", { class: "set-text" }, h("div", { class: "s" }, "No computer has checked in yet. A running DDrive Lite 3.16.0 or newer shows up here within a minute.")))));
 }
 
-async function accountsSection(into) {
+async function accountsSection(into, part = "people") {
   const [d, mv] = await Promise.all([api("/api/accounts").catch(() => null), api("/api/accounts/moves").catch(() => null)]);
   if (!d || !into.isConnected) return;
   const moves = ((mv && mv.moves) || []).filter((m) => m.state !== "cancelled" || Date.now() / 1000 - m.created < 86400);
-  const redraw = () => accountsSection(into);
-  const row = (t, text, ctl, sub) => h("div", { class: "set-row" + (sub ? " sub" : "") }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" + (sub ? "" : " wide") }, ctl));
+  const redraw = () => accountsSection(into, part);
+  const row = (t, text, ctl, sub) => h("div", { class: "set-row" + (sub ? " sub" : "") }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, hintEl(text))), h("div", { class: "set-ctl" + (sub ? "" : " wide") }, ctl));
+  const people = part === "people", signup = part === "signup";
   const save = async (changes, ok) => { if (await attempt(() => api("/api/settings", changes), ok || "Saved")) { await refreshStatus(); redraw(); } };
   const gb = d.quota / 2 ** 30;
   const mode = SIGNUP_MODES.find(([k]) => k === d.mode) || SIGNUP_MODES[0];
-  into.replaceChildren(
-    h("h2", {}, "Accounts"),
-    h("p", { class: "muted", style: "margin:0 0 12px" }, "Let other people use this dashboard. An account is 24 words made here: no name, no password. Each one has its own storage, encrypted with its own words, and sees files, notes, bookmarks, contacts, messages and share links. Never your files, and nothing that manages the drive."),
-    h("div", { class: "settings" },
+  into.replaceChildren(...kids(
+    people && h("p", { class: "muted set-note" }, "Other people can use this dashboard with accounts of their own. An account is 24 words made here: no name, no password. "
+      + "Each has its own storage, encrypted with its own words. It never sees your files or anything that manages the drive."),
+    signup && h("p", { class: "muted set-note" }, "Whether people can make accounts themselves, how much they may store, and the terms they agree to."),
+    people && h("div", { class: "settings" },
       !SERVER && row("Your own files, end-to-end encrypted", "The files on this drive can be read by the computer that runs it. Move them into an account whose 24 words never leave your devices: "
           + "copied and sealed in this browser, so the server never gets the key. Nothing here is changed.",
           h("button", { class: "btn small", onclick: moveEverything }, "Move everything…")),
       row("Make an account", "For somebody, with storage of its own: end-to-end encrypted, its 24 words made in this browser. Works whoever sign-up is open to.",
           h("button", { class: "btn small", onclick: () => newAccountDialog(redraw) }, "Make an account…")),
       row("Admin accounts", "End-to-end encrypted accounts that may also manage the drive: settings, accounts, other admins, health and the log. They don't open the owner's files and can't change how the owner signs in. Switching one off signs it out at once.",
-          h("button", { class: "btn small", onclick: () => newAccountDialog(redraw, true) }, "Make an admin…")),
+          h("button", { class: "btn small", onclick: () => newAccountDialog(redraw, true) }, "Make an admin…"))),
+    signup && h("h3", {}, "Who can sign up"),
+    signup && h("div", { class: "settings" },
       row("Who can make an account", mode[2],
           h("select", { "aria-label": "Who can make an account", onchange: (e) => save({ signup_mode: e.target.value }, "Saved") },
             SIGNUP_MODES.map(([k, label]) => h("option", { value: k, selected: k === d.mode }, label)))),
@@ -4637,14 +4679,6 @@ async function accountsSection(into) {
       row("Most accounts", "No more than this many are made. 0: no limit.",
           h("input", { value: String(d.max), inputmode: "numeric", onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
                        onchange: (e) => { const v = Number(e.target.value); if (!(v >= 0)) return toast("Not a number"); save({ accounts_max: Math.round(v) }); } })),
-      row("Terms and privacy policy", ["What people agree to when they make an account, written around what the drive really does with their data. They name you with what you fill in here. Read them (",
-            h("a", { class: "link", href: "/terms", target: "_blank", rel: "noopener" }, "terms"), ", ", h("a", { class: "link", href: "/privacy", target: "_blank", rel: "noopener" }, "privacy policy"),
-            ") and have them checked before you open sign-up to the public: they are a starting point, not legal advice."], null),
-      [["operator_name", "Who runs this", "Your name or your organisation's, as the terms should name you."],
-       ["operator_contact", "Contact", "An email address for questions and for reports about shared content."],
-       ["legal_region", "Governing law", "The country or state whose law the terms are under, e.g. England and Wales. Empty: not said."]].map(([key, label, hint]) =>
-        row(label, hint, h("input", { value: d.legal[key] || "", placeholder: "Not set", spellcheck: "false", maxlength: "200", onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
-                                      onchange: (e) => save({ [key]: e.target.value.trim() }) }))),
       d.mode !== "closed" && row("Invites", d.mode === "invite" ? "A code lets somebody make an account." : "Not needed while sign-up is public; they still work.",
           h("button", { class: "btn small", onclick: () => inviteDialog(redraw) }, "Invite somebody")),
       d.mode !== "closed" && d.invites.map((i) => row(
@@ -4653,15 +4687,25 @@ async function accountsSection(into) {
         h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
           i.valid && h("button", { class: "btn ghost small", onclick: async () => { try { await navigator.clipboard.writeText(fromHere(i)); toast("Invite link copied"); } catch { toast(fromHere(i)); } } }, "Copy link"),
           h("button", { class: "btn ghost small", onclick: async () => { if (await attempt(() => api("/api/accounts/invite/revoke", { code: i.code }), "Invite removed")) redraw(); } }, "Remove")), true))),
-    ...(moves.length ? [h("h2", {}, "Moves between accounts"),
+    signup && h("h3", {}, "Terms and privacy"),
+    signup && h("div", { class: "settings" },
+      row("Terms and privacy policy", ["What people agree to when they make an account, written around what the drive really does with their data. They name you with what you fill in here. Read them (",
+            h("a", { class: "link", href: "/terms", target: "_blank", rel: "noopener" }, "terms"), ", ", h("a", { class: "link", href: "/privacy", target: "_blank", rel: "noopener" }, "privacy policy"),
+            ") and have them checked before you open sign-up to the public: they are a starting point, not legal advice."], null),
+      [["operator_name", "Who runs this", "Your name or your organisation's, as the terms should name you."],
+       ["operator_contact", "Contact", "An email address for questions and for reports about shared content."],
+       ["legal_region", "Governing law", "The country or state whose law the terms are under, e.g. England and Wales. Empty: not said."]].map(([key, label, hint]) =>
+        row(label, hint, h("input", { value: d.legal[key] || "", placeholder: "Not set", spellcheck: "false", maxlength: "200", onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+                                      onchange: (e) => save({ [key]: e.target.value.trim() }) })))),
+    ...(people && moves.length ? [h("h3", {}, "Moves between accounts"),
       h("div", { class: "settings" }, moves.map((m) => row([h("code", {}, m.from || "…"), " → ", h("code", {}, m.to), h("span", { class: "tag" + (["copying", "ready", "finishing"].includes(m.state) ? " busy" : ""), style: "margin-left:8px" }, m.state)],
         `${m.objects ? `${m.copied} of ${m.objects} pieces · ${size(m.done_bytes || 0)} of ${size(m.bytes || 0)} · ` : ""}started ${ago(m.created)}${m.error ? " · " + m.error : ""}`,
         ["open", "copying", "ready"].includes(m.state) ? h("button", { class: "btn ghost small", onclick: async () => {
           if (await ask({ title: "Cancel this move?", ok: "Cancel the move", danger: true, text: "The account that was moving stays as it was; what was copied so far is removed." })
               && await attempt(() => api("/api/accounts/moves/cancel", { id: m.id }), "Move cancelled")) redraw();
         } }, "Cancel") : null)))] : []),
-    h("h2", {}, `${plural(d.accounts.length, "account")}`),
-    d.accounts.length ? h("div", { class: "settings" }, d.accounts.map((a) => row(
+    people && h("h3", {}, `${plural(d.accounts.length, "account")}`),
+    !people ? null : d.accounts.length ? h("div", { class: "settings" }, d.accounts.map((a) => row(
         [h("code", {}, a.id), a.admin && h("span", { class: "tag", style: "margin-left:8px" }, "Admin"), a.e2e && h("span", { class: "tag", style: "margin-left:8px" }, "End-to-end"),
          !a.e2e && h("span", { class: "tag busy", style: "margin-left:8px" }, a.admin ? "Needs new words" : "Earlier kind"),
          a.moving && h("span", { class: "tag busy", style: "margin-left:8px" }, "Moving"), a.note && ` · ${a.note}`,
@@ -4679,10 +4723,10 @@ async function accountsSection(into) {
             if (await ask({ title: "Delete this account?", ok: "Delete for good", danger: true, text: a.admin && !a.e2e ? `Admin account ${a.id} is removed. This can't be undone.` : `Account ${a.id} and its ${plural(a.files, "file")} are removed from this computer and from Discord. This can't be undone, and nobody can bring it back.` })
                 && await attempt(() => api("/api/accounts/delete", { id: a.id }), "Account deleted")) { await refreshStatus(); redraw(); }
           } }, "Delete")))))
-      : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one above." : "None yet."),
+      : h("p", { class: "muted" }, d.mode === "closed" ? "None. Choose who can make one under Sign-up." : "None yet."),
     // This computer has no accounts, and the drive holds a list another one saved (or this one, before its disk was lost).
-    ...(d.accounts.length || !(d.backups || []).length ? [] : [
-      h("h2", {}, "Bring accounts back"),
+    ...(!people || d.accounts.length || !(d.backups || []).length ? [] : [
+      h("h3", {}, "Bring accounts back"),
       h("p", { class: "muted", style: "margin:0 0 12px" }, "The drive holds a saved list of accounts. If the computer that served them is gone, this one can take over: each account works again, with its files, once it has signed in with its 24 words. Don't do this while the other computer is still running: two computers serving the same accounts lose each other's changes."),
       h("div", { class: "settings" }, d.backups.map((b) => row(
         `${plural(b.accounts, "account")} saved by ${b.host || "a computer"}${b.here ? " (this computer's name on the drive)" : ""}`,
@@ -4690,7 +4734,7 @@ async function accountsSection(into) {
         h("button", { class: "btn small", onclick: async () => {
           if (await ask({ title: "Bring these accounts back here?", ok: "Bring back", danger: true, text: `From now on this computer serves the ${plural(b.accounts, "account")} that ${b.host || "the other computer"} saved on ${fmtFull.format(new Date(b.saved * 1000))}. Only do this if that computer is gone or no longer runs DDrive.` })
               && await attempt(() => api("/api/accounts/restore", { id: b.id }), "Accounts brought back")) { await refreshStatus(); redraw(); }
-        } }, "Bring back"))))]));
+        } }, "Bring back"))))])));
 }
 
 // ------------------------------------------------------------------ an account of the earlier kind
@@ -4733,9 +4777,9 @@ function recorderRow(row) {
     const pcs = r.computers || [];
     text.textContent = base + (r.on ? `A key was made ${when(r.at)}; it is shown only when made, so make a new one if it is lost (the old one stops working). ` : "No key yet. ")
       + (pcs.length ? `Lite of this account is running on: ${pcs.join(", ")}.` : "No DDrive Lite of this account has been heard from lately: start it on the computer you record on.");
-    ctl.replaceChildren(
+    ctl.replaceChildren(...[
       h("button", { class: "btn small", type: "button", onclick: make }, r.on ? "New key…" : "Make a key"),
-      r.on && h("button", { class: "btn danger small", type: "button", onclick: off }, "Turn off"));
+      r.on && h("button", { class: "btn danger small", type: "button", onclick: off }, "Turn off")].filter(Boolean));
   }
   async function make() {
     const raw = crypto.getRandomValues(new Uint8Array(32));
@@ -4774,47 +4818,52 @@ async function renderAccount() {
   const a = await attempt(() => api("/api/account"));
   if (!a || route.name !== "settings") return;
   const used = a.bytes + a.version_bytes;
-  const row = (t, text, ctl) => h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" }, ctl));
-  page(h("h1", {}, "Your account"),
-       h("p", { class: "lede" }, "Your account is your 24 words: they sign you in, and they are the key everything here is encrypted with. There is no name, no password and no way to reset them, so keep them safe."),
-       h("div", { class: "settings" },
-         row("Account", [h("code", {}, a.id), a.created ? ` · made ${when(a.created)}` : ""]),
-         status && status.admin && row("Admin", "This account may also manage the drive: its settings, accounts and other admins, its health and its log. Never the owner's files.",
-             h("a", { class: "btn small", href: SERVER_URL }, "Manage the drive")),
-         status && status.retired && row("Move into an end-to-end encrypted account", "This account is of an earlier kind, whose key the server holds: it can only be read now. Everything in it can be sealed in this browser into a new account the server can't read.",
-             h("button", { class: "btn small", onclick: retiredDialog }, "Move it…")),
-         row("Storage", `${plural(a.files, "file")}, ${size(a.bytes)}${a.version_bytes ? `, plus ${size(a.version_bytes)} of earlier versions and deleted files` : ""}.`
-                        + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
-             a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
-         a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
-         status && status.admin && status.e2e && recorderRow(row),
-         navRow(),
-         liveRow(),
-         !(status && status.retired) && row("Previews of Discord attachments", "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself. Remove all of those copies, everywhere in this account; the attachments stay.",
-             h("button", { class: "btn ghost small", onclick: async () => { if (await deletePreviews()) render(); } }, "Delete previews…")),
-         status && status.move && window.accountMove && row(status.move.side === "to" ? "Another account is moving into this one" : "This account is moving into another one",
-             moveText(status.move), h("button", { class: "btn small", onclick: () => window.accountMove.show(status.move) }, "Show the move")),
-         status && status.e2e && window.accountMove && row("Move another account into this one", "Everything in another end-to-end encrypted account of yours comes into a new folder here, and that account is deleted. The server copies the sealed files; the keys are agreed between your two screens.",
-             h("button", { class: "btn ghost small", onclick: () => window.accountMove.receive() }, "Receive…")),
-         status && status.e2e && window.accountMove && row("Move everything into another account", "This account's files, folders, earlier versions and deleted files go into another end-to-end encrypted account; then this account is deleted.",
-             h("button", { class: "btn ghost small", onclick: () => window.accountMove.send() }, "Move out…")),
-         row("Sign out", "On this browser. Signing in again takes your 24 words.",
-             h("button", { class: "btn ghost small", onclick: signOut }, "Sign out")),
-         row("Terms and privacy", "What you agreed to, and what happens to your data here.",
-             h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
-               h("a", { class: "btn ghost small", href: "/terms", target: "_blank", rel: "noopener" }, "Terms"),
-               h("a", { class: "btn ghost small", href: "/privacy", target: "_blank", rel: "noopener" }, "Privacy")))),
-       h("div", { id: "discord-settings" }),
-       h("h2", {}, "Delete the account"),
-       h("div", { class: "settings" },
-         row("Delete everything", "Your files, notes, bookmarks, contacts, messages and share links are removed for good, and the 24 words stop working.",
-             h("button", { class: "btn danger small", onclick: async () => {
-               const typed = await ask({ title: "Delete your account?", value: "", ok: "Delete for good", danger: true, text: "Everything in it is removed and can't be brought back. Type delete to confirm." });
-               if (typed == null) return;
-               if (String(typed).trim().toLowerCase() !== "delete") return toast("Nothing was deleted: type delete to confirm");
-               if (await attempt(() => api("/api/account/delete", { confirm: "delete" }))) location.reload();
-             } }, "Delete my account"))));
-  discordSection($("#discord-settings"));
+  const row = (t, text, ctl) => h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, hintEl(text))), h("div", { class: "set-ctl" }, ctl));
+  const box = (...rows) => h("div", { class: "settings" }, ...rows.flat().filter(Boolean));
+  const e2e = !!(status && status.e2e), retired = !!(status && status.retired);
+  const fill = (...parts) => (el) => el.append(...kids(parts));
+  settingsTabs("Your account", "Your account is your 24 words: they sign you in and are the key everything here is encrypted with. There is no password and no way to reset them, so keep them safe.", [
+    ["account", "Account", "user", fill(box(
+      row("Account", [h("code", {}, a.id), a.created ? ` · made ${when(a.created)}` : ""]),
+      row("Storage", `${plural(a.files, "file")}, ${size(a.bytes)}${a.version_bytes ? `, plus ${size(a.version_bytes)} of earlier versions and deleted files` : ""}.`
+                     + (a.quota ? ` You can store ${size(a.quota)}; ${size(Math.max(0, a.quota - used))} is free.` : ""),
+          a.quota ? h("progress", { max: String(a.quota), value: String(Math.min(used, a.quota)), "aria-label": "Storage used" }) : null),
+      a.version_bytes ? row("Make room", "Deleted files and earlier versions count until they are removed for good.", h("a", { class: "btn ghost small", href: "#/deleted" }, "Deleted files")) : null,
+      status && status.admin && row("Admin", "This account may also manage the drive: its settings, accounts, health and log. Never the owner's files.",
+          h("a", { class: "btn small", href: SERVER_URL }, "Manage the drive")),
+      retired && row("Move into an end-to-end encrypted account", "This account is of an earlier kind, whose key the server holds: it can only be read now. Everything in it can be sealed in this browser into a new account the server can't read.",
+          h("button", { class: "btn small", onclick: retiredDialog }, "Move it…")),
+      row("Terms and privacy", "What you agreed to, and what happens to your data here.",
+          h("div", { style: "display:flex;gap:8px;justify-content:flex-end" },
+            h("a", { class: "btn ghost small", href: "/terms", target: "_blank", rel: "noopener" }, "Terms"),
+            h("a", { class: "btn ghost small", href: "/privacy", target: "_blank", rel: "noopener" }, "Privacy"))),
+      row("Sign out", "On this browser. Signing in again takes your 24 words.",
+          h("button", { class: "btn ghost small", onclick: signOut }, "Sign out"))))],
+    ["preferences", "Preferences", "settings", fill(box(navRow(), liveRow())), "Kept in this browser only."],
+    ["discord", "Discord", "message", fill(
+      section((el) => discordSection(el, false)),
+      (status && status.admin && e2e || !retired) && h("h3", {}, "More"),
+      section((el) => el.append(box(status && status.admin && e2e && recorderRow(row),
+          !retired && row("Previews of Discord attachments", "Earlier versions kept a small copy of each Discord picture and video next to the attachment itself. Remove all of those copies, everywhere in this account; the attachments stay.",
+            h("button", { class: "btn ghost small", onclick: async () => { if (await deletePreviews()) render(); } }, "Delete previews…"))))))],
+    e2e && window.E2E && E2E.active && ["devices", "Devices", "phone", fill(section((el) => el.append(accountDevices())))],
+    ["move", "Move or delete", "trash", fill(
+      e2e && window.accountMove && [h("h3", {}, "Move"), box(
+        status.move && row(status.move.side === "to" ? "Another account is moving into this one" : "This account is moving into another one",
+          moveText(status.move), h("button", { class: "btn small", onclick: () => window.accountMove.show(status.move) }, "Show the move")),
+        row("Move another account into this one", "Everything in another end-to-end encrypted account of yours comes into a new folder here, and that account is deleted. The server copies the sealed files; the keys are agreed between your two screens.",
+          h("button", { class: "btn ghost small", onclick: () => window.accountMove.receive() }, "Receive…")),
+        row("Move everything into another account", "This account's files, folders, earlier versions and deleted files go into another end-to-end encrypted account; then this account is deleted.",
+          h("button", { class: "btn ghost small", onclick: () => window.accountMove.send() }, "Move out…")))],
+      h("h3", {}, "Delete the account"),
+      box(row("Delete everything", "Your files, notes, bookmarks, contacts, messages and share links are removed for good, and the 24 words stop working.",
+        h("button", { class: "btn danger small", onclick: async () => {
+          const typed = await ask({ title: "Delete your account?", value: "", ok: "Delete for good", danger: true, text: "Everything in it is removed and can't be brought back. Type delete to confirm." });
+          if (typed == null) return;
+          if (String(typed).trim().toLowerCase() !== "delete") return toast("Nothing was deleted: type delete to confirm");
+          if (await attempt(() => api("/api/account/delete", { confirm: "delete" }))) location.reload();
+        } }, "Delete my account"))))],
+  ]);
 }
 
 // ------------------------------------------------------------------ stars
@@ -5358,13 +5407,13 @@ async function discordLogout(done) {
   if (r) { chat = r; chatDir = null; if (done) done(); }
 }
 
-async function discordSection(into) {
+async function discordSection(into, devices = true) {
   const s = await api("/api/chat").catch(() => null);
   if (!s || !into.isConnected) return;
-  const redraw = () => discordSection(into);
+  const redraw = () => discordSection(into, devices);
   const row = (t, text, ctl) => h("div", { class: "set-row" }, h("div", { class: "set-text" }, h("div", { class: "t" }, t), text && h("div", { class: "s" }, text)), h("div", { class: "set-ctl" }, ctl));
   into.replaceChildren(
-    h("h2", {}, "Discord account"),
+    h("h3", {}, "Your Discord account"),
     h("div", { class: "settings" },
       s.connected
         ? row(`Logged in as ${s.user.name}`, `@${s.user.username} · ${plural(s.counts.guilds, "server")}, ${plural(s.counts.dms, "conversation")}. Logging and archiving run on this computer (${s.device}).`,
@@ -5374,8 +5423,8 @@ async function discordSection(into) {
       (s.connected || (s.totals && s.totals.messages)) && row("Messages", s.locked ? `${s.folder} is locked in this browser. Unlock it with the padlock at the top.`
           : `${s.totals ? plural(s.totals.messages, "message") : "Nothing"} kept in ${s.folder} on your drive: encrypted, on every device, at no cost.`,
           h("a", { class: "btn ghost small", href: "#/messages" }, "Open"))),
-    window.E2E && E2E.active && discordDevices(),
-    window.E2E && E2E.active && accountDevices());
+    ...kids(window.E2E && E2E.active && discordDevices(),
+            devices && window.E2E && E2E.active && accountDevices()));
 }
 
 /** An end-to-end account: every device that uses it (as the server sees them: accountdevices.py), who wrote
@@ -5888,19 +5937,21 @@ async function signOut() {
 $("#account").addEventListener("click", (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   const who = isAccount() ? `${status.admin ? "Admin account" : "Account"} ${status.account}` : status && status.admin ? `Admin ${status.admin}` : status && status.user ? `Signed in as ${status.user}` : "Signed in";
-  const drive = pageItems(DRIVE_PAGES);
+  const drive = SERVER ? [] : pageItems(DRIVE_PAGES);          // (managing the drive: they are in the menu on the left)
+  // Settings and the way between your files and managing the drive first; then the drive's pages; then help.
   openMenu([
     !sheetMode() && { label: who, icon: "user", disabled: true },          // (a phone's sheet has it as its title)
-    { label: isAccount() ? "Your account" : SERVER ? "Settings and accounts" : "Settings", icon: "settings", current: route.name === "settings", run: () => go("#/settings") },
-    ...(drive.length ? ["-", { head: isAccount() ? "History and storage" : "Drive" }, ...drive] : []),
-    "-",
+    { label: isAccount() ? "Account settings" : SERVER ? "Drive settings" : "Settings", icon: "settings", current: route.name === "settings", run: () => go("#/settings") },
     isAccount() && status.admin && { label: "Manage the drive", icon: "shield", run: () => { location.href = SERVER_URL; } },
     SERVER && { label: "Back to my files", icon: "folder", run: () => { location.href = "/"; } },
-    !SERVER && { label: "Don't trust, verify", icon: "shield", current: route.name === "verify", run: () => go("#/verify") },
+    PHONE_APP && { label: "This phone", icon: "sync", run: () => PHONE_APP.settings() },
+    ...(drive.length ? ["-", { head: isAccount() ? "History and storage" : "Drive" }, ...drive] : []),
+    "-",
     !SERVER && { label: "Find anything", icon: "open", run: openPalette },
     { label: "What's new", icon: "info", run: whatsNew },
     !isAccount() && { label: "Check for updates", icon: "refresh", run: checkForUpdate },
-    PHONE_APP && { label: "This phone", icon: "sync", run: () => PHONE_APP.settings() },
+    !SERVER && { label: "Don't trust, verify", icon: "shield", current: route.name === "verify", run: () => go("#/verify") },
+    "-",
     { label: "Sign out", icon: "signout", run: signOut },
   ], r.right - 240, r.bottom + 6, who);
 });

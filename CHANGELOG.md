@@ -3,6 +3,15 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.27.0 (2026-10-27)
+
+- **Settings are in tabs.** The settings were one very long page; now they are a few tabs (a list on the left, a bar along the top on a phone), each with a handful of short groups, and each has an address of its own (`#/settings/accounts`, …):
+  - **Settings** (the owner) and **Drive settings** (an admin managing the drive): General · Access and sign-in · Storage · Discord · Accounts · Sign-up · Computers · Advanced (the owner's recorder key and Erase everything).
+  - **Account settings**: Account · Preferences (the menu, refreshing by itself) · Discord (your Discord account, the computers logged in to it, the call recorder) · Devices · Move or delete.
+- Long explanations under a setting show their first sentence, and the rest with **More**.
+- The account menu is in a clearer order: your settings and the way between your files and managing the drive first, then history and storage, then help, then Sign out. Managing the drive, it no longer repeats the pages the menu on the left has.
+- Fixed: "false" written next to the call recorder's **Make a key**, and the owner's recorder key showing **Copy** and **Turn off** when there was no key.
+
 ## 3.26.0 (2026-10-27)
 
 - **Private bookmarks.** A bookmark's menu has **Make private…**: the first time, it asks for a password and makes the private list; the bookmark (and its preview pictures) goes into it. Private bookmarks are a list of their own in `/Bookmarks/Private`, a password-locked folder, so until the password is typed they aren't shown anywhere, on any device, and nothing says they are there. Open, they have a section of their own and a **Private** tag, and **Move out of private** takes one back. A **Private** box next to **Save** saves a new link straight into the private list. The page's menu sets them up, unlocks them or locks them again at once.

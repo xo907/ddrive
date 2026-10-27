@@ -1664,8 +1664,8 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         scheme, _, given = (self.headers.get("Authorization") or "").partition(" ")
         if not key or scheme.lower() != "bearer" or not hmac.compare_digest(given.strip().encode(), key.encode()):
             if app.note_unknown(b"recorder", self._addr()):
-                log.warning("A live upload from %s used a wrong or no recorder key (Settings, Live upload).", self._addr())
-            return self._error(401, "Wrong recorder key." if key else "Live upload is off: make a key in Settings, Live upload.")
+                log.warning("A live upload from %s used a wrong or no recorder key (Settings > Advanced > Live upload).", self._addr())
+            return self._error(401, "Wrong recorder key." if key else "Live upload is off: make a key in Settings > Advanced > Live upload.")
         if method != "POST":
             return self._error(405, "POST only")
         q = self._query()

@@ -30,7 +30,7 @@ encrypted, so their 24 words are made in a browser and never on this computer.""
 
 NO_ADMIN = """Admin accounts are end-to-end encrypted: their 24 words are made in a browser, so that this
 computer never has them, and a terminal here can't make them. Make one in the dashboard instead:
-Settings, Accounts, "Make an admin…" (on an https address, or on this computer as http://localhost)."""
+Settings > Accounts, "Make an admin…" (on an https address, or on this computer as http://localhost)."""
 
 
 class Unreachable(Exception):
