@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.24.1 (2026-10-27)
+
+- **Lite doesn't start from an outdated copy of DDrive.** With two copies of the program on one computer (an old folder's run.bat next to the one autostart uses), Lite started from the old one showed a drive it can no longer read: Windows said "Z:\ is not accessible ... I/O device error" and folder syncing was refused. Now each copy that shows the drive or syncs is written down (lite/copies.json in the data folder), and a copy older than another one still on the computer, or than the one Windows starts by itself, says where the newer one is and doesn't start (in a message box when it has no window). Versions are read from each copy's files, so one updated since counts as what it is now, and a deleted copy is forgotten. `DDRIVE_ALLOW_OLD=1` starts an older one anyway. Only copies that have this check can refuse; one older than 3.24.1 still has to be deleted by hand.
+
 ## 3.24.0 (2026-10-27)
 
 - **Admins make the call recorder's key in the dashboard.** Your account > **Call recorder for Discord** > **Make a key** shows a key, with the Server URL, to paste into the DDriveRecorder plugin; no more `lite recorder on` in a terminal. The key is made in the browser and shown only once: the server keeps only its SHA-256 and hands that to every DDrive Lite signed in to the account, which picks it up within about 15 seconds, starts taking recordings if it wasn't, and still seals them on the computer. **New key** replaces it (the old one stops working), **Turn off** takes it away; a key made with `lite recorder on` keeps working next to it. The page also says which computers run Lite of the account. Both the host and Lite need 3.24.0.
