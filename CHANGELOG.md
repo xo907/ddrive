@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.26.0 (2026-10-27)
+
+- **Private bookmarks.** A bookmark's menu has **Make private…**: the first time, it asks for a password and makes the private list; the bookmark (and its preview pictures) goes into it. Private bookmarks are a list of their own in `/Bookmarks/Private`, a password-locked folder, so until the password is typed they aren't shown anywhere, on any device, and nothing says they are there. Open, they have a section of their own and a **Private** tag, and **Move out of private** takes one back. A **Private** box next to **Save** saves a new link straight into the private list. The page's menu sets them up, unlocks them or locks them again at once.
+- In an end-to-end encrypted account, making a bookmark private also removes the earlier versions of the ordinary list, which still had it (account snapshots keep theirs until they expire). On the owner's drive the earlier versions stay until they expire, and the page says so.
+- All bookmarks can be locked together only while there is no private list (a locked folder can't have another locked folder in it).
+
 ## 3.25.0 (2026-10-27)
 
 - **Password-protected notes and bookmarks.** A note's menu has **Lock with a password…**: the note disappears from the list, on every device, until its password is typed (the padlock at the top, or **Unlock locked notes** under the list); open, it shows a padlock and has **Lock again now** and **Remove the lock…**. The menu next to **New** locks all the notes at once, and the Bookmarks page's menu locks the bookmarks (they are kept in one list, so they are locked together). A locked Notes or Bookmarks page says so and has an **Unlock** button. It is the same lock as for folders and files: in an end-to-end encrypted account the note or bookmarks are sealed with the password, and can be opened with the 24 words too when locked that way.

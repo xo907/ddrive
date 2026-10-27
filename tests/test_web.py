@@ -1153,6 +1153,42 @@ class WebTest(helpers.DriveTest):
         self.assertNotIn("Content-Encoding", self.req("GET", "/api/list?path=/big", headers={"Accept-Encoding": "gzip"})[1])
         self.assertEqual(len(json.loads(self.req("GET", "/api/list?path=/big")[2])["items"]), 60)
 
+    def test_private_bookmarks(self):
+        self.login()
+        marks = [{"id": "aaa", "url": "https://secret.example/", "title": "Secret", "image": "/Bookmarks/images/aaa.png"},
+                 {"id": "bbb", "url": "https://plain.example/", "title": "Plain"}]
+        self.write(self.d, "/Bookmarks/Bookmarks.json", json.dumps({"v": 1, "items": marks}).encode())
+        self.write(self.d, "/Bookmarks/images/aaa.png", b"\x89PNG picture")
+        self.upload(self.d)
+        got = self.get("/api/bookmarks")
+        self.assertEqual((got["private"], len(got["items"])), ("none", 2))
+        self.assertEqual(self.post("/api/bookmarks/private", {"ids": ["aaa"], "on": True})[0], 423)   # (no private list yet)
+        self.assertEqual(self.post("/api/mkdir", {"path": "/Bookmarks/Private"})[0], 200)
+        self.assertEqual(self.post("/api/locks/add", {"path": "/Bookmarks/Private", "password": "hunter2"})[0], 200)
+        self.assertEqual(self.get("/api/bookmarks")["private"], "open")
+        status, r = self.post("/api/bookmarks/private", {"ids": ["aaa"], "on": True})
+        self.assertEqual((status, r["moved"], r["versions_kept"]), (200, 1, True))
+        items = {b["id"]: b for b in self.get("/api/bookmarks")["items"]}
+        self.assertTrue(items["aaa"]["private"])
+        self.assertNotIn("private", items["bbb"])
+        self.assertEqual(items["aaa"]["image"], "/Bookmarks/Private/images/aaa.png")      # its picture went with it
+        self.assertIsNone(self.d.index.resolve("/Bookmarks/images/aaa.png"))
+        self.assertNotIn("secret", self.read(self.d, "/Bookmarks/Bookmarks.json", cold=False).decode())
+        status, r = self.post("/api/bookmarks/save", {"id": "aaa", "note": "only mine"})      # found in the private list
+        self.assertEqual((status, r["bookmark"]["note"], r["bookmark"]["private"]), (200, "only mine", True))
+        # locked: not listed, not changed, and nothing is saved privately
+        self.post("/api/locks/lock", {})
+        got = self.get("/api/bookmarks")
+        self.assertEqual((got["private"], [b["id"] for b in got["items"]]), ("locked", ["bbb"]))
+        self.assertEqual(self.post("/api/bookmarks/save", {"id": "aaa", "note": "x"})[0], 404)
+        self.assertEqual(self.post("/api/bookmarks/add", {"url": "example.com", "private": True})[0], 423)
+        self.assertEqual(self.post("/api/bookmarks/delete", {"ids": ["aaa"]})[1]["removed"], 0)
+        # open again, and back out of the private list
+        self.assertEqual(self.post("/api/locks/unlock", {"password": "hunter2"})[0], 200)
+        self.assertEqual(self.post("/api/bookmarks/private", {"ids": ["aaa"], "on": False})[1]["moved"], 1)
+        items = {b["id"]: b for b in self.get("/api/bookmarks")["items"]}
+        self.assertEqual((items["aaa"].get("private"), items["aaa"]["image"]), (None, "/Bookmarks/images/aaa.png"))
+
     def test_bookmarks(self):
         import http.server
         import threading

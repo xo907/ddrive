@@ -82,7 +82,7 @@ ACCOUNT_GET = frozenset("""status account list search file zip thumb media notes
 ACCOUNT_POST = frozenset("""logout account/delete upload copy mkdir move merge color delete share shares/update shares/revoke
     contacts/save contacts/delete contacts/import locks/add locks/unlock locks/lock locks/remove thumb versions/restore
     undelete purge snapshots/create snapshots/restore snapshots/delete star fetch fetch/cancel bookmarks/add
-    bookmarks/save bookmarks/refresh bookmarks/delete
+    bookmarks/save bookmarks/refresh bookmarks/delete bookmarks/private
     sync/save sync/remove sync/pause sync/run sync/stop upload/part
     lite/sync/hello lite/sync/poll lite/sync/report lite/sync/answer lite/sync/bye""".split())
 

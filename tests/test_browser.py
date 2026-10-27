@@ -8,6 +8,7 @@ after 15 minutes without use (a fake clock), and taking the lock off.
 Needs `pip install playwright` and a browser: `python -m playwright install chromium` (CI does both), or an
 installed Edge or Chrome (DD_BROWSER=msedge / chrome). Without one these tests are skipped."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -493,6 +494,48 @@ class BrowserTest(helpers.DriveTest):
         p.goto(self.base + "/#/files/")
         p.goto(self.base + "/#/notes")
         p.wait_for_selector("text=Notes are locked")
+        self.assertEqual(self.errors, [])
+
+    def test_private_bookmarks_in_an_end_to_end_account(self):
+        p = self.page
+        self.sign_up_e2e()
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Bookmarks"})["status"], 200)
+        marks = [{"id": "aaa", "url": "https://secret.example/", "title": "Secret", "site": "secret.example", "image": "/Bookmarks/images/aaa.png"},
+                 {"id": "bbb", "url": "https://plain.example/", "title": "Plain", "site": "plain.example"}]
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Bookmarks/images"})["status"], 200)
+        self.upload_text("/Bookmarks/images/aaa.png", "picture")
+        self.upload_text("/Bookmarks/Bookmarks.json", json.dumps({"v": 1, "items": marks[1:]}))
+        self.upload_text("/Bookmarks/Bookmarks.json", json.dumps({"v": 1, "items": marks}))     # (an earlier version without it, one with it)
+        self.assertEqual(self.api("GET", "/api/bookmarks")["json"]["private"], "none")
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Bookmarks/Private"})["status"], 200)
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Bookmarks/Private", "password": "blue whale"})["status"], 200)
+        got = self.api("POST", "/api/bookmarks/private", {"ids": ["aaa"], "on": True})
+        self.assertEqual((got["status"], got["json"]["moved"]), (200, 1), got)
+        items = {b["id"]: b for b in self.api("GET", "/api/bookmarks")["json"]["items"]}
+        self.assertEqual((items["aaa"]["private"], items["aaa"]["image"]), (True, "/Bookmarks/Private/images/aaa.png"))
+        # the plain list forgot its earlier versions: they had the private one in them
+        self.assertEqual(self.api("GET", "/api/versions?path=%2FBookmarks%2FBookmarks.json")["json"]["versions"], [])
+        self.assertEqual(self.names("/Bookmarks"), ["Bookmarks.json", "Private", "images"])
+        self.assertEqual(self.names("/Bookmarks/images"), [])
+        # saved privately straight away (no device reads the page here: no preview)
+        added = self.api("POST", "/api/bookmarks/add", {"url": "https://other.example/", "private": True})
+        self.assertEqual((added["status"], added["json"]["bookmark"]["private"]), (200, True))
+        p.evaluate("() => refreshStatus()")
+        p.goto(self.base + "/#/bookmarks")
+        p.wait_for_selector(".bm-head >> text=Private")
+        self.assertEqual(p.locator(".bm-card .tag:has-text('Private')").count(), 2)
+        self.assertTrue(p.locator("#bm-private").is_visible())
+        # locked: gone, name and all
+        self.api("POST", "/api/locks/lock")
+        got = self.api("GET", "/api/bookmarks")["json"]
+        self.assertEqual((got["private"], [b["id"] for b in got["items"]]), ("locked", ["bbb"]))
+        self.assertEqual(self.names("/Bookmarks"), ["Bookmarks.json", "images"])
+        self.assertEqual(self.api("POST", "/api/bookmarks/add", {"url": "https://x.example/", "private": True})["status"], 423)
+        p.goto(self.base + "/#/files/")
+        p.goto(self.base + "/#/bookmarks")
+        p.wait_for_selector("text=Plain")
+        self.assertEqual(p.locator("text=Secret").count(), 0)
+        self.assertFalse(p.locator("#bm-private").is_visible())
         self.assertEqual(self.errors, [])
 
     def test_a_big_video_of_an_end_to_end_link_streams(self):

@@ -2659,7 +2659,7 @@ const someLocked = () => !!(status && status.locks && status.locks.count > statu
 function folderLockItems(path, locked, name) {
   const it = { path, name, dir: true, locked };
   return [locked ? { label: "Lock again now", icon: "lock", run: lockAllNow }
-                 : { label: `Lock all ${name.toLowerCase()} with a password…`, icon: "lock", run: async () => {
+                 : { label: `Lock all ${name.toLowerCase()}…`, icon: "lock", run: async () => {
                      await api("/api/mkdir", { path }).catch(() => null);           // (there has to be a folder to lock)
                      lockDialog(it);
                    } },
@@ -3308,7 +3308,7 @@ function pwInput(placeholder) {
   return h("input", { type: "password", autocomplete: "new-password", placeholder });
 }
 
-function lockDialog(it) {
+function lockDialog(it, done) {
   const a = pwInput("Password"), b = pwInput("The same password again");
   // An end-to-end account: the password is the only way in, unless the account's words may open it too.
   const e2e = !!(window.E2E && E2E.active);
@@ -3324,7 +3324,12 @@ function lockDialog(it) {
     words.value = "";
     go.disabled = false;
     go.textContent = "Lock";
-    if (r) { m.close(); toast(`Locked. It stays open in this browser until you lock it again${r.minutes ? ` or ${r.minutes} minutes pass without using it` : ""}.`); await refreshStatus(); render(); }
+    if (r) {
+      m.close();
+      toast(`Locked. It stays open in this browser until you lock it again${r.minutes ? ` or ${r.minutes} minutes pass without using it` : ""}.`);
+      await refreshStatus();
+      if (done) done(); else render();
+    }
   } }, "Lock");
   const m = modal(`Lock “${it.name}”`,
     h("p", { class: "muted", style: "margin:0 0 16px" }, `${it.dir ? "This folder and everything in it" : "This file"} disappears from the drive and from this dashboard, on all your devices, until its password is typed. `
@@ -4153,7 +4158,56 @@ function syncForm(j, dev) {
 let marks = [];
 let markTag = "";
 let markFilter = "";
+let markInfo = {};                  // what /api/bookmarks said besides the list: private (none, locked, open, unlocked), lock
 const markPending = new Map();      // temporary id -> address being read
+const PRIVATE_MARKS = "/Bookmarks/Private";
+const privateOpen = () => ["open", "unlocked"].includes(markInfo.private);
+
+/** Bookmarks into the private list (or out of it). The first time, the private list is made: a folder
+ *  locked with a password, which the bookmarks then go into. */
+async function makePrivate(ids, on) {
+  if (on && markInfo.lock) return toast("All bookmarks are locked together already. Remove that lock to keep some private.");
+  if (on && markInfo.private === "none") return setUpPrivate(() => makePrivate(ids, true));
+  if (on && markInfo.private === "locked") { toast("Unlock the private bookmarks first"); return unlockDialog(); }
+  const r = await attempt(() => api("/api/bookmarks/private", { ids, on }));
+  if (!r) return;
+  toast(!on ? "Moved out of the private bookmarks"
+    : r.versions_kept ? "Made private. Earlier versions of the bookmark list still have it until they expire." : "Made private");
+  await reloadMarks();
+}
+async function setUpPrivate(then) {
+  if (!await ask({ title: "Private bookmarks", ok: "Choose a password",
+                   text: "Private bookmarks are kept apart, behind a password: until it is typed they aren't shown anywhere, on any of your devices, and nothing says they are there." })) return;
+  await api("/api/mkdir", { path: PRIVATE_MARKS }).catch(() => null);
+  lockDialog({ path: PRIVATE_MARKS, name: "Private bookmarks", dir: true }, async () => {
+    await reloadMarks();
+    if (then) then();
+  });
+}
+async function reloadMarks() {
+  const d = await api("/api/bookmarks").catch((e) => { toast(e.message); return null; });
+  if (!d || d.locked || route.name !== "bookmarks") return render();
+  marks = d.items;
+  markInfo = d;
+  drawAddPrivate();
+  drawMarks();
+}
+function drawAddPrivate() {
+  const box = $("#bm-private");
+  if (box) box.hidden = !privateOpen();
+}
+function bookmarkPageItems() {
+  const p = markInfo.private;
+  const top = [p === "none" && !markInfo.lock && { label: "Set up private bookmarks…", icon: "lock", run: () => setUpPrivate() },
+               p === "locked" && { label: "Unlock private bookmarks…", icon: "lock", run: unlockDialog },
+               p === "open" && { label: "Lock private bookmarks now", icon: "lock", run: lockAllNow },
+               p === "unlocked" && { label: "Lock private bookmarks with a password…", icon: "lock",
+                                      run: () => lockDialog({ path: PRIVATE_MARKS, name: "Private bookmarks", dir: true }, reloadMarks) }].filter(Boolean);
+  // (a locked folder can't hold another: all of them are locked together only while there is no private list)
+  const all = (p === "none" ? folderLockItems(markInfo.folder, !!markInfo.lock, "Bookmarks")
+                            : [p !== "locked" && someLocked() && { label: "Unlock…", icon: "lock", run: unlockDialog }]).filter(Boolean);
+  return top.length && all.length ? [...top, "-", ...all] : [...top, ...all];
+}
 const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; } };
 const looksLikeLink = (t) => /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(t.trim()) || /^https?:\/\/\S+$/i.test(t.trim());
 
@@ -4177,6 +4231,8 @@ function markCard(b) {
     { label: "Copy the link", icon: "link", run: async () => { try { await navigator.clipboard.writeText(b.url); toast("Link copied"); } catch { await ask({ title: "Link", value: b.url, ok: "Done" }); } } },
     { label: b.pinned ? "Unpin" : "Pin to the top", icon: "star", run: () => pinMark(b, !b.pinned) },
     { label: "Edit…", icon: "rename", run: () => markEdit(b) },
+    b.private ? { label: "Move out of private", icon: "lock", run: () => makePrivate([b.id], false) }
+              : !markInfo.lock && markInfo.private !== undefined && { label: "Make private…", icon: "lock", run: () => makePrivate([b.id], true) },
     { label: "Read the preview again", icon: "refresh", run: async () => {
       toast("Reading the page…");
       const r = await attempt(() => api("/api/bookmarks/refresh", { id: b.id }), "Preview updated");
@@ -4193,7 +4249,9 @@ function markCard(b) {
       h("div", { class: "bm-site" },
         b.icon ? h("img", { class: "bm-icon", src: fileUrl(b.icon) + "&v=" + v, alt: "", loading: "lazy", onerror: (e) => e.target.replaceWith(icon("globe", "bm-icon")) })
                : icon("globe", "bm-icon"),
-        h("span", { class: "s" }, b.site || host), h("span", { class: "d" }, ago(b.added))),
+        h("span", { class: "s" }, b.site || host),
+        b.private && h("span", { class: "tag", title: "Private: shown only while its password is open here" }, icon("lock", "tag-ico"), "Private"),
+        h("span", { class: "d" }, ago(b.added))),
       h("div", { class: "bm-title" }, b.title || host),
       b.description && h("div", { class: "bm-desc" }, b.description),
       b.note && h("div", { class: "bm-note" }, b.note),
@@ -4224,12 +4282,14 @@ function drawMarks() {
     h("div", { class: "bm-banner" }), h("div", { class: "bm-body" }, h("div", { class: "bm-site" }, h("span", { class: "s" }, hostOf(url))),
       h("div", { class: "bm-title" }, "Reading the page…"), h("div", { class: "bm-line" }), h("div", { class: "bm-line short" }))));
   const pinned = shown.filter((b) => b.pinned).sort((a, b) => b.pinned - a.pinned);
-  const rest = shown.filter((b) => !b.pinned);
+  const hidden = shown.filter((b) => !b.pinned && b.private);
+  const rest = shown.filter((b) => !b.pinned && !b.private);
   const cards = (list, extra = []) => h("div", { class: "bm-grid" }, ...extra, ...list.map(markCard));
-  grid.replaceChildren(...(pinned.length
-    ? [h("div", { class: "bm-head" }, icon("star"), "Pinned"), cards(pinned),
-       (loading.length || rest.length) ? h("div", { class: "bm-head" }, "Everything else") : null, cards(rest, loading)]
-    : [cards(rest, loading)]).filter(Boolean));
+  grid.replaceChildren(...[
+    pinned.length && h("div", { class: "bm-head" }, icon("star"), "Pinned"), pinned.length && cards(pinned),
+    hidden.length && h("div", { class: "bm-head private" }, icon("lock"), "Private"), hidden.length && cards(hidden),
+    (pinned.length || hidden.length) && (loading.length || rest.length) && h("div", { class: "bm-head" }, "Everything else"),
+    (loading.length || rest.length || !(pinned.length || hidden.length)) && cards(rest, loading)].filter(Boolean));
   $("#bm-empty").hidden = loading.length + shown.length > 0;
   $("#bm-empty").replaceChildren(...(marks.length ? [h("b", {}, "Nothing matches"), "Try another word or tag."]
     : [h("b", {}, "No bookmarks yet"), "Paste a link above, or press Ctrl+V anywhere on this page."]));
@@ -4248,7 +4308,8 @@ async function addMark(text) {
     const key = Math.random().toString(36).slice(2);
     markPending.set(key, url);
     drawMarks();
-    const r = await api("/api/bookmarks/add", { url, tags: markTag ? [markTag] : [] }).catch((e) => { toast(e.message); return null; });
+    const priv = privateOpen() && !!($("#bm-private-on") || {}).checked;
+    const r = await api("/api/bookmarks/add", { url, tags: markTag ? [markTag] : [], private: priv || undefined }).catch((e) => { toast(e.message); return null; });
     markPending.delete(key);
     if (r) {
       marks = [r.bookmark, ...marks.filter((b) => b.id !== r.bookmark.id)];
@@ -4288,6 +4349,8 @@ async function renderBookmarks() {
   page(h("div", { class: "bar" }, h("h1", { style: "margin:0" }, "Bookmarks"), h("span", { class: "muted g-count", id: "bm-count" }),
          h("div", { class: "actions" }, filter, h("span", { id: "bm-lock" }))),
        h("div", { class: "bm-add" }, icon("link"), input,
+         h("label", { class: "bm-private", id: "bm-private", hidden: true, title: "Save it with the private bookmarks" },
+           h("input", { type: "checkbox", id: "bm-private-on" }), icon("lock"), "Private"),
          h("button", { class: "btn", onclick: () => { if (input.value.trim()) { const v = input.value; input.value = ""; addMark(v); } else input.focus(); } }, "Save")),
        h("div", { class: "bm-chips", id: "bm-tags" }),
        h("div", { id: "bm-grid" }),
@@ -4300,7 +4363,9 @@ async function renderBookmarks() {
     $("#bm-empty").replaceChildren(lockedPanel("Bookmarks", d.folder));
     return;
   }
-  if (d) $("#bm-lock").replaceChildren(menuButton(() => folderLockItems(d.folder, !!d.lock, "Bookmarks"), "Bookmarks"));
+  markInfo = d || {};
+  if (d) $("#bm-lock").replaceChildren(menuButton(bookmarkPageItems, "Bookmarks"));
+  drawAddPrivate();
   marks = d ? d.items : [];
   drawMarks();
 }

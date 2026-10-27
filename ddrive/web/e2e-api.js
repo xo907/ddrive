@@ -815,7 +815,10 @@
   };
 
   // ------------------------------------------------------------ bookmarks: /Bookmarks/Bookmarks.json and the pictures next to it (as bookmarks.py)
+  // Private ones are a second list in /Bookmarks/Private, a password-locked folder, with their pictures next
+  // to them: closed, nothing of them shows (not even that they are there).
   const MARKS = "/Bookmarks/Bookmarks.json", IMAGES = "/Bookmarks/images";
+  const PRIVATE = "/Bookmarks/Private", PMARKS = PRIVATE + "/Bookmarks.json", PIMAGES = PRIVATE + "/images";
   function normalizeUrl(text) {
     let url = String(text || "").trim();
     if (!url || /[\s<>"]/.test(url) || url.length > 2000) throw new Fail(400, "That doesn't look like a web address");
@@ -827,15 +830,40 @@
     return u.href;
   }
   const pageKey = (url) => { const u = new URL(url); return [u.hostname.replace(/^www\./, "").toLowerCase(), u.pathname.replace(/\/+$/, ""), u.search].join("|"); };
-  const readMarks = async () => { try { return (JSON.parse(await readText(MARKS) || "{}").items || []).filter((m) => m && m.id && m.url); } catch (e) { return []; } };
-  const writeMarks = (items) => writeText(MARKS, JSON.stringify({ v: 1, items }, null, 1));
+  const readMarks = async (priv = false) => { try { return (JSON.parse(await readText(priv ? PMARKS : MARKS) || "{}").items || []).filter((m) => m && m.id && m.url); } catch (e) { return []; } };
+  const writeMarks = (items, priv = false) => writeText(priv ? PMARKS : MARKS, JSON.stringify({ v: 1, items }, null, 1));
+  /** The private list: "none" (not made), "locked" (closed here), "open" (its lock is open here), "unlocked" (its lock was removed). */
+  async function privateState() {
+    index();
+    const n = byPath.get(PRIVATE), up = byPath.get("/Bookmarks");
+    if (n) return n.lockRoot ? "open" : "unlocked";
+    return up && await v.lockedHere(up.id, "Private") ? "locked" : "none";
+  }
+  /** Which list a bookmark is in, and that list. */
+  async function findMark(id) {
+    for (const priv of [false, true]) {
+      const items = await readMarks(priv), mark = items.find((m) => m.id === id);
+      if (mark) return { items, mark, priv };
+    }
+    throw new Fail(404, "That bookmark is gone");
+  }
+  /** A list's earlier versions forgotten (a bookmark that went private would still be in them). */
+  async function forgetVersions(path) {
+    index();
+    const n = byPath.get(path);
+    if (!n || !(n.versions || []).length) return;
+    const objects = n.versions.map((x) => x.obj);
+    await v._send({ op: "set", id: n.id, fields: { versions: [] } });
+    await drop(objects);
+  }
   /** Put a preview's pictures into the account and its words into the bookmark. */
-  async function storePreview(mark, p) {
+  async function storePreview(mark, p, priv = false) {
+    const images = priv ? PIMAGES : IMAGES;
     for (const key of ["title", "description", "site", "color"]) if (p[key] && (key !== "title" || !mark.edited)) mark[key] = p[key];
     for (const [key, suffix] of [["image", ""], ["icon", "-icon"]]) {
       if (!p[key] || !p[key].data) continue;
-      const old = mark[key], path = `${IMAGES}/${mark.id}${suffix}.${p[key].ext}`;
-      await ensureFolder(IMAGES);
+      const old = mark[key], path = `${images}/${mark.id}${suffix}.${p[key].ext}`;
+      await ensureFolder(images);
       await putFile(path, new Blob([DDV.unb64(p[key].data)]));
       mark[key] = path;
       if (old && old !== path) await removePath(old);
@@ -846,24 +874,53 @@
     index();
     const folder = byPath.get("/Bookmarks");
     if (!folder && await v.lockedHere("", "Bookmarks")) return { items: [], folder: "/Bookmarks", locked: true };
-    return { items: await readMarks(), folder: "/Bookmarks", lock: !!(folder && folder.lockRoot) };
+    const priv = await privateState(), shown = priv === "open" || priv === "unlocked";
+    return { items: [...await readMarks(), ...(shown ? (await readMarks(true)).map((m) => ({ ...m, private: true })) : [])],
+             folder: "/Bookmarks", lock: !!(folder && folder.lockRoot), private: priv, private_folder: PRIVATE };
   };
   POST["bookmarks/add"] = async (b) => {
-    const url = normalizeUrl(b.url), items = await readMarks(), old = items.find((m) => pageKey(m.url) === pageKey(url));
-    if (old) return { ok: true, bookmark: old, existed: true };
+    const priv = !!b.private;
+    if (priv && !["open", "unlocked"].includes(await privateState())) throw new Fail(423, "Open the private bookmarks first.");
+    const url = normalizeUrl(b.url), items = await readMarks(priv), old = items.find((m) => pageKey(m.url) === pageKey(url));
+    if (old) return { ok: true, bookmark: priv ? { ...old, private: true } : old, existed: true };
     const host = new URL(url).hostname;
     const mark = { id: DDV.newId().slice(0, 12), url, title: "", description: "", site: host.replace(/^www\./, ""), color: "", image: "", icon: "",
                    tags: (b.tags || []).map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, 12), note: "", added: now() };
     const p = await askDevice({ do: "preview", url }, 45).catch(() => null);
-    if (p && !p.error) await storePreview(mark, p);
+    if (p && !p.error) await storePreview(mark, p, priv);
     if (!mark.title) mark.title = host;
-    const again = await readMarks();
-    if (!again.some((m) => pageKey(m.url) === pageKey(url))) { again.unshift(mark); await writeMarks(again); }
-    return { ok: true, bookmark: mark, preview: !!(p && (p.title || p.image)), note: p && !p.error ? "" : noPreview };
+    const again = await readMarks(priv);
+    if (!again.some((m) => pageKey(m.url) === pageKey(url))) { again.unshift(mark); await writeMarks(again, priv); }
+    return { ok: true, bookmark: priv ? { ...mark, private: true } : mark, preview: !!(p && (p.title || p.image)), note: p && !p.error ? "" : noPreview };
+  };
+  /** Bookmarks into the private list, or out of it: their pictures go with them, and the list they left
+   *  forgets its earlier versions (going private, they would still be in those). */
+  POST["bookmarks/private"] = async (b) => {
+    const on = !!b.on, ids = new Set((b.ids || []).map(String));
+    if (!["open", "unlocked"].includes(await privateState())) throw new Fail(423, "Open the private bookmarks first.");
+    const from = await readMarks(!on), to = await readMarks(on), moving = from.filter((m) => ids.has(m.id));
+    if (!moving.length) return { ok: true, moved: 0 };
+    const images = on ? PIMAGES : IMAGES;
+    for (const m of moving) {
+      for (const key of ["image", "icon"]) {
+        if (!m[key] || !m[key].startsWith((on ? IMAGES : PIMAGES) + "/")) continue;
+        index();
+        const dest = `${images}/${m[key].slice(m[key].lastIndexOf("/") + 1)}`;
+        if (!byPath.has(m[key])) { m[key] = ""; continue; }
+        await ensureFolder(images);
+        if (byPath.has(dest)) await removePath(dest);
+        await POST.move({ from: m[key], to: dest });
+        m[key] = dest;
+      }
+      if (!to.some((x) => x.id === m.id)) to.unshift(m);
+    }
+    await writeMarks(to, on);
+    await writeMarks(from.filter((m) => !ids.has(m.id)), !on);
+    if (on) await forgetVersions(MARKS);
+    return { ok: true, moved: moving.length };
   };
   POST["bookmarks/save"] = async (b) => {
-    const items = await readMarks(), mark = items.find((m) => m.id === b.id);
-    if (!mark) throw new Fail(404, "That bookmark is gone");
+    const { items, mark, priv } = await findMark(b.id);
     const tidy = (text, n) => String(text || "").split(/\s+/).join(" ").trim().slice(0, n);
     if ("title" in b) { const t = tidy(b.title, 300); if (t && t !== mark.title) { mark.title = t; mark.edited = true; } }
     if ("description" in b) mark.description = tidy(b.description, 600);
@@ -874,25 +931,28 @@
       for (let t of Array.isArray(b.tags) ? b.tags : String(b.tags).split(",")) { t = String(t).trim().replace(/^#+/, "").slice(0, 40); if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); tags.push(t); } }
       mark.tags = tags.slice(0, 12);
     }
-    await writeMarks(items);
-    return { ok: true, bookmark: mark };
+    await writeMarks(items, priv);
+    return { ok: true, bookmark: priv ? { ...mark, private: true } : mark };
   };
   POST["bookmarks/refresh"] = async (b) => {
-    const was = (await readMarks()).find((m) => m.id === b.id);
-    if (!was) throw new Fail(404, "That bookmark is gone");
+    const was = (await findMark(b.id)).mark;
     const p = await askDevice({ do: "preview", url: was.url }, 45);
     if (!p || p.error || !(p.title || p.image || p.icon)) throw new Fail(502, (p && p.error) || "The page could not be read right now");
-    const items = await readMarks(), mark = items.find((m) => m.id === b.id);
-    if (!mark) throw new Fail(404, "That bookmark is gone");
-    await storePreview(mark, p);
-    await writeMarks(items);
-    return { ok: true, bookmark: mark };
+    const { items, mark, priv } = await findMark(b.id);
+    await storePreview(mark, p, priv);
+    await writeMarks(items, priv);
+    return { ok: true, bookmark: priv ? { ...mark, private: true } : mark };
   };
   POST["bookmarks/delete"] = async (b) => {
-    const ids = new Set((b.ids || []).map(String)), items = await readMarks(), keep = items.filter((m) => !ids.has(m.id));
-    for (const m of items) if (ids.has(m.id)) for (const p of [m.image, m.icon]) if (p && p.startsWith(IMAGES + "/")) await removePath(p);
-    if (keep.length !== items.length) await writeMarks(keep);
-    return { ok: true, removed: items.length - keep.length };
+    const ids = new Set((b.ids || []).map(String));
+    let removed = 0;
+    const lists = [false, ...(["open", "unlocked"].includes(await privateState()) ? [true] : [])];
+    for (const priv of lists) {
+      const items = await readMarks(priv), keep = items.filter((m) => !ids.has(m.id)), images = priv ? PIMAGES : IMAGES;
+      for (const m of items) if (ids.has(m.id)) for (const p of [m.image, m.icon]) if (p && p.startsWith(images + "/")) await removePath(p);
+      if (keep.length !== items.length) { await writeMarks(keep, priv); removed += items.length - keep.length; }
+    }
+    return { ok: true, removed };
   };
 
   // ------------------------------------------------------------ saving a file from a web address (a device of the account fetches it)
