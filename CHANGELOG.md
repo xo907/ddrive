@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.25.0 (2026-10-27)
+
+- **Password-protected notes and bookmarks.** A note's menu has **Lock with a password…**: the note disappears from the list, on every device, until its password is typed (the padlock at the top, or **Unlock locked notes** under the list); open, it shows a padlock and has **Lock again now** and **Remove the lock…**. The menu next to **New** locks all the notes at once, and the Bookmarks page's menu locks the bookmarks (they are kept in one list, so they are locked together). A locked Notes or Bookmarks page says so and has an **Unlock** button. It is the same lock as for folders and files: in an end-to-end encrypted account the note or bookmarks are sealed with the password, and can be opened with the 24 words too when locked that way.
+- Nothing is made in the clear next to something locked and closed. Saving a bookmark, a new note or any file, making a folder, or moving or copying something to the name of a locked folder or file that isn't open answers "password-locked: unlock it first" instead of making a second, unprotected one of that name (in an end-to-end encrypted account; the owner's drive did so already).
+- On the owner's drive, a locked note was still listed on the Notes page after it was locked again (it couldn't be opened). It isn't any more.
+
 ## 3.24.1 (2026-10-27)
 
 - **Lite doesn't start from an outdated copy of DDrive.** With two copies of the program on one computer (an old folder's run.bat next to the one autostart uses), Lite started from the old one showed a drive it can no longer read: Windows said "Z:\ is not accessible ... I/O device error" and folder syncing was refused. Now each copy that shows the drive or syncs is written down (lite/copies.json in the data folder), and a copy older than another one still on the computer, or than the one Windows starts by itself, says where the newer one is and doesn't start (in a message box when it has no window). Versions are read from each copy's files, so one updated since counts as what it is now, and a deleted copy is forgotten. `DDRIVE_ALLOW_OLD=1` starts an older one anyway. Only copies that have this check can refuse; one older than 3.24.1 still has to be deleted by hand.

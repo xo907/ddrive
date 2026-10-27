@@ -3657,9 +3657,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         idx = self.drive.index
         folder = idx.resolve(NOTES)
         items = []
-        if folder is not None and folder["is_dir"] and self._shown(NOTES):
+        if not self._shown(NOTES):               # /Notes is password-locked (or hidden), and closed here
+            return self._json({"folder": NOTES, "items": [], "locked": True})
+        if folder is not None and folder["is_dir"]:
             for c in idx.children(folder["id"]):
-                if c["is_dir"]:
+                if c["is_dir"] or not self._shown(posixpath.join(NOTES, c["name"])):     # (a note locked, and closed here)
                     continue
                 try:
                     head = self.drive.fs.read_file(c["id"], 0, 600).decode("utf-8", "replace")
@@ -3668,9 +3670,10 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                 title, _, rest = c["name"].rpartition(".") if c["name"].lower().endswith((".md", ".txt")) else (c["name"], "", "")
                 items.append({"path": posixpath.join(NOTES, c["name"]), "name": c["name"], "title": title or c["name"],
                               "mtime": c["mtime"], "size": c["size"], "state": c["state"],
-                              "snippet": " ".join(head.split())[:140]})
+                              "snippet": " ".join(head.split())[:140], "locked": c["uid"] in self._lock_ids()})
         items.sort(key=lambda n: -n["mtime"])
-        self._json({"folder": NOTES, "items": items})
+        self._json({"folder": NOTES, "items": items,
+                    "lock": bool(folder is not None and folder["uid"] in self._lock_ids())})
 
     # ------------------------------------------------------------ history
     def _get_api_versions(self):

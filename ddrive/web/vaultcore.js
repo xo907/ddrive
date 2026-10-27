@@ -577,6 +577,21 @@
       if (!others) ops.push({ op: "del", id: n.lock });
       await this._postAll(ops);
     }
+    /** True when a password-locked folder or file named `name` is in folder `parent` (as vault.py's
+     *  _locked_here): something of that name made in the clear next to it would leave what goes in
+     *  there unlocked, and make two of one name once it is unlocked. */
+    async lockedHere(parent, name) {
+      parent = parent || "";
+      let tag, legacy;
+      for (const r of this.raw.values()) {
+        if (r.parent !== LOCKED || r.gone) continue;
+        if (tag === undefined) { tag = await lockedTag(parent, name); legacy = await folderId(parent, name); }   // (only with a lock to look at)
+        if (r.tag ? r.tag !== tag : !(r.id === legacy && (r.home || "") === parent)) continue;
+        const e = this.nodes.get(r.id);
+        if (!e || (!e.trash && e.parent === parent && e.name === name)) return true;
+      }
+      return false;
+    }
     /** {count: locked things, open: those open here}. */
     lockCount() {
       let count = 0, open = 0;

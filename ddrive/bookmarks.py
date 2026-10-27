@@ -85,7 +85,9 @@ class BookmarkHandlers:
             return self._json({"items": [], "locked": True, "folder": FOLDER})
         with self._marks_lock():
             items = self._marks_read()
-        self._json({"items": items, "folder": FOLDER})
+        node = self.drive.index.resolve(FOLDER)
+        self._json({"items": items, "folder": FOLDER,
+                    "lock": bool(node is not None and node["uid"] in self._lock_ids())})   # (password-locked, and open here)
 
     def _post_api_bookmarks_add(self):
         self._marks_guard()

@@ -127,6 +127,11 @@
   }
   const KEEP_UPLOAD = 32 * 1024 * 1024;      // from this size on, an upload can be taken up again after a reload
   /** Store a Blob at a path. A file that is replaced keeps what it was as an earlier version. */
+  /** Nothing is made in the clear where a closed password lock of that name is (vaultcore.js lockedHere). */
+  async function notLocked(parent, path) {
+    if (await v.lockedHere(parent, path.slice(path.lastIndexOf("/") + 1)))
+      throw new Fail(423, `${path} is password-locked: unlock it first (the padlock at the top).`);
+  }
   async function putFile(path, blob, mtime, heard, signal, again) {
     index();
     path = clean(path);
@@ -134,6 +139,7 @@
     if (!name) throw new Fail(400, "missing file name");
     const old = byPath.get(path);
     if (old && old.dir) throw new Fail(400, `${path} is a folder`);
+    if (!old) await notLocked(up.id, path);
     // `again` is kept by whoever may try this upload once more (the Queue's "Try again"): the object
     // and the key of the first try are in it, and with them a later try goes on where that one
     // stopped instead of sealing and sending the whole file anew. It never leaves this page.
@@ -387,6 +393,7 @@
     async notes() {
       index();
       const folder = byPath.get("/Notes"), items = [];
+      if (!folder && await v.lockedHere("", "Notes")) return { folder: "/Notes", items, locked: true };
       for (const c of (folder && folder.dir ? kids.get(folder.id) || [] : [])) {
         if (c.dir) continue;
         if (!E.snippets.has(c.obj)) {
@@ -395,10 +402,10 @@
         }
         const named = /\.(md|txt)$/i.test(c.name);
         items.push({ path: "/Notes/" + c.name, name: c.name, title: named ? c.name.slice(0, c.name.lastIndexOf(".")) || c.name : c.name, mtime: c.mtime, size: c.size,
-                     state: "synced", snippet: E.snippets.get(c.obj) });
+                     state: "synced", snippet: E.snippets.get(c.obj), locked: !!c.lockRoot });
       }
       items.sort((a, b) => b.mtime - a.mtime);
-      return { folder: "/Notes", items };
+      return { folder: "/Notes", items, lock: !!(folder && folder.lockRoot) };
     },
     async deleted() {
       const items = [...v.nodes.values()].filter((n) => n.trash && !n.into).map((n) => ({ uid: n.id, path: n.trash.path, at: n.trash.at,
@@ -472,6 +479,7 @@
       const path = clean(b.path), cut = path.lastIndexOf("/");
       const up = at(path.slice(0, cut) || "/", "dir");
       if (byPath.has(path)) throw new Fail(409, "Something with that name already exists");
+      await notLocked(up.id, path);
       let id = await DDV.folderId(up.id, path.slice(cut + 1));
       if (v.raw.has(id)) id = DDV.newId();               // (that folder was there once, and was deleted or moved)
       await v._send({ op: "put", id, parent: up.id, name: path.slice(cut + 1), dir: true, size: 0, mtime: now(), at: now(), by: ME });
@@ -516,6 +524,7 @@
       if (byPath.has(to)) throw new Fail(409, "Something with that name already exists");
       const up = at(to.slice(0, cut) || "/", "dir");
       if (under(n.id).includes(up.id)) throw new Fail(400, "A folder can't be moved into itself");
+      await notLocked(up.id, to);
       await v._send({ op: "move", id: n.id, parent: up.id, name: to.slice(cut + 1) }, { op: "set", id: n.id, fields: { moved: { at: now(), from: clean(b.from) } } });
       return { ok: true, path: to };
     },
@@ -523,6 +532,7 @@
       const n = at(b.from, "file"), to = clean(b.to), cut = to.lastIndexOf("/");
       if (byPath.has(to)) throw new Fail(409, "Something with that name already exists");
       const up = at(to.slice(0, cut) || "/", "dir");
+      await notLocked(up.id, to);
       await v._send({ op: "put", id: DDV.newId(), parent: up.id, name: to.slice(cut + 1), dir: false, size: n.size, mtime: n.mtime, obj: n.obj, key: n.key, at: now(), by: ME });
       return { ok: true, path: to };
     },
@@ -832,7 +842,12 @@
     }
   }
   const noPreview = "saved without a picture: turn on one of your devices (a computer with DDrive Lite, or the phone app) and press “Read the preview again”";
-  GET.bookmarks = async () => ({ items: await readMarks(), folder: "/Bookmarks" });
+  GET.bookmarks = async () => {
+    index();
+    const folder = byPath.get("/Bookmarks");
+    if (!folder && await v.lockedHere("", "Bookmarks")) return { items: [], folder: "/Bookmarks", locked: true };
+    return { items: await readMarks(), folder: "/Bookmarks", lock: !!(folder && folder.lockRoot) };
+  };
   POST["bookmarks/add"] = async (b) => {
     const url = normalizeUrl(b.url), items = await readMarks(), old = items.find((m) => pageKey(m.url) === pageKey(url));
     if (old) return { ok: true, bookmark: old, existed: true };

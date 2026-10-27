@@ -247,8 +247,8 @@ class BrowserTest(helpers.DriveTest):
         self.upload_text("/Discord/note.txt", "locked one")
         self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Discord", "password": "blue whale"})["status"], 200)
         self.api("POST", "/api/locks/lock")
-        for folder in ("/Discord", "/Discord/Live"):                            # (it came back, as an older computer made it)
-            self.assertEqual(self.api("POST", "/api/mkdir", {"path": folder})["status"], 200)
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Discord"})["status"], 423)      # (the page doesn't make it next to the lock)
+        p.evaluate("async () => { const id = await E2E.vault.mkdir('', 'Discord'); await E2E.vault.mkdir(id, 'Live'); }")   # (an older computer does)
         self.upload_text("/Discord/Live/b.jsonl", "B")
         self.upload_text("/Discord/note.txt", "the one that came back")
         self.api("POST", "/api/locks/unlock", {"password": "blue whale"})
@@ -454,6 +454,45 @@ class BrowserTest(helpers.DriveTest):
         p.keyboard.press("Escape")
         p.evaluate("() => unlockDialog()")
         p.wait_for_selector("dialog[open] >> text=Forgot the password?")
+        self.assertEqual(self.errors, [])
+
+    def test_notes_and_bookmarks_with_a_password_in_an_end_to_end_account(self):
+        p = self.page
+        self.sign_up_e2e()
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Notes"})["status"], 200)
+        self.upload_text("/Notes/plain.md", "shopping")
+        self.upload_text("/Notes/secret.md", "the safe code")
+        # One note locked: marked while open here, gone once locked again, and not made anew in the clear
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Notes/secret.md", "password": "blue whale"})["status"], 200)
+        notes = self.api("GET", "/api/notes")["json"]
+        self.assertEqual({n["name"]: n["locked"] for n in notes["items"]}, {"plain.md": False, "secret.md": True})
+        self.api("POST", "/api/locks/lock")
+        self.assertEqual([n["name"] for n in self.api("GET", "/api/notes")["json"]["items"]], ["plain.md"])
+        again = self.api("POST", "/api/upload?path=%2FNotes%2Fsecret.md&save=later", "overwritten")
+        self.assertEqual(again["status"], 423, again)
+        p.evaluate("() => refreshStatus()")                # (the dialogs do this; here it was locked through the API)
+        p.goto(self.base + "/#/notes")
+        p.wait_for_selector("text=Unlock locked notes")
+        # The bookmarks locked as a whole: the page says so, and nothing new is saved next to them in the clear
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Bookmarks"})["status"], 200)
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Bookmarks", "password": "red fox"})["status"], 200)
+        self.assertTrue(self.api("GET", "/api/bookmarks")["json"]["lock"])
+        self.api("POST", "/api/locks/lock")
+        self.assertTrue(self.api("GET", "/api/bookmarks")["json"]["locked"])
+        self.assertEqual(self.api("POST", "/api/bookmarks/add", {"url": "example.com"})["status"], 423)
+        self.assertNotIn("Bookmarks", self.names())
+        p.goto(self.base + "/#/bookmarks")
+        p.wait_for_selector("text=Bookmarks are locked")
+        # The whole notes folder locked: the Notes page shows the way in instead of an empty list
+        self.api("POST", "/api/locks/unlock", {"password": "blue whale"})
+        self.assertEqual(self.api("POST", "/api/locks/remove", {"path": "/Notes/secret.md", "password": "blue whale"})["status"], 200)
+        self.assertEqual(self.api("POST", "/api/locks/add", {"path": "/Notes", "password": "green owl"})["status"], 200)
+        self.api("POST", "/api/locks/lock")
+        self.assertTrue(self.api("GET", "/api/notes")["json"]["locked"])
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Notes"})["status"], 423)
+        p.goto(self.base + "/#/files/")
+        p.goto(self.base + "/#/notes")
+        p.wait_for_selector("text=Notes are locked")
         self.assertEqual(self.errors, [])
 
     def test_a_big_video_of_an_end_to_end_link_streams(self):

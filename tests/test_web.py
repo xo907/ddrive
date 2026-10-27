@@ -836,6 +836,25 @@ class WebTest(helpers.DriveTest):
         status, _, data = self.req("GET", "/api/list?path=" + path)
         return status, [i["name"] for i in json.loads(data).get("items", [])]
 
+    def test_locked_notes(self):
+        self.login()
+        self.write(self.d, "/Notes/plain.md", b"shopping")
+        self.write(self.d, "/Notes/secret.md", b"the safe code")
+        self.upload(self.d)
+        self.assertEqual(self.post("/api/locks/add", {"path": "/Notes/secret.md", "password": "hunter2"})[0], 200)
+        notes = self.get("/api/notes")
+        self.assertEqual({n["name"]: n["locked"] for n in notes["items"]}, {"plain.md": False, "secret.md": True})
+        self.assertFalse(notes["lock"])
+        self.post("/api/locks/lock", {})
+        self.assertEqual([n["name"] for n in self.get("/api/notes")["items"]], ["plain.md"])
+        # all the notes locked: the page is told, not shown an empty list it could write into
+        self.assertEqual(self.post("/api/locks/unlock", {"password": "hunter2"})[0], 200)
+        self.assertEqual(self.post("/api/locks/remove", {"path": "/Notes/secret.md", "password": "hunter2"})[0], 200)
+        self.assertEqual(self.post("/api/locks/add", {"path": "/Notes", "password": "hunter3"})[0], 200)
+        self.assertTrue(self.get("/api/notes")["lock"])
+        self.post("/api/locks/lock", {})
+        self.assertEqual(self.get("/api/notes"), {"folder": "/Notes", "items": [], "locked": True})
+
     def test_locked_folders(self):
         self.login()
         self.write(self.d, "/Private/diary.txt", b"dear diary")

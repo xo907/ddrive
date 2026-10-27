@@ -2647,6 +2647,31 @@ window.addEventListener("beforeunload", () => { if (note && note.dirty) saveNote
 const noteTitle = (name) => name.replace(/\.(md|txt)$/i, "");
 const cleanTitle = (t) => (t.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim() || "Untitled").slice(0, 120);
 
+function noteItem(n, name) {
+  return h("a", { class: "note-item" + (n.name === name ? " on" : ""), href: "#/notes/" + encodeURIComponent(n.name) },
+    h("div", { class: "nt" }, n.locked && icon("lock", "tag-ico"), n.locked && " ", n.title),
+    h("div", { class: "ns" }, h("span", {}, when(n.mtime)), " ", n.snippet.replace(n.title, "").trim() || "Empty note"));
+}
+/** Something password-locked is closed in this browser (it may be notes or bookmarks: its name is sealed
+ *  too, so nobody can tell without the password). */
+const someLocked = () => !!(status && status.locks && status.locks.count > status.locks.open);
+/** The lock of a whole folder (the notes, the bookmarks), from its page's menu. */
+function folderLockItems(path, locked, name) {
+  const it = { path, name, dir: true, locked };
+  return [locked ? { label: "Lock again now", icon: "lock", run: lockAllNow }
+                 : { label: `Lock all ${name.toLowerCase()} with a password…`, icon: "lock", run: async () => {
+                     await api("/api/mkdir", { path }).catch(() => null);           // (there has to be a folder to lock)
+                     lockDialog(it);
+                   } },
+          locked && { label: "Remove the lock…", icon: "lock", run: () => removeLockDialog(it) },
+          someLocked() && { label: "Unlock…", icon: "lock", run: unlockDialog }];
+}
+function lockedPanel(what, folder) {
+  return h("div", { class: "notes-empty" }, h("b", {}, `${what} are locked`),
+    h("p", { class: "muted" }, `${folder} has a password lock. Type its password to open it in this browser for a while.`),
+    h("button", { class: "btn", onclick: unlockDialog }, icon("lock"), "Unlock"));
+}
+
 async function renderNotes() {
   const name = route.rest.length ? decodeURIComponent(route.rest.join("/")) : "";
   const data = await attempt(() => api("/api/notes"));
@@ -2657,16 +2682,22 @@ async function renderNotes() {
   const list = h("div", { class: "note-list" });
   function fillList(filter = "") {
     const shown = notesList.filter((n) => !filter || (n.title + " " + n.snippet).toLowerCase().includes(filter));
-    list.replaceChildren(...(shown.length ? shown.map((n) => h("a", { class: "note-item" + (n.name === name ? " on" : ""), href: "#/notes/" + encodeURIComponent(n.name) },
-      h("div", { class: "nt" }, n.title), h("div", { class: "ns" }, h("span", {}, when(n.mtime)), " ", n.snippet.replace(n.title, "").trim() || "Empty note")))
+    list.replaceChildren(...(shown.length ? shown.map((n) => noteItem(n, name))
       : [h("div", { class: "muted note-none" }, filter ? "No matches" : "No notes yet")]));
+    if (!filter && someLocked()) list.append(h("div", { class: "note-none" }, h("button", { class: "btn ghost small", type: "button", onclick: unlockDialog }, icon("lock"), "Unlock locked notes")));
   }
   fillList();
+  const locked = !!(data && data.locked);
   const side = h("div", { class: "notes-side" },
-    h("div", { class: "notes-head" }, h("h1", {}, "Notes"), h("button", { class: "btn small", onclick: newNote }, icon("plus"), "New")),
-    search, list);
+    h("div", { class: "notes-head" }, h("h1", {}, "Notes"),
+      h("div", { style: "display:flex;gap:6px;align-items:center" },
+        !locked && h("button", { class: "btn small", onclick: newNote }, icon("plus"), "New"),
+        menuButton(() => folderLockItems(NOTES, !!(data && data.lock), "Notes"), "Notes"))),
+    !locked && search, !locked && list);
   let editor;
-  if (current) {
+  if (locked) {
+    editor = lockedPanel("Notes", NOTES);
+  } else if (current) {
     editor = noteEditor(current);
   } else {
     editor = h("div", { class: "notes-empty" }, h("b", {}, notesList.length ? "Pick a note" : "Write your first note"),
@@ -2686,11 +2717,16 @@ function noteEditor(n) {
   const body = h("textarea", { class: "note-body", placeholder: "Start writing…", "aria-label": "Note" });
   const state = h("span", { class: "note-state", id: "note-state" }, "Loading…");
   const saveBtn = h("button", { class: "btn small", title: "Back up to Discord now (Ctrl+S)", onclick: () => saveNote("now") }, icon("save"), "Save");
-  const it = { path: n.path, name: n.name, dir: false, size: n.size, mtime: n.mtime, state: n.state };
+  const it = { path: n.path, name: n.name, dir: false, size: n.size, mtime: n.mtime, state: n.state, locked: !!n.locked };
+  note.locked = !!n.locked;
   const more = menuButton(() => [
     { label: "Earlier versions", icon: "history", run: () => openItem(it, "versions") },
     { label: "Download", icon: "download", run: () => download(fileUrl(n.path, true), n.name) },
-    { label: "Share…", icon: "link", run: () => shareDialog(it) },
+    !it.locked && { label: "Share…", icon: "link", run: () => shareDialog(it) },
+    "-",
+    it.locked ? { label: "Lock again now", icon: "lock", run: lockAllNow }
+              : { label: "Lock with a password…", icon: "lock", run: async () => { if (note.dirty) await saveNote("later"); lockDialog(it); } },
+    it.locked && { label: "Remove the lock…", icon: "lock", run: () => removeLockDialog(it) },
     "-",
     { label: "Delete note", icon: "trash", danger: true, run: async () => {
       if (await ask({ title: `Delete “${noteTitle(n.name)}”?`, ok: "Delete", danger: true, text: "You can recover it from Deleted for a while." })
@@ -2808,8 +2844,7 @@ async function refreshNoteList() {
     const filter = search ? search.value.trim().toLowerCase() : "";
     const name = note ? note.name : "";
     const shown = notesList.filter((n) => !filter || (n.title + " " + n.snippet).toLowerCase().includes(filter));
-    list.replaceChildren(...(shown.length ? shown.map((n) => h("a", { class: "note-item" + (n.name === name ? " on" : ""), href: "#/notes/" + encodeURIComponent(n.name) },
-      h("div", { class: "nt" }, n.title), h("div", { class: "ns" }, h("span", {}, when(n.mtime)), " ", n.snippet.replace(n.title, "").trim() || "Empty note")))
+    list.replaceChildren(...(shown.length ? shown.map((n) => noteItem(n, name))
       : [h("div", { class: "muted note-none" }, "No notes yet")]));
   }
   return notesList;
@@ -2820,7 +2855,10 @@ async function pollNotes() {
   const items = await refreshNoteList();
   if (!items || !note) return;
   const cur = items.find((n) => n.path === note.path);
-  if (!cur) return;
+  if (!cur) {
+    if (note.locked) { note = null; toast("The note was locked again"); go("#/notes"); }      // (its lock closed: unused for a while)
+    return;
+  }
   if (!note.dirty && !note.saving) setState(syncedText(cur.state));
   if (cur.mtime > note.mtime + 0.5) {
     note.mtime = cur.mtime;
@@ -4248,7 +4286,7 @@ async function renderBookmarks() {
   const filter = h("input", { class: "bm-filter", type: "search", placeholder: "Filter", value: markFilter, spellcheck: "false",
                               oninput: (e) => { markFilter = e.target.value.trim(); drawMarks(); } });
   page(h("div", { class: "bar" }, h("h1", { style: "margin:0" }, "Bookmarks"), h("span", { class: "muted g-count", id: "bm-count" }),
-         h("div", { class: "actions" }, filter)),
+         h("div", { class: "actions" }, filter, h("span", { id: "bm-lock" }))),
        h("div", { class: "bm-add" }, icon("link"), input,
          h("button", { class: "btn", onclick: () => { if (input.value.trim()) { const v = input.value; input.value = ""; addMark(v); } else input.focus(); } }, "Save")),
        h("div", { class: "bm-chips", id: "bm-tags" }),
@@ -4257,10 +4295,12 @@ async function renderBookmarks() {
   const d = await api("/api/bookmarks").catch((e) => { toast(e.message); return null; });
   if (route.name !== "bookmarks") return;
   if (d && d.locked) {
+    $(".bm-add").remove();
     $("#bm-empty").hidden = false;
-    $("#bm-empty").replaceChildren(h("b", {}, "Bookmarks are locked"), `${d.folder} is hidden or password-locked here. Unlock it with the padlock at the top.`);
+    $("#bm-empty").replaceChildren(lockedPanel("Bookmarks", d.folder));
     return;
   }
+  if (d) $("#bm-lock").replaceChildren(menuButton(() => folderLockItems(d.folder, !!d.lock, "Bookmarks"), "Bookmarks"));
   marks = d ? d.items : [];
   drawMarks();
 }
