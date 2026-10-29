@@ -334,7 +334,8 @@ class BrowserTest(helpers.DriveTest):
         self.assertEqual(order()[2:], ["small.txt", "file10.txt", "file9.txt", "big.txt"])
         p.click("button[aria-label=Sort]")                                 # (the grid and phones have no header: the menu)
         p.click(".ctx >> text=Name")
-        p.wait_for_function("() => document.querySelector('.row.head .sort-col[aria-sort=ascending]')")
+        # (the name column's own state: the size column was already ascending, so "some column" passes too early)
+        p.wait_for_function("() => document.querySelector('.row.head .sort-col:first-child[aria-sort=ascending]')")
         self.assertEqual(order()[2:], ["big.txt", "file9.txt", "file10.txt", "small.txt"])
         # A folder's colour, from its menu.
         p.locator('.row[data-path="/Alpha"]').click(button="right")
