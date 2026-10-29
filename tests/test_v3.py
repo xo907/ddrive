@@ -5,6 +5,7 @@ background work is quicker without holding more in memory."""
 import gzip
 import json
 import os
+import time
 import shutil
 from unittest import mock
 
@@ -161,6 +162,46 @@ class V3Test(helpers.DriveTest):
         self.assertEqual(len(names), 1)
         with gzip.open(os.path.join(folder, names[0])) as f:
             self.assertTrue(f.read(16).startswith(b"SQLite format 3"))
+
+    def test_three_daily_copies_are_kept(self):
+        d = self.drive()
+        self.write(d, "/a.txt", b"x")
+        self.upload(d)
+        folder = os.path.join(os.path.dirname(d.index.path), "backups")
+        os.makedirs(folder)
+        day = 86400
+        for i in range(5):                                       # five older copies, a day apart
+            path = os.path.join(folder, f"index-2026010{i + 1}-000000.db.gz")
+            with open(path, "wb") as f:
+                f.write(b"old")
+            os.utime(path, (time.time() - (6 - i) * day,) * 2)
+        d.maintenance._next_backup = 0
+        d.maintenance.backup_step()
+        names = sorted(os.listdir(folder))
+        self.assertEqual(len(names), 3)
+        self.assertEqual(names[:2], ["index-20260104-000000.db.gz", "index-20260105-000000.db.gz"])
+
+    def test_half_sent_files_left_for_three_days_go_by_themselves(self):
+        d = self.drive()
+        data = os.path.dirname(d.index.path)
+        mine, theirs = os.path.join(data, "partials"), os.path.join(data, "accounts", "0123456789abcdef", "partials")
+        now = time.time()
+        for folder, name, age in ((mine, "a" * 32, 4 * 86400), (theirs, "b" * 32, 4 * 86400), (mine, "c" * 32, 2 * 86400)):
+            os.makedirs(folder, exist_ok=True)
+            for ext in (".part", ".json"):
+                path = os.path.join(folder, name + ext)
+                with open(path, "wb") as f:
+                    f.write(b"x")
+                os.utime(path, (now - age,) * 2)
+        d.maintenance.partials_step()
+        self.assertEqual((sorted(os.listdir(mine)), os.listdir(theirs)), (["c" * 32 + ".json", "c" * 32 + ".part"], []))
+        for ext in (".part", ".json"):
+            os.utime(os.path.join(mine, "c" * 32 + ext), (now - 4 * 86400,) * 2)
+        d.maintenance.partials_step()                            # at most once an hour
+        self.assertIn("c" * 32 + ".part", os.listdir(mine))
+        d.maintenance._next_partials = 0
+        d.maintenance.partials_step()
+        self.assertEqual(os.listdir(mine), [])
 
     def test_an_accounts_checkpoint_has_copies(self):
         d = self.drive(spare_channels=[A, B])

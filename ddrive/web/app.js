@@ -2223,7 +2223,7 @@ function renderResources(quiet) {
       tidyRow("Delete thumbnails", `Removes the stored small pictures (${size(sz.thumbs || 0)}). They are made again when you look at pictures and videos.`,
               "Delete", { what: "thumbs" }, (x) => `Thumbnails deleted: ${size(x.freed)} freed`),
       tidyRow("Remove half-sent files", hs.count
-                ? `${plural(hs.count, "file")} that ${hs.count === 1 ? "was" : "were"} being uploaded and didn't finish ${hs.count === 1 ? "holds" : "hold"} ${size(hs.bytes)} on this disk, the accounts' included. `
+                ? `${plural(hs.count, "file")} that ${hs.count === 1 ? "was" : "were"} being uploaded and didn't finish ${hs.count === 1 ? "holds" : "hold"} ${size(hs.bytes)} on this disk, the accounts' included (any that nothing arrives for in three days are removed by themselves). `
                   + (hs.idle_count ? `Nothing has arrived for ${hs.idle_count === hs.count ? (hs.count === 1 ? "it" : "any of them") : plural(hs.idle_count, "of them", "of them")} in an hour (${size(hs.idle_bytes)}): those are removed. `
                                      + "An upload that is only waiting for room and is among them starts again from its beginning."
                                    : "All of them had something arrive in the last hour, so they may still be on their way. "

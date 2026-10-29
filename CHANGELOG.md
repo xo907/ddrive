@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.28.0 (2026-10-29)
+
+- **Less disk space for upkeep.** The daily copies of the file list (`backups` in the data folder) are now 3 instead of 7: each is as big as the file list itself, which grows with the drive.
+- **Half-sent files clear themselves.** What arrived of an upload sent in parts (a folder sync on another computer or a phone) and then given up stayed on the disk until someone pressed *Remove half-sent files* on the dashboard. Now any that nothing has arrived for in three days are removed by themselves, checked once an hour; a paused upload can still go on where it stopped within those three days.
+
 ## 3.27.0 (2026-10-27)
 
 - **Settings are in tabs.** The settings were one very long page; now they are a few tabs (a list on the left, a bar along the top on a phone), each with a handful of short groups, and each has an address of its own (`#/settings/accounts`, …):

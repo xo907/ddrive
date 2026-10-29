@@ -37,7 +37,7 @@ SPARE_BATCH = 8                     # spare pieces computed (and held in memory)
 SPREAD_RESCAN = 6 * 3600            # what still needs spare pieces is looked for again after this (or a change)
 PAGE = 100                          # messages per request when the background check lists a channel
 BACKUP_EVERY = 86400                # a local copy of index.db is made this often...
-BACKUPS_KEPT = 7                    # ...and this many are kept (in <data>/backups)
+BACKUPS_KEPT = 3                    # ...and this many are kept (in <data>/backups)
 REHOME_AT_ONCE = 20                 # pieces of a given-up channel rebuilt per step
 
 
@@ -848,6 +848,7 @@ class Maintenance:
             for name, fn in (("servers", self.servers_step), ("check", self.scrub_step),
                              ("rehome", self.rehome_step), ("protect", self.protect_step),
                              ("spread", self.spread_step), ("backup", self.backup_step),
+                             ("partials", self.partials_step),
                              ("snapshot", self.snapshot_step), ("offline", self.offline_step),
                              ("recheck", self.recheck_step)):
                 if self._stop.is_set():
@@ -895,7 +896,7 @@ class Maintenance:
         self._next_rehome = now + 600
 
     def backup_step(self):
-        """Once a day: a copy of this computer's index.db in <data>/backups (7 kept), and SQLite's own check
+        """Once a day: a copy of this computer's index.db in <data>/backups (3 kept), and SQLite's own check
         of it. A damaged file list is said loudly, while good copies of it still exist."""
         now = time.time()
         if now < self._next_backup:
@@ -917,6 +918,20 @@ class Maintenance:
                 os.remove(os.path.join(folder, old))
         except Exception as e:
             log.warning("Could not make the daily copy of the file list: %s", e)
+
+    def partials_step(self):
+        """Once an hour: remove the half-sent files (web.py, "a file sent in parts") nothing has arrived for
+        in three days. Uploads that were given up would otherwise stay on the disk until someone clears
+        them on the dashboard; one that is only paused can still go on where it stopped for three days."""
+        now = time.time()
+        if now < getattr(self, "_next_partials", 0.0):
+            return
+        self._next_partials = now + 3600
+        from . import resources
+        data_dir = os.path.dirname(os.path.abspath(self.index.path))
+        count, freed = resources.remove_half_sent(data_dir, resources.PARTIAL_ABANDONED)
+        if count:
+            log.info("Removed %d half-sent file(s) nothing had arrived for in three days (%d bytes)", count, freed)
 
     def recheck_step(self):
         """Now and then look again at the pieces listed as lost (see Healer.recheck_lost)."""

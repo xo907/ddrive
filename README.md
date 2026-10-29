@@ -580,7 +580,7 @@ Discord can delete messages or attachments at any time. DDrive plans for that:
   a checkpoint that is damaged is never uploaded. If no checkpoint can be found at all but the channel
   holds a drive, the file list is rebuilt from the whole change journal instead of starting an empty
   drive over it. Once a day a copy of this computer's `index.db` goes to `backups` in the data folder
-  (7 kept), and SQLite checks it. A finished upload is on disk before its local copy is deleted, even
+  (3 kept), and SQLite checks it. A finished upload is on disk before its local copy is deleted, even
   through a power cut, and a local copy that no file knows about, or of a file whose waiting upload
   is cancelled, goes to `recovered` in the data folder instead of being deleted.
 
