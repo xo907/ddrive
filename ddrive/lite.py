@@ -886,6 +886,23 @@ def cmd_connect(args):
     return 0
 
 
+WAIT_AT_LOGON = 600             # seconds the drive started at logon waits for the network and the host
+
+
+def _wait_for_host(client, seconds):
+    """Until the host answers at all (any answer, a refusal too), for up to `seconds`: just after logon the network
+    is often not there yet, and the drive gave up at once."""
+    end = time.time() + seconds
+    while True:
+        try:
+            client.request("GET", "/api/status")
+            return
+        except HostError as e:
+            if e.status or time.time() > end:
+                return
+        time.sleep(5)
+
+
 def cmd_mount(args):
     s = load_settings()
     client = client_from(s)
@@ -899,6 +916,7 @@ def cmd_mount(args):
     if FUSE_ERROR:
         print(f"[ERROR] The drive can't be shown here yet:\n{FUSE_ERROR}\n        ('lite ls', 'lite get' and 'lite put' work without it.)")
         return 1
+    _wait_for_host(client, getattr(args, "wait", 0) or 0)
     if _is_mounted(mp):
         print(f"[INFO] Something is already mounted on {mp}.")
         return 0
@@ -1468,49 +1486,128 @@ def cmd_put(args):
     return 0
 
 
+TASK = "DDrive Lite"           # Windows: the Task Scheduler task that shows the drive when you log in
+
+
+def _autostart_run_key(value=None, delete=False):
+    """The start-with-Windows entry earlier versions made (HKCU Run): read it, set it or take it away."""
+    import winreg
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            if delete:
+                winreg.DeleteValue(k, "DDriveLite")
+            elif value is not None:
+                winreg.SetValueEx(k, "DDriveLite", 0, winreg.REG_SZ, value)
+            else:
+                return winreg.QueryValueEx(k, "DDriveLite")[0]
+    except OSError:
+        return None
+
+
+def _schtasks(*argv):
+    return subprocess.run(["schtasks", *argv], capture_output=True, text=True,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def autostart_task_xml():
+    """The task's definition as Task Scheduler has it ('' when there is no task)."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        r = _schtasks("/Query", "/TN", TASK, "/XML")
+    except OSError:
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
 def autostart_enabled():
     if sys.platform == "win32":
-        import winreg
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
-                winreg.QueryValueEx(k, "DDriveLite")
-                return True
-        except OSError:
-            return False
+        return bool(autostart_task_xml() or _autostart_run_key())
     try:
         return AUTOSTART_TAG in subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
     except OSError:
         return False
 
 
+def _autostart_command():
+    """(program, arguments) that show the drive, without a window, from wherever Windows starts them."""
+    from .runtime import FROZEN
+    if FROZEN:
+        return sys.executable, f"lite mount -b --wait {WAIT_AT_LOGON}"
+    exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    exe = exe if os.path.exists(exe) else sys.executable
+    return exe, (f'-c "import sys; sys.path.insert(0, r\'{SOURCE_ROOT}\'); from ddrive.lite import main; '
+                 f'sys.exit(main([\'mount\', \'--wait\', \'{WAIT_AT_LOGON}\']) or 0)"')
+
+
+def task_definition(exe, arguments, user):
+    """Task Scheduler's definition of the task: at this user's logon, as this user (no password kept), with nothing
+    that stops it (time limit, battery), started again if it fails. Settings > Apps > Startup doesn't list it: a
+    Run entry turned off there (the way earlier versions started) kept the drive from coming by itself."""
+    from xml.sax.saxutils import escape
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Shows the DDrive host's drive on this computer (DDrive Lite in {escape(SOURCE_ROOT)})</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{escape(user)}</UserId><Delay>PT10S</Delay></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{escape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>5</Count></RestartOnFailure>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{escape(exe)}</Command><Arguments>{escape(arguments)}</Arguments><WorkingDirectory>{escape(SOURCE_ROOT)}</WorkingDirectory></Exec></Actions>
+</Task>
+"""
+
+
+def _windows_user():
+    domain = os.environ.get("USERDOMAIN")
+    return (domain + "\\" if domain else "") + getpass.getuser()
+
+
+def _autostart_windows(on):
+    """A Task Scheduler task at logon (the Run entry of earlier versions goes). None, or what went wrong."""
+    if not on:
+        if autostart_task_xml():
+            r = _schtasks("/Delete", "/TN", TASK, "/F")
+            if r.returncode != 0:
+                return (r.stderr or r.stdout).strip()
+        _autostart_run_key(delete=True)
+        return None
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-16") as f:
+            f.write(task_definition(*_autostart_command(), _windows_user()))
+        r = _schtasks("/Create", "/TN", TASK, "/XML", path, "/F")
+    finally:
+        os.remove(path)
+    if r.returncode != 0:
+        return (r.stderr or r.stdout).strip()
+    _autostart_run_key(delete=True)              # (or it would start a second time)
+    return None
+
+
 def cmd_autostart(args):
     """Show the host's drive by itself when this computer starts (Windows: when you log in)."""
-    from .runtime import FROZEN
     action = args.state or "status"
     if action == "status":
         print(f"[OK] Lite autostart is {'ON' if autostart_enabled() else 'OFF'}.")
+        if sys.platform == "win32" and _autostart_run_key() and not autostart_task_xml():
+            print(f"     (the older way, which Settings > Apps > Startup can turn off: '{me()} autostart on' makes it a "
+                  "Task Scheduler task)")
         return 0
     on = action == "on"
     if on:
         client_from(load_settings())             # only when there is a host to connect to
     if sys.platform == "win32":
-        import winreg
-        if FROZEN:
-            start = f'"{sys.executable}" lite mount -b'
-        else:
-            # No window: Python's windowless program runs the mount itself, from wherever Windows starts it.
-            exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-            exe = exe if os.path.exists(exe) else sys.executable
-            start = (f'"{exe}" -c "import sys; sys.path.insert(0, r\'{SOURCE_ROOT}\'); '
-                     f'from ddrive.lite import main; main([\'mount\'])"')
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
-            if on:
-                winreg.SetValueEx(k, "DDriveLite", 0, winreg.REG_SZ, start)
-            else:
-                try:
-                    winreg.DeleteValue(k, "DDriveLite")
-                except OSError:
-                    pass
+        failed = _autostart_windows(on)
+        if failed:
+            print(f"[ERROR] Task Scheduler didn't take it: {failed}")
+            return 1
     else:
         try:
             current = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
@@ -1524,7 +1621,8 @@ def cmd_autostart(args):
         if r.returncode != 0:
             print(f"[ERROR] Could not update crontab: {r.stderr.strip()}")
             return 1
-    print("[OK] Lite autostart is now " + ("ON: the host's drive appears when this computer starts." if on else "OFF."))
+    where = f" (Task Scheduler: {TASK})" if sys.platform == "win32" else ""
+    print("[OK] Lite autostart is now " + (f"ON: the host's drive appears when this computer starts{where}." if on else "OFF."))
     return 0
 
 
@@ -1617,6 +1715,8 @@ def main(argv, verbose=False):
     p = sub.add_parser("mount", help="Show the host's drive as a drive letter / folder on this computer")
     p.add_argument("-m", "--mount", help="Drive letter (Windows) or folder (Linux)")
     p.add_argument("-b", "--background", action="store_true", help="Keep it running in the background")
+    p.add_argument("--wait", type=int, default=0, metavar="SECONDS",
+                   help="Wait up to this long for the host to be reachable (the drive started at logon)")
     sub.add_parser("stop", help="Take the drive away from this computer")
     sub.add_parser("status", help="The host, and how its drive is doing")
     p = sub.add_parser("ls", help="List a folder on the host")

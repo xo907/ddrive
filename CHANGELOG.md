@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.28.1 (2026-10-30)
+
+- **Lite starts with Windows through Task Scheduler.** `lite autostart on` (and the menu's Start with this computer) made a Run entry, which Settings > Apps > Startup can turn off without a word, and then the drive didn't come when you logged in. Now it is a Task Scheduler task, "DDrive Lite": at your logon, as you, with no time limit, not stopped on battery, and started again if it fails. Turning it on again replaces the old entry. The drive started this way also waits up to 10 minutes for the network and the host (`lite mount --wait`) instead of giving up when the network isn't there yet. Not a Windows service: a service runs apart from your logon, where the drive letter wouldn't be seen in your Explorer and the sign-in (kept encrypted for your Windows account) can't be read.
+
 ## 3.28.0 (2026-10-29)
 
 - **Less disk space for upkeep.** The daily copies of the file list (`backups` in the data folder) are now 3 instead of 7: each is as big as the file list itself, which grows with the drive.

@@ -11,6 +11,8 @@ from unittest import mock
 import helpers  # noqa: F401  (puts the program on the path)
 from ddrive import copies, lite
 
+AUTOSTART_ROOT = copies.autostart_root      # (the real one: the tests have a stand-in)
+
 
 def make_copy(parent, name, version):
     root = os.path.join(parent, name)
@@ -67,6 +69,18 @@ class CopiesTest(unittest.TestCase):
             self.assertIsNotNone(copies.refusal(self.old, "3.3.1"))
             with mock.patch.dict(os.environ, {"DDRIVE_ALLOW_OLD": "1"}):
                 self.assertIsNone(copies.refusal(self.old, "3.3.1"))
+
+    def test_the_autostart_task_is_valid_and_names_this_copy(self):
+        import xml.etree.ElementTree as ET
+        xml = lite.task_definition(*lite._autostart_command(), "PC\\someone")
+        ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+        task = ET.fromstring(xml.split("\n", 1)[1])
+        self.assertEqual(task.find("t:Triggers/t:LogonTrigger/t:UserId", ns).text, "PC\\someone")
+        self.assertEqual(task.find("t:Settings/t:ExecutionTimeLimit", ns).text, "PT0S")
+        self.assertIn("--wait", task.find("t:Actions/t:Exec/t:Arguments", ns).text)
+        with mock.patch.object(lite, "autostart_task_xml", lambda: xml), mock.patch.object(lite, "_autostart_run_key", lambda: None), \
+                mock.patch.object(copies.sys, "platform", "win32"):
+            self.assertEqual(AUTOSTART_ROOT(), lite.SOURCE_ROOT)
 
     def test_lite_refuses_what_starts_but_not_what_only_looks(self):
         out = io.StringIO()

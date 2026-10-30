@@ -85,13 +85,9 @@ def autostart_root():
     """The folder of the copy Windows starts by itself when you log in (lite autostart on), if any."""
     if sys.platform != "win32":
         return None
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
-            start = winreg.QueryValueEx(k, "DDriveLite")[0]
-    except OSError:
-        return None
-    m = re.search(r"sys\.path\.insert\(0, r'([^']+)'\)", start or "")
+    from . import lite                       # a Task Scheduler task, or the Run entry of earlier versions
+    start = lite.autostart_task_xml() or lite._autostart_run_key() or ""
+    m = re.search(r"sys\.path\.insert\(0, r(?:'|&apos;)(.+?)(?:'|&apos;)\)", start)
     return m.group(1) if m else None
 
 
