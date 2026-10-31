@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.29.3 (2026-10-31)
+
+- **The log says what a host was doing when its memory went up.** A host was killed for memory (1.1 GB, 45 minutes after it started) with nothing in its log about why. From 400 MB on, and each time it has grown 150 MB more, a warning (ddrive.memory) says how much it uses and how much the server has free, the requests being answered and for how long (the path only, nothing of the query), how many accounts have their drive open, and where in DDrive each busy thread is.
+
 ## 3.29.2 (2026-10-31)
 
 - **A host doesn't run out of memory when every account uploads at once.** Each account on a host has a drive of its own, and each drive's uploader sent up to 16 pieces at a time, sized as if it were alone (a piece takes about four times its 9 MB while it is sent). After the host had been down, every computer's backlog arrived together and a small server ran out of memory: DDrive was killed, or the server got so busy swapping that it stopped answering, SSH too. Now one budget counts the pieces in flight for the whole program: about a sixteenth of the memory (7 pieces on a 4 GB server), at least 2.

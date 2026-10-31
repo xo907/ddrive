@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 import helpers
-from ddrive import fs, uploader
+from ddrive import fs, memwatch, uploader
 
 
 class MemoryTest(helpers.DriveTest):
@@ -42,6 +42,52 @@ class MemoryTest(helpers.DriveTest):
             last = d.index.resolve("/f11.bin")["id"]
             self.assertIn(last, d.fs._chunk_maps)                         # (the ones used last are kept)
 
+    def test_what_was_going_on_is_said_when_memory_goes_up(self):
+        gate, inside = threading.Event(), threading.Event()
+
+        def slow_request():                      # (stands for a request that holds a lot)
+            n = memwatch.begin("GET", "/api/vault/object?id=secret")
+            inside.set()
+            gate.wait(10)
+            memwatch.end(n)
+        t = threading.Thread(target=slow_request, name="Thread-7")
+        t.start()
+        inside.wait(5)
+        watch, rss = memwatch.MemoryWatch(lambda: 2), [100 << 20]
+        with mock.patch.object(memwatch, "_process_bytes", lambda: (rss[0], 1 << 30, 4 << 30)):
+            self.assertIsNone(watch.check())                         # (well under 400 MB: nothing said)
+            rss[0] = 450 << 20
+            with self.assertLogs("ddrive.memory", "WARNING") as said:
+                text = watch.check()
+            self.assertIn("450 MB", text)
+            self.assertIn("GET /api/vault/object for", text)
+            self.assertNotIn("secret", text)                         # (no query: it may hold ids or keys)
+            self.assertIn("Accounts with their drive open: 2", text)
+            self.assertEqual(said.output[0].split(":", 2)[2], text)
+            rss[0] = 500 << 20
+            self.assertIsNone(watch.check())                         # (said again only 150 MB further up)
+            rss[0] = 620 << 20
+            self.assertIsNotNone(watch.check())
+        gate.set()
+        t.join()
+
+    def test_a_threads_place_in_ddrive_is_found(self):
+        import sys
+        from ddrive import lite
+        self.assertIsNone(memwatch._where(sys._getframe()))         # (a test's own code is not DDrive's)
+        stop = threading.Event()
+
+        class Client:                            # a host that takes its time to answer
+            def request(self, method, path):
+                stop.wait(10)
+        t = threading.Thread(target=lite._wait_for_host, args=(Client(), 10), name="Busy-3")
+        t.start()
+        try:
+            time.sleep(0.1)
+            self.assertRegex(memwatch.report(1 << 30, 1 << 29, 1 << 32), r"Busy at lite\.py:\d+ _wait_for_host")
+        finally:
+            stop.set()
+            t.join()
 
 if __name__ == "__main__":
     unittest.main()

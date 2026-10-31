@@ -40,7 +40,7 @@ from .config import Config, config_path, launcher as _launcher
 from .accounts import MODES, AccountError, Accounts, AccountShares, account_id
 from .crypto import hash_password
 from .index import ROOT_ID, new_uid
-from . import legal, monitor, passkeys, resources, words
+from . import legal, memwatch, monitor, passkeys, resources, words
 from .shares import Shares
 from .syncdevices import Gone, LiteDevices, Offline, SealedDevices
 from .accountdevices import AccountDevices, describe as describe_device
@@ -244,6 +244,7 @@ class WebServer:
         threading.Thread(target=self._clean_thumbs, name="Thumbs", daemon=True).start()
         self.accounts.start()
         self.moves.start()
+        self.memwatch = memwatch.MemoryWatch(lambda: len(self.accounts._open)).start()
         return self
 
     def _clean_thumbs(self):
@@ -271,6 +272,8 @@ class WebServer:
         threading.Thread(target=bye, name="EraseDone", daemon=True).start()
 
     def stop(self):
+        if getattr(self, "memwatch", None):
+            self.memwatch.stop()
         self.recordings.stop()            # recordings in progress keep what has arrived
         self.updates.stop()
         self.findx.close()                # (kept for the next start: the dashboard shows the phones at once)
@@ -827,9 +830,11 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         self._move_body = {}
         self._admin, self._e2e, self._retired = "", False, False
         self._t0 = time.perf_counter()
+        watched = memwatch.begin(method, self.path)    # (said in the log if memory goes up a lot meanwhile)
         try:
             self._route(method)
         finally:
+            memwatch.end(watched)
             self._leave()
             # Leave nothing of this request behind on the connection.
             try:
