@@ -53,6 +53,15 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <!-- A link shared from another app, straight into your Bookmarks (ShareActivity tells it by this name). -->
+        <activity-alias android:name=".BookmarkShare" android:targetActivity=".ShareActivity" android:exported="true"
+            android:label="Bookmark in DDrive">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity-alias>
         <service android:name=".UploadService" android:exported="false" android:foregroundServiceType="dataSync" />
         <!-- Connecting to a host, and this phone's settings (folder syncing). -->
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />

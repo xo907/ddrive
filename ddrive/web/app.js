@@ -4195,6 +4195,7 @@ function syncForm(j, dev) {
 // they are encrypted, synced and versioned, and showing them loads nothing from the sites themselves.
 let marks = [];
 let markTag = "";
+let marksToAdd = "";          // links shared to the DDrive app (ddAddMarks), saved once the Bookmarks page has its list
 let markFilter = "";
 let markInfo = {};                  // what /api/bookmarks said besides the list: private (none, locked, open, unlocked), lock
 const markPending = new Map();      // temporary id -> address being read
@@ -4406,6 +4407,7 @@ async function renderBookmarks() {
   drawAddPrivate();
   marks = d ? d.items : [];
   drawMarks();
+  if (marksToAdd && d) { const t = marksToAdd; marksToAdd = ""; addMark(t); }
 }
 
 // Ctrl+V anywhere on the Bookmarks page saves the copied link.
@@ -5921,6 +5923,8 @@ async function renderMessages() {
 const PHONE_APP = window.DDriveApp && typeof window.DDriveApp.settings === "function" ? window.DDriveApp : null;
 /** The phone's Back button (the DDrive app asks this first): closes what is open on top, a dialog, a menu,
  *  the viewer or the side sheet. False when nothing was, and the app goes back a page instead. */
+/** A link shared to the DDrive app from another app ("Bookmark in DDrive"): saved on the Bookmarks page. */
+window.ddAddMarks = (text) => { marksToAdd = String(text || ""); go("#/bookmarks"); return true; };
 window.ddBack = () => {
   const dlg = [...document.querySelectorAll("dialog[open]")].pop();
   if (dlg) { dlg.close(); return true; }

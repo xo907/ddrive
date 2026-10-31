@@ -55,6 +55,7 @@ class DashboardActivity : Activity() {
     private lateinit var web: WebView
     private var hostOrigin = ""
     @Volatile private var pageOrigin = ""
+    private var marksToAdd: String? = null      // links shared to "Bookmark in DDrive", handed to the page once it is signed in
     private var triedSignIn = false
     private var filePick: ValueCallback<Array<Uri>>? = null
     private var fullScreen: View? = null
@@ -92,12 +93,14 @@ class DashboardActivity : Activity() {
         setContentView(root)
         paintBars()
         val want = intent?.getStringExtra(EXTRA_PAGE) ?: ""
-        if (savedInstanceState != null && want.isEmpty()) web.restoreState(savedInstanceState)
+        marksToAdd = intent?.getStringExtra(EXTRA_MARKS)
+        if (savedInstanceState != null && want.isEmpty() && marksToAdd == null) web.restoreState(savedInstanceState)
         else web.loadUrl(store.host.trimEnd('/') + "/" + want)
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        intent?.getStringExtra(EXTRA_MARKS)?.let { marksToAdd = it; addMarks(); return }
         val want = intent?.getStringExtra(EXTRA_PAGE) ?: return
         web.loadUrl(store.host.trimEnd('/') + "/" + want)
     }
@@ -208,6 +211,7 @@ class DashboardActivity : Activity() {
             pageOrigin = origin(url)
             if (!mine(url)) return
             view.evaluateJavascript(SAVE_BLOBS, null)
+            addMarks()
             // The sign-in page: signed in here with the words this phone keeps (once each time the app is opened).
             view.evaluateJavascript("(function(){var f=document.querySelector('form[action=\"/login\"]');" +
                                     "return f ? (window.DDV && DDV.usable ? 'sealed' : 'plain') : ''})()") { kind ->
@@ -215,6 +219,22 @@ class DashboardActivity : Activity() {
                 if (k.isEmpty() || triedSignIn) return@evaluateJavascript
                 triedSignIn = true
                 signIn(k == "sealed")
+            }
+        }
+    }
+
+    /** Hands the shared links to the dashboard's Bookmarks page (app.js ddAddMarks), once it is the signed-in dashboard. */
+    private fun addMarks() {
+        val text = marksToAdd ?: return
+        web.evaluateJavascript("(function(t){if(window.ddAddMarks)return ddAddMarks(t)?'done':'';" +
+                               "return document.querySelector('form[action=\"/login\"]')||!document.getElementById('nav')?'':'old'})" +
+                               "(${JSONObject.quote(text)})") { said ->
+            when (said.trim('"')) {
+                "done" -> marksToAdd = null
+                "old" -> {
+                    marksToAdd = null
+                    Toast.makeText(this, "Your DDrive host is too old to take bookmarks from the app: update it first.", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -412,6 +432,7 @@ class DashboardActivity : Activity() {
 
     companion object {
         const val EXTRA_PAGE = "page"
+        const val EXTRA_MARKS = "marks"
         private const val PICK_FILES = 7
 
         /** Forget the host on this phone: its address and words, folder syncing, and what the page kept. */

@@ -497,6 +497,16 @@ class BrowserTest(helpers.DriveTest):
         p.wait_for_selector("text=Notes are locked")
         self.assertEqual(self.errors, [])
 
+    def test_a_link_shared_to_the_app_is_bookmarked(self):
+        # The Android app (DashboardActivity) hands what was shared to "Bookmark in DDrive" to the page.
+        p = self.page
+        self.sign_up_e2e()
+        self.assertTrue(p.evaluate("ddAddMarks('Look at this http://127.0.0.1:1/shared-page')"))
+        p.wait_for_function("() => location.hash === '#/bookmarks'")
+        p.wait_for_function("() => typeof marks !== 'undefined' && marks.length === 1")      # (saved, not only shown as coming)
+        items = self.api("GET", "/api/bookmarks")["json"]["items"]
+        self.assertEqual([b["url"] for b in items], ["http://127.0.0.1:1/shared-page"])
+
     def test_private_bookmarks_in_an_end_to_end_account(self):
         p = self.page
         self.sign_up_e2e()

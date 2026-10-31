@@ -17,6 +17,10 @@ import android.widget.Toast
  * "Save to DDrive" in the phone's share sheet: photos, videos, documents or a bit of text from any app
  * go into a folder of your DDrive. Which folder is asked (the last one is remembered); the files are
  * sent by UploadService, in the background, sealed on the phone first for an end-to-end account.
+ *
+ * A link goes into your Bookmarks instead: straight away from "Bookmark in DDrive" (the BookmarkShare alias in
+ * the manifest), or when chosen from "Save to DDrive". The dashboard's Bookmarks page saves it (with its preview),
+ * in the app (DashboardActivity), so an end-to-end account's bookmarks are sealed on the phone like the rest.
  */
 class ShareActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,6 +39,41 @@ class ShareActivity : Activity() {
             finish()
             return
         }
+        val links = text?.split(Regex("""\s+"""))?.filter { LINK.matches(it) }.orEmpty()
+        if (intent.component?.className?.endsWith(".BookmarkShare") == true) {
+            if (links.isEmpty()) {
+                Toast.makeText(this, "There is no web address in that to bookmark.", Toast.LENGTH_LONG).show()
+                finish()
+            } else bookmark(links)
+            return
+        }
+        if (links.isNotEmpty()) {
+            dialog().setTitle("Save the link to DDrive")
+                .setMessage(links.joinToString("\n"))
+                .setPositiveButton("Bookmark it") { _, _ -> bookmark(links) }
+                .setNeutralButton("Save as a file") { _, _ -> askFolder(store, uris, text) }
+                .setNegativeButton("Cancel") { _, _ -> finish() }
+                .setOnCancelListener { finish() }
+                .show()
+            return
+        }
+        askFolder(store, uris, text)
+    }
+
+    private fun dialog(): AlertDialog.Builder {
+        val night = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        return AlertDialog.Builder(this, if (night) android.R.style.Theme_DeviceDefault_Dialog_Alert else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+    }
+
+    /** Into the Bookmarks of your DDrive: the app opens on that page, which saves them. */
+    private fun bookmark(links: List<String>) {
+        startActivity(Intent(this, DashboardActivity::class.java)
+            .putExtra(DashboardActivity.EXTRA_MARKS, links.joinToString(" "))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        finish()
+    }
+
+    private fun askFolder(store: Store, uris: List<Uri>, text: String?) {
         val pad = (20 * resources.displayMetrics.density).toInt()
         val folder = EditText(this).apply {
             setText(store.shareFolder)
@@ -53,8 +92,7 @@ class ShareActivity : Activity() {
             uris.isNotEmpty() -> "${uris.size} files"
             else -> "the text"
         }
-        val night = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-        AlertDialog.Builder(this, if (night) android.R.style.Theme_DeviceDefault_Dialog_Alert else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+        dialog()
             .setTitle("Save $what to DDrive")
             .setView(box)
             .setPositiveButton("Save") { _, _ ->
@@ -85,6 +123,11 @@ class ShareActivity : Activity() {
     }
 
     private var waiting: Intent? = null
+
+    companion object {
+        /** A web address as the dashboard takes one (app.js looksLikeLink). */
+        private val LINK = Regex("""^(https?://)?([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?(/\S*)?$|^https?://\S+$""", RegexOption.IGNORE_CASE)
+    }
 
     private fun go(send: Intent) {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(send) else startService(send)
