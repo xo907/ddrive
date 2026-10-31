@@ -82,6 +82,18 @@ class CopiesTest(unittest.TestCase):
                 mock.patch.object(copies.sys, "platform", "win32"):
             self.assertEqual(AUTOSTART_ROOT(), lite.SOURCE_ROOT)
 
+    def test_the_drive_waits_for_the_host_behind_a_proxy(self):
+        answers = [lite.HostError(0, "no network"), lite.HostError(502, "Bad Gateway"), lite.HostError(401, "Signed out")]
+
+        class Client:
+            def request(self, method, path):
+                raise answers.pop(0)
+        with mock.patch.object(lite.time, "sleep", lambda s: None):
+            self.assertTrue(lite._wait_for_host(Client(), 60))         # (a refusal is the host itself: it is up)
+            self.assertEqual(answers, [])
+            answers.append(lite.HostError(502, "Bad Gateway"))
+            self.assertFalse(lite._wait_for_host(Client(), 0))
+
     def test_lite_refuses_what_starts_but_not_what_only_looks(self):
         out = io.StringIO()
         with mock.patch.object(copies, "refusal", lambda: "an older copy"), \

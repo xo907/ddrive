@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.29.1 (2026-10-31)
+
+- **Lite brings the drive back after an update even when the host is down.** A Lite that updated itself while the host was down (a proxy in front of it answering 502) tried three times to show the drive again, gave up, and kept only folder syncing: the drive letter stayed gone after the host came back. Now it waits for the host to be up (up to a week), then shows the drive. The wait at logon (`lite mount --wait`) also counts a proxy's 502, 503 or 504 as not up yet; it took those for the host's answer.
+
 ## 3.29.0 (2026-10-30)
 
 - **Share links from other apps straight into your Bookmarks (Android app).** In any app's Share menu, **Bookmark in DDrive** saves the link in your Bookmarks: the DDrive app opens on that page and saves it with its preview, sealed on the phone for an end-to-end encrypted account like everything else there. Sharing a link to **Save to DDrive** now asks too: **Bookmark it**, or **Save as a file** into a folder as before. Several links in what was shared are each saved. Needs the host on 3.29.0 (the app says so when it isn't) and the app 3.29.0.

@@ -887,19 +887,23 @@ def cmd_connect(args):
 
 
 WAIT_AT_LOGON = 600             # seconds the drive started at logon waits for the network and the host
+WAIT_AT_RENEW = 7 * 86400       # ...and the one started again with new code (the host may be down for a while)
+NOT_UP = (0, 502, 503, 504)     # no answer, or one from a proxy in front of a host that isn't running
 
 
 def _wait_for_host(client, seconds):
-    """Until the host answers at all (any answer, a refusal too), for up to `seconds`: just after logon the network
-    is often not there yet, and the drive gave up at once."""
+    """Until the host itself answers (a refusal too), for up to `seconds`: True once it does. Just after logon the
+    network is often not there yet, and a host behind a proxy that is down answers 502: the drive gave up at once."""
     end = time.time() + seconds
     while True:
         try:
             client.request("GET", "/api/status")
-            return
+            return True
         except HostError as e:
-            if e.status or time.time() > end:
-                return
+            if e.status not in NOT_UP:
+                return True
+            if time.time() >= end:
+                return False
         time.sleep(5)
 
 
@@ -1024,6 +1028,13 @@ def cmd_renew(args):
             _wait_gone(old, 10)
             if unmount:
                 unmount(normalize_mount_point(load_settings().get("mount_point") or ""), lazy=True)
+        try:
+            client = client_from(load_settings())
+        except HostError:
+            client = None
+        if client and not _wait_for_host(client, 0):
+            tell(f"Waiting for the host to be up to start the drive with DDrive {__version__}…")
+            _wait_for_host(client, WAIT_AT_RENEW)
         for attempt in range(3):
             tell(f"Starting the drive with DDrive {__version__}…" + (f" (try {attempt + 1})" if attempt else ""))
             if cmd_mount(argparse.Namespace(mount=None, background=True, verbose=False)) == 0 and _mount_pid():
