@@ -12,6 +12,7 @@ Data flow
 """
 
 import bisect
+import collections
 import errno
 import logging
 import os
@@ -33,6 +34,7 @@ log = logging.getLogger("ddrive.fs")
 
 O_ACCMODE = 3
 O_TRUNC = getattr(os, "O_TRUNC", 0x200)
+CHUNK_MAPS = 4096       # files whose list of pieces is kept in memory (the ones used last)
 
 
 def split_path(path):
@@ -81,7 +83,7 @@ class DDriveFS(Operations):
         self.open_nodes = {}
         self.handles = {}               # fh -> (nid, writable)
         self._next_fh = 0
-        self._chunk_maps = {}
+        self._chunk_maps = collections.OrderedDict()     # nid -> (offsets, pieces, size), the CHUNK_MAPS used last
         self._read_ends = {}        # nid -> where the last read ended (a read starting there is sequential)
         self.uploader = None
         self.capacity = 1 << 50         # advertised size: 1 PiB
@@ -386,6 +388,12 @@ class DDriveFS(Operations):
                     offsets.append(pos)
                     pos += c["size"]
                 m = self._chunk_maps[nid] = (offsets, chunks, pos)
+                # (a host keeps running for weeks: every file read or written once, an end-to-end account's
+                # sealed objects and changes too, stayed in memory)
+                while len(self._chunk_maps) > CHUNK_MAPS:
+                    self._chunk_maps.popitem(last=False)
+            else:
+                self._chunk_maps.move_to_end(nid)
             return m
 
     def _materialize(self, on, truncate_to=None):

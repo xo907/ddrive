@@ -43,29 +43,44 @@ def _memory_linux():
     return out
 
 
-def _memory_windows():
-    import ctypes
-    from ctypes import wintypes
-    out = {}
-    try:
+_WIN = None
+
+
+def _win_api():
+    """Windows' memory calls and their structures, made once: ctypes keeps every structure class made (asked for
+    every 2 seconds by the status bot, a new one each time added up)."""
+    global _WIN
+    if _WIN is None:
+        import ctypes
+        from ctypes import wintypes
+
         class Counters(ctypes.Structure):
             _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
                 (name, ctypes.c_size_t) for name in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
                                                      "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
                                                      "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
-        c = Counters()
-        c.cb = ctypes.sizeof(c)
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.GetCurrentProcess.restype = wintypes.HANDLE
-        get = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
-        get.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
-        if get(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
-            out["process"] = int(c.WorkingSetSize)
 
         class Status(ctypes.Structure):
             _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD)] + [
                 (name, ctypes.c_ulonglong) for name in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile",
                                                         "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        get = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
+        get.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        _WIN = (Counters, Status, k32, get)
+    return _WIN
+
+
+def _memory_windows():
+    import ctypes
+    out = {}
+    try:
+        Counters, Status, k32, get = _win_api()
+        c = Counters()
+        c.cb = ctypes.sizeof(c)
+        if get(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            out["process"] = int(c.WorkingSetSize)
         s = Status()
         s.dwLength = ctypes.sizeof(s)
         if k32.GlobalMemoryStatusEx(ctypes.byref(s)):

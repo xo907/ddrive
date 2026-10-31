@@ -19,6 +19,10 @@ KillSignal=SIGTERM
 TimeoutStopSec=60
 Restart=on-failure
 RestartSec=10
+# A ceiling: past it only DDrive is stopped (and started again), not the whole server left too busy
+# swapping to answer at all, SSH included.
+MemoryHigh=60%
+MemoryMax=75%
 
 [Install]
 WantedBy=default.target

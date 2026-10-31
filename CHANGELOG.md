@@ -3,6 +3,13 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.29.2 (2026-10-31)
+
+- **A host doesn't run out of memory when every account uploads at once.** Each account on a host has a drive of its own, and each drive's uploader sent up to 16 pieces at a time, sized as if it were alone (a piece takes about four times its 9 MB while it is sent). After the host had been down, every computer's backlog arrived together and a small server ran out of memory: DDrive was killed, or the server got so busy swapping that it stopped answering, SSH too. Now one budget counts the pieces in flight for the whole program: about a sixteenth of the memory (7 pieces on a 4 GB server), at least 2.
+- **The list of pieces of every file used stays bounded.** A host kept the list of pieces of every file read or written since it started (for an end-to-end account, every sealed object and every change is a file); now the 4096 used last.
+- **The systemd service has a memory ceiling** (`MemoryHigh=60%`, `MemoryMax=75%` in `ddrive.service`): past it only DDrive is stopped and started again, and the server stays reachable. A service made from the earlier file needs making again (or those two lines added) to have it.
+- On Windows, the memory figures the status bot asks for every 2 seconds no longer leave a little memory behind each time.
+
 ## 3.29.1 (2026-10-31)
 
 - **Lite brings the drive back after an update even when the host is down.** A Lite that updated itself while the host was down (a proxy in front of it answering 502) tried three times to show the drive again, gave up, and kept only folder syncing: the drive letter stayed gone after the host came back. Now it waits for the host to be up (up to a week), then shows the drive. The wait at logon (`lite mount --wait`) also counts a proxy's 502, 503 or 504 as not up yet; it took those for the host's answer.

@@ -32,6 +32,33 @@ class _Interrupted(Exception):
     pass
 
 
+_budget, _budget_lock = None, threading.Lock()
+
+
+def _total_memory():
+    try:
+        from . import resources
+        f = resources._memory_windows if os.name == "nt" else resources._memory_linux
+        return int((f() or {}).get("total") or 0)
+    except Exception:
+        return 0
+
+
+def piece_budget(chunk_size):
+    """How many pieces may be in memory being uploaded at once in this whole program: one count for every drive in
+    it. A host has a drive for each account, each with an uploader of its own that sized itself as if it were
+    alone; after the host was down, every one of them took up its backlog at once, and a small server ran out of
+    memory (killed, or so busy swapping that nothing answered). A sixteenth of the memory, a piece taking about four
+    times its size while it is sent; at least 2, at most MAX_PIECE_WORKERS."""
+    global _budget
+    with _budget_lock:
+        if _budget is None:
+            total = _total_memory()
+            n = total // 16 // (4 * max(1, int(chunk_size or 1))) if total else MAX_PIECE_WORKERS
+            _budget = threading.BoundedSemaphore(max(2, min(MAX_PIECE_WORKERS, n)))
+        return _budget
+
+
 def _free_memory():
     """Bytes of memory free right now, or 0 if that can't be told."""
     try:
@@ -506,6 +533,10 @@ class Uploader:
     def _upload_piece(self, job, path, i, allow_reuse=True):
         if not self._running:
             raise _Interrupted("shutting down")
+        with piece_budget(job.chunk_size):
+            return self._upload_read_piece(job, path, i, allow_reuse)
+
+    def _upload_read_piece(self, job, path, i, allow_reuse):
         data = self._read_piece(path, i, job.chunk_size)
         sha256 = hashlib.sha256(data).hexdigest()
         reused = self._reuse(sha256, len(data)) if allow_reuse else None
@@ -589,11 +620,13 @@ class Uploader:
             # than the group can lose: it is uploaded again where the group has fewest.
             crowded = len(lay.chans) > 1 and lay.worst(held + [c["message_id"]]) > m
             if c["message_id"] in seen or crowded:
-                data = self._read_piece(path, i, job.chunk_size)
-                if hashlib.sha256(data).hexdigest() != c["sha256"]:
-                    raise _Interrupted("file changed during upload")
-                chan = lay.fill(held, 1)[0] if len(lay.chans) > 1 else None
-                job.done[i] = self._store_piece(job, i, data, c["sha256"], chan)
+                with piece_budget(job.chunk_size):
+                    data = self._read_piece(path, i, job.chunk_size)
+                    if hashlib.sha256(data).hexdigest() != c["sha256"]:
+                        raise _Interrupted("file changed during upload")
+                    chan = lay.fill(held, 1)[0] if len(lay.chans) > 1 else None
+                    job.done[i] = self._store_piece(job, i, data, c["sha256"], chan)
+                    del data
                 self._save_progress(job.nid, job.version, job.size, job.chunk_size, job.done, k, job.parity)
             seen.add(job.done[i]["message_id"])
             held.append(job.done[i]["message_id"])
