@@ -894,7 +894,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
             if method == "GET" and route in ("/", "/index.html", "/app.css", "/app.js", "/logo.svg", "/icon.png",
                                              "/manifest.webmanifest", "/share-upload.js", "/signin.js",
                                              "/vaultcore.js", "/e2e.js", "/e2e-api.js", "/sw.js", "/vshare.js", "/vshare.css",
-                                             "/moving.js", "/accountmove.js", "/verify.js"):
+                                             "/moving.js", "/accountmove.js", "/verify.js", "/notesmd.js"):
                 if route in ("/", "/index.html") and self._who() is None:
                     return self._signin()
                 # An end-to-end encrypted account gets the same dashboard as everybody: e2e-api.js, which it

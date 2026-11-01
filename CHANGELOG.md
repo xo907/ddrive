@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.30.0 (2026-11-01)
+
+- **Notes in Markdown, with code in colours.** A note has **Write**, **Preview** and **Split** (both side by side; remembered in this browser, Ctrl+E switches). Preview shows headings, bold, italic, strikethrough, highlights (`==text==`), lists, checklists you can tick (the note is saved), quotes, tables, links and code. A code block (```` ``` ````, or the **{ }** button: paste your code into it) is coloured the way code editors do it, for JavaScript, TypeScript, Python, Shell, PowerShell, C/C++, C#, Java/Kotlin, Go, Rust, Swift, PHP, Ruby, SQL, JSON, YAML, TOML/INI, CSS, HTML/XML, Diff and Dockerfile (named after the ```` ``` ````, e.g. ```` ```python ````, or guessed), with a **Copy** button. A toolbar writes the Markdown (Ctrl+B, Ctrl+I too), and Tab indents inside a code block. Nothing in a note is taken as HTML, so a note can't run anything in the dashboard. Works the same in end-to-end encrypted accounts and in the Android app.
+
 ## 3.29.3 (2026-10-31)
 
 - **The log says what a host was doing when its memory went up.** A host was killed for memory (1.1 GB, 45 minutes after it started) with nothing in its log about why. From 400 MB on, and each time it has grown 150 MB more, a warning (ddrive.memory) says how much it uses and how much the server has free, the requests being answered and for how long (the path only, nothing of the query), how many accounts have their drive open, and where in DDrive each busy thread is.

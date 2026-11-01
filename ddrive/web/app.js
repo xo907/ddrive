@@ -2781,12 +2781,139 @@ function noteEditor(n) {
   body.addEventListener("keydown", (e) => {
     if (e.key.toLowerCase() === "s" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNote("now"); }
   });
+  const md = noteMarkdown(body);
   loadNoteText(body, n.state);
-  return h("div", { class: "note-editor" },
+  const editor = h("div", { class: "note-editor" },
     h("div", { class: "note-bar" },
       h("a", { class: "icon-btn note-back", href: "#/notes", "aria-label": "All notes" }, icon("back")),
-      state, h("div", { class: "actions" }, saveBtn, more)),
-    title, h("div", { class: "note-conflict", id: "note-conflict", hidden: true }), body);
+      state, h("div", { class: "actions" }, md.modes, saveBtn, more)),
+    title, h("div", { class: "note-conflict", id: "note-conflict", hidden: true }), md.tools,
+    h("div", { class: "note-panes" }, body, md.preview));
+  md.attach(editor);
+  return editor;
+}
+
+// A note is Markdown (its file is .md): written as text (Write), seen formatted (Preview), or both side by side
+// (Split), remembered in this browser. Code blocks are coloured, with a Copy button (notesmd.js, fetched when first
+// needed). The toolbar writes the Markdown for you.
+const NOTE_MODES = [["write", "Write"], ["preview", "Preview"], ["split", "Split"]];
+function noteMarkdown(body) {
+  let mode = "write";
+  try { mode = localStorage.getItem("dd-note-view") || "write"; } catch { /* (not kept: Write) */ }
+  if (!NOTE_MODES.some(([m]) => m === mode)) mode = "write";
+  let editor = null, timer = null;
+  const preview = h("div", { class: "note-preview md", "aria-label": "Preview" });
+  const draw = async () => {
+    if (mode === "write") return;
+    try { await needs("/notesmd.js"); } catch (e) { preview.textContent = e.message; return; }
+    preview.innerHTML = window.ddMarkdown.render(body.value) || '<p class="muted">Nothing written yet.</p>';
+  };
+  const buttons = NOTE_MODES.map(([m, label]) => h("button", { type: "button", role: "radio", "data-mode": m, class: m === "split" ? "note-split" : "",
+                                                                "aria-checked": String(m === mode), onclick: () => setMode(m) }, label));
+  const modes = h("div", { class: "seg note-modes", role: "radiogroup", "aria-label": "View", title: "Ctrl+E: Write / Preview" }, ...buttons);
+  function setMode(m) {
+    mode = m;
+    try { localStorage.setItem("dd-note-view", m); } catch { /* (for this time only) */ }
+    for (const b of buttons) b.setAttribute("aria-checked", String(b.dataset.mode === m));
+    if (editor) editor.dataset.mode = m;
+    draw();
+    if (m !== "preview") body.focus();
+  }
+  // The toolbar: Markdown put around what is selected (or where the cursor is), kept in the undo history.
+  const put = (text, selFrom, selTo) => {
+    body.focus();
+    const start = body.selectionStart;
+    if (!document.execCommand || !document.execCommand("insertText", false, text)) {
+      body.setRangeText(text, body.selectionStart, body.selectionEnd, "end");
+      body.dispatchEvent(new Event("input"));
+    }
+    if (selFrom !== undefined) body.setSelectionRange(start + selFrom, start + selTo);
+  };
+  const wrap = (before, after, empty) => {
+    const sel = body.value.slice(body.selectionStart, body.selectionEnd) || empty;
+    put(before + sel + after, before.length, before.length + sel.length);
+  };
+  const lines = (prefix) => {
+    const v = body.value;
+    const from = v.lastIndexOf("\n", body.selectionStart - 1) + 1;
+    let to = v.indexOf("\n", Math.max(body.selectionEnd - (body.selectionEnd > body.selectionStart ? 1 : 0), from));
+    if (to < 0) to = v.length;
+    body.setSelectionRange(from, to);
+    let k = 0;
+    const text = v.slice(from, to).split("\n").map((l) => (typeof prefix === "function" ? prefix(l, ++k) : prefix + l)).join("\n");
+    put(text, 0, text.length);
+  };
+  const FENCE = "```";
+  const codeBlock = () => {
+    const v = body.value, a = body.selectionStart, sel = v.slice(a, body.selectionEnd).replace(/\n$/, "");
+    const lead = a > 0 && v[a - 1] !== "\n" ? "\n" : "";
+    const at = lead.length + FENCE.length + 1;
+    put(`${lead}${FENCE}\n${sel}${sel ? "\n" : "\n"}${FENCE}\n`, at, at + sel.length);
+  };
+  const tool = (label, title, run, cls = "") => h("button", { type: "button", class: "note-tool " + cls, title, "aria-label": title,
+                                                             onmousedown: (e) => e.preventDefault(), onclick: run }, label);
+  const tools = h("div", { class: "note-tools", role: "toolbar", "aria-label": "Formatting" },
+    tool("B", "Bold (Ctrl+B)", () => wrap("**", "**", "bold"), "b"),
+    tool("I", "Italic (Ctrl+I)", () => wrap("*", "*", "italic"), "i"),
+    tool("S", "Strikethrough", () => wrap("~~", "~~", "text"), "s"),
+    tool("H", "Heading", () => lines((l) => (/^#{1,5} /.test(l) ? "#" + l : /^#{6} /.test(l) ? l.replace(/^#+ /, "") : "## " + l)), "h"),
+    h("span", { class: "note-tool-gap" }),
+    tool("•", "Bulleted list", () => lines("- ")),
+    tool("1.", "Numbered list", () => lines((l, k) => `${k}. ${l}`)),
+    tool("☐", "Checklist", () => lines("- [ ] ")),
+    tool("❝", "Quote", () => lines("> ")),
+    h("span", { class: "note-tool-gap" }),
+    tool(icon("link"), "Link", () => { const sel = body.value.slice(body.selectionStart, body.selectionEnd) || "text"; put(`[${sel}](https://)`, sel.length + 3, sel.length + 11); }),
+    tool("</>", "Code in a line", () => wrap("`", "`", "code"), "mono"),
+    tool("{ }", "Code block: paste code into it (```python on its first line gives it Python's colours)", codeBlock, "mono"));
+  body.addEventListener("input", () => {
+    if (mode === "write") return;
+    clearTimeout(timer);
+    timer = setTimeout(draw, 120);
+  });
+  body.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+    if (mod && k === "b") { e.preventDefault(); wrap("**", "**", "bold"); }
+    else if (mod && k === "i") { e.preventDefault(); wrap("*", "*", "italic"); }
+    else if (mod && k === "e") { e.preventDefault(); setMode(mode === "preview" ? "write" : "preview"); }
+    else if (e.key === "Tab" && !mod && !e.altKey && inFence(body.value, body.selectionStart)) {
+      e.preventDefault();                       // (in a code block Tab indents; elsewhere it moves on as usual)
+      if (e.shiftKey) lines((l) => l.replace(/^( {1,2}|\t)/, ""));
+      else if (body.selectionStart === body.selectionEnd) put("  ");
+      else lines("  ");
+    }
+  });
+  document.addEventListener("keydown", function previewKeys(e) {
+    if (!preview.isConnected) return document.removeEventListener("keydown", previewKeys);
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e" && mode === "preview" && document.activeElement !== body) {
+      e.preventDefault();
+      setMode("write");
+    }
+  });
+  preview.addEventListener("click", async (e) => {
+    const copy = e.target.closest(".md-copy");
+    if (!copy) return;
+    const code = copy.closest(".md-code").querySelector("code").textContent.replace(/\n$/, "");
+    try { await navigator.clipboard.writeText(code); }
+    catch { const t = h("textarea", { class: "offscreen" }); t.value = code; document.body.append(t); t.select(); document.execCommand("copy"); t.remove(); }
+    copy.textContent = "Copied";
+    setTimeout(() => { copy.textContent = "Copy"; }, 1500);
+  });
+  preview.addEventListener("change", (e) => {
+    const box = e.target.closest(".md-task");
+    if (!box) return;
+    body.value = window.ddMarkdown.toggleTask(body.value, +box.dataset.line);
+    body.dispatchEvent(new Event("input"));            // (saved like typing)
+    draw();
+  });
+  return { modes, tools, preview, draw, attach(el) { editor = el; el.dataset.mode = mode; note.redraw = draw; draw(); } };
+}
+
+/** True when position `at` of a note is inside a ``` code block. */
+function inFence(text, at) {
+  let open = false;
+  for (const line of text.slice(0, at).split("\n").slice(0, -1)) if (/^\s*(```|~~~)/.test(line)) open = !open;
+  return open;
 }
 
 function setState(text) { const el = $("#note-state"); if (el) el.textContent = text; }
@@ -2814,6 +2941,7 @@ async function loadNoteText(body, state) {
   body.value = text;
   if (document.activeElement === body) body.setSelectionRange(...pos);
   setState(syncedText(state));
+  if (note.redraw) note.redraw();
 }
 
 async function saveNote(mode, unloading) {

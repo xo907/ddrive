@@ -11,7 +11,7 @@
   const readable = (b, max = 64) => Array.from(b.subarray(0, max), (x) => (x >= 32 && x < 127 ? String.fromCharCode(x) : "·")).join("") + (b.length > max ? "…" : "");
   const sha256 = async (b) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", b)));
   const REPO = "https://github.com/xo907/ddrive";
-  const SCRIPTS = ["vaultcore.js", "e2e-api.js", "app.js", "verify.js", "e2e.js", "sw.js", "moving.js", "accountmove.js"];
+  const SCRIPTS = ["vaultcore.js", "e2e-api.js", "app.js", "verify.js", "e2e.js", "sw.js", "moving.js", "accountmove.js", "notesmd.js"];
 
   const P = (...text) => h("p", { class: "vf-p" }, ...text);
   const small = (...text) => h("p", { class: "vf-p muted small" }, ...text);

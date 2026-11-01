@@ -458,6 +458,45 @@ class BrowserTest(helpers.DriveTest):
         p.wait_for_selector("dialog[open] >> text=Forgot the password?")
         self.assertEqual(self.errors, [])
 
+    def test_a_note_in_markdown_with_code(self):
+        p = self.page
+        self.sign_up_e2e()
+        self.assertEqual(self.api("POST", "/api/mkdir", {"path": "/Notes"})["status"], 200)
+        text = ("# Plan\n\nSome **bold** text and `inline`.\n<img src=x onerror=alert(1)>\n\n- [ ] buy milk\n- [x] done\n\n"
+                "```python\ndef hello(name):  # greet\n    return f\"hi {name}\"\n```\n")
+        self.upload_text("/Notes/Plan.md", text)
+        p.evaluate("() => localStorage.setItem('dd-note-view', 'preview')")
+        p.goto(self.base + "/#/notes/Plan.md")
+        p.wait_for_selector(".note-preview .md-code")
+        self.assertEqual(p.inner_text(".note-preview h1"), "Plan")
+        self.assertEqual(p.query_selector_all(".note-preview img"), [])                 # (HTML in a note is only text)
+        self.assertIn("<img src=x", p.inner_text(".note-preview"))
+        self.assertEqual(p.inner_text(".md-code .tk-k"), "def")                         # coloured as Python
+        self.assertEqual(p.inner_text(".md-code-bar span"), "Python")
+        os.makedirs(os.path.join(tempfile.gettempdir(), "dd-shots"), exist_ok=True)
+        p.screenshot(path=os.path.join(tempfile.gettempdir(), "dd-shots", "note-preview.png"), full_page=True)
+        # Copy puts the code itself on the clipboard
+        self.ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+        p.click(".md-copy")
+        p.wait_for_selector(".md-copy:text('Copied')")
+        copied = p.evaluate("navigator.clipboard.readText()").replace("\r\n", "\n")    # (Windows' clipboard has \r\n)
+        self.assertEqual(copied, 'def hello(name):  # greet\n    return f"hi {name}"')
+        # Ticking a task changes the note's text, and it is saved
+        p.click(".md-task >> nth=0")
+        p.wait_for_function("() => document.querySelector('.note-body').value.includes('- [x] buy milk')")
+        p.wait_for_function("() => !note.dirty && !note.saving")
+        self.assertIn("- [x] buy milk", self.download("/Notes/Plan.md")[1].decode())
+        # Write: the toolbar writes the Markdown
+        p.click(".note-modes button[data-mode=write]")
+        p.evaluate("() => { const b = document.querySelector('.note-body'); b.setSelectionRange(2, 6); }")    # "Plan"
+        p.click(".note-tool.b")
+        self.assertTrue(p.evaluate("document.querySelector('.note-body').value.startsWith('# **Plan**')"))
+        self.assertEqual(p.evaluate("localStorage.getItem('dd-note-view')"), "write")
+        p.click(".note-modes button[data-mode=split]")
+        p.emulate_media(color_scheme="dark")
+        p.wait_for_selector(".note-preview .md-code")
+        p.screenshot(path=os.path.join(tempfile.gettempdir(), "dd-shots", "note-split-dark.png"))
+
     def test_notes_and_bookmarks_with_a_password_in_an_end_to_end_account(self):
         p = self.page
         self.sign_up_e2e()
