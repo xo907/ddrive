@@ -1268,6 +1268,19 @@ class WebTest(helpers.DriveTest):
             site.server_close()
 
 
+class VersionedFilesTest(helpers.unittest.TestCase):
+    def test_every_file_of_the_page_is_asked_for_by_its_version(self):
+        # index.html names app.js by its version, and app.js the parts it fetches later: the browser keeps them all for
+        # good and asks again only for one that changed (a new version is a new address).
+        from ddrive import web
+        H = web._Handler
+        app_js = H._page_file("app.js")
+        notes = H._static_file("notesmd.js")[4].strip('"')
+        self.assertIn(f'needs("/notesmd.js?v={notes}")', app_js[2].decode("utf-8"))
+        self.assertIn(f'/app.js?v={app_js[4].strip(chr(34))}"', H._page_file("index.html")[2].decode("utf-8"))
+        self.assertIs(H._page_file("app.js"), app_js)                  # (worked out once, until a file changes)
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

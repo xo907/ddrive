@@ -465,6 +465,8 @@ class BrowserTest(helpers.DriveTest):
         text = ("# Plan\n\nSome **bold** text and `inline`.\n<img src=x onerror=alert(1)>\n\n- [ ] buy milk\n- [x] done\n\n"
                 "```python\ndef hello(name):  # greet\n    return f\"hi {name}\"\n```\n")
         self.upload_text("/Notes/Plan.md", text)
+        self.upload_text("/Notes/Groceries.md", "- [ ] eggs\n- [ ] **bread**\n- [x] coffee")
+        self.upload_text("/Notes/Ideas.md", "## Ideas\nA *calmer* notes page, with `code` in it.")
         p.evaluate("() => localStorage.setItem('dd-note-view', 'preview')")
         p.goto(self.base + "/#/notes/Plan.md")
         p.wait_for_selector(".note-preview .md-code")
@@ -492,6 +494,9 @@ class BrowserTest(helpers.DriveTest):
         p.click(".note-tool.b")
         self.assertTrue(p.evaluate("document.querySelector('.note-body').value.startsWith('# **Plan**')"))
         self.assertEqual(p.evaluate("localStorage.getItem('dd-note-view')"), "write")
+        self.assertEqual(p.inner_text(".note-group >> nth=0"), "TODAY")                  # (the list in parts, by when)
+        self.assertIn("eggs bread coffee", p.inner_text(".note-list"))                  # (previews without the Markdown signs)
+        p.screenshot(path=os.path.join(tempfile.gettempdir(), "dd-shots", "note-write.png"))
         p.click(".note-modes button[data-mode=split]")
         p.emulate_media(color_scheme="dark")
         p.wait_for_selector(".note-preview .md-code")

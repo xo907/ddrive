@@ -182,7 +182,14 @@
                  ["download-mirror", "Download mirror", "down", "The device's folder becomes an exact copy of the one here. What is removed there is kept 30 days."]];
   const whenText = (j) => j.trigger === "interval" ? (j.every >= 60 ? `every ${Math.floor(j.every / 60)} h${j.every % 60 ? ` ${j.every % 60} min` : ""}` : `every ${j.every} min`)
     : j.trigger === "daily" ? `daily at ${j.at}` : j.trigger;
-  async function devices() {
+  // Asked for by several parts of the page at once (status, Home): one request answers those within 2 seconds.
+  let devicesLast = null;
+  function devices() {
+    if (!devicesLast || Date.now() - devicesLast.at > 2000) devicesLast = { at: Date.now(), p: devicesNow() };
+    devicesLast.p.catch(() => { devicesLast = null; });
+    return devicesLast.p;
+  }
+  async function devicesNow() {
     const got = await DDV.call("/api/vault/sync"), out = [];
     for (const d of got.devices) {
       try {
@@ -207,8 +214,8 @@
     if (!d) throw new Fail(404, "That device no longer syncs folders with this account. Turn folder syncing on again there.");
     return d;
   }
-  const tell = async (d, message) => DDV.call("/api/vault/sync/tell", { method: "POST", json: { device: d.id, sealed: await DDV.sealMessage(v.meta, message) } });
-  const saveJobs = async (d, jobs) => DDV.call("/api/vault/sync/jobs", { method: "POST", json: { device: d.id, rev: d.rev, jobs: await DDV.sealMessage(v.meta, jobs) } });
+  const tell = async (d, message) => (devicesLast = null, DDV.call("/api/vault/sync/tell", { method: "POST", json: { device: d.id, sealed: await DDV.sealMessage(v.meta, message) } }));
+  const saveJobs = async (d, jobs) => (devicesLast = null, DDV.call("/api/vault/sync/jobs", { method: "POST", json: { device: d.id, rev: d.rev, jobs: await DDV.sealMessage(v.meta, jobs) } }));
   const jobOf = (d, id) => { const j = d.raw.find((x) => x.id === id); if (!j) throw new Fail(404, "That folder is no longer synced"); return j; };
 
   // ------------------------------------------------------------ the answers
@@ -315,16 +322,20 @@
     return { looked, ...copies() };
   };
 
-  let statusMark = "", statusText = "", devicesAsked = 0;
+  let statusMark = "", statusText = "", statusAt = 0, devicesAsked = 0;
   const GET = {
     async status() {
       // Asked every few seconds. The server is told which answer this page has (If-None-Match) and
       // mostly says "the same" in a few bytes; what is added here is only worked out when it is needed.
-      const r = await realFetch("/api/status", statusMark ? { ...cred, headers: { ...(cred.headers || {}), "If-None-Match": statusMark } } : cred);
-      if (r.status !== 304) {
-        if (!r.ok) return r;
-        statusText = await r.text();
-        statusMark = r.headers.get("ETag") || "";
+      // (the one the page was opened with is used as it is for a few seconds: not asked for again at once)
+      if (!(statusText && Date.now() - statusAt < 4000)) {
+        statusAt = 0;
+        const r = await realFetch("/api/status", statusMark ? { ...cred, headers: { ...(cred.headers || {}), "If-None-Match": statusMark } } : cred);
+        if (r.status !== 304) {
+          if (!r.ok) return r;
+          statusText = await r.text();
+          statusMark = r.headers.get("ETag") || "";
+        }
       }
       const s = JSON.parse(statusText);
       s.stats = { ...s.stats, ...stats() };
@@ -363,10 +374,11 @@
       return s;
     },
     async home() {
-      const ds = await devices().catch(() => []), jobs = ds.flatMap((d) => d.jobs);
+      const [ds, shares] = await Promise.all([devices().catch(() => []), DDV.call("/api/vault/shares").then((r) => r.items.length, () => 0)]);
+      const jobs = ds.flatMap((d) => d.jobs);
       return { host: "", mount: "", version: (E.status || {}).version || "", stats: stats(), starred: starred().slice(0, 12), recent: recent(8), history: activity().slice(0, 8),
                sync: { jobs: jobs.length, running: jobs.filter((j) => j.status.state === "running").length, problems: jobs.filter((j) => j.status.state === "error").length },
-               devices: Math.max(1, ds.length), shares: await DDV.call("/api/vault/shares").then((r) => r.items.length, () => 0), dav: false };
+               devices: Math.max(1, ds.length), shares, dav: false };
     },
     async list(q) {
       const path = clean(q.get("path")), n = at(path, "dir");
@@ -667,6 +679,7 @@
     async "sync/stop"(b) { const d = await device(b.device); await tell(d, { do: "stop", id: jobOf(d, b.id).id }); return { ok: true }; },
     async logout() {
       await DDV.keys.clear().catch(() => null);
+      try { localStorage.removeItem("dd-e2e-who"); } catch (e) { /* (nothing kept) */ }
       if (navigator.serviceWorker) for (const r of await navigator.serviceWorker.getRegistrations().catch(() => [])) await r.unregister().catch(() => null);
       return realFetch("/api/logout", { method: "POST", ...cred, headers: { "X-DD": "1", "Content-Type": "application/json" }, body: "{}" });
     },
@@ -1582,31 +1595,55 @@
     // What is being done while the page says "Connecting" (app.js shows it, if it takes long enough to be seen).
     const stage = (step, detail) => { E.connecting = { step, detail: detail || "" }; window.dispatchEvent(new Event("dd-connecting")); };
     stage("server");
+    // While the server is asked, the list this browser kept for the account it opened last is opened already
+    // (taken from storage and unsealed): the two take about as long, and need not wait for each other.
+    let guess = "";
+    try { guess = localStorage.getItem("dd-e2e-who") || ""; } catch (e) { guess = ""; }
+    const early = guess && DDV.usable ? (async () => {
+      const meta = await DDV.keys.get().catch(() => null);
+      if (!meta) return null;
+      const vault = new DDV.Vault(meta);
+      return { meta, vault, had: await vault.restore(guess) };
+    })().catch(() => null) : null;
     try {
       const r = await realFetch("/api/status", cred);
       if (SERVER && r.status === 403) { location.replace("/"); return new Promise(() => {}); }     // not an admin account
       if (!r.ok) return;
-      s = await r.json();
+      const text = await r.text();
+      s = JSON.parse(text);
+      statusText = text;                       // (GET.status answers the dashboard's first ask with it)
+      statusMark = r.headers.get("ETag") || "";
+      statusAt = Date.now();
     } catch (e) { return; }
     E.firstStatus = s;                         // (the dashboard starts with it instead of asking again)
     if (!s.e2e) return;
     E.status = s;
     if (!DDV.usable) { document.body.innerHTML = '<p style="padding:40px">An end-to-end encrypted account can only be opened on an https address (or on the computer itself): a browser doesn\'t encrypt on plain http.</p>'; return new Promise(() => {}); }
     stage("key");
-    const meta = await DDV.keys.get().catch(() => null);
+    const got = early && s.account === guess ? await early : null;
+    const meta = got ? got.meta : await DDV.keys.get().catch(() => null);
     if (!meta) return unlock("");
-    const vault = new DDV.Vault(meta);
+    const vault = got ? got.vault : new DDV.Vault(meta);
     stage("list");
     // The list as this browser last opened it, if it kept one: then only what changed since is fetched.
-    const had = await vault.restore(s.account);
-    vault.heard = (x) => stage("list", had ? "kept in this browser; getting what changed since" : x.nodes.size ? `${x.nodes.size.toLocaleString()} files and folders so far` : "");
-    if (had) vault.heard(vault);
-    try { await vault.sync(); }
-    catch (e) {
-      if (e instanceof DDV.Gone) { location.reload(); return new Promise(() => {}); }
-      return unlock(/can't be opened/.test(e.message) ? "The key kept in this browser is for another account." : `Your files could not be loaded: ${e.message}`);
+    const had = got ? got.had : await vault.restore(s.account);
+    if (had) {
+      // The page is drawn at once from the list this browser kept; what changed since (other devices, the
+      // phone) is fetched behind it and shown when it is in (app.js listens for dd-vault-synced). A change
+      // made here meanwhile waits for it first (Vault._post syncs before it sends).
+      E.catchingUp = vault.sync().then(() => { window.dispatchEvent(new Event("dd-vault-synced")); }, (e) => {
+        if (e instanceof DDV.Gone) location.reload();
+        else if (/can't be opened/.test(e.message)) unlock("The key kept in this browser is for another account.");
+      });
+    } else {
+      vault.heard = (x) => stage("list", x.nodes.size ? `${x.nodes.size.toLocaleString()} files and folders so far` : "");
+      try { await vault.sync(); }
+      catch (e) {
+        if (e instanceof DDV.Gone) { location.reload(); return new Promise(() => {}); }
+        return unlock(/can't be opened/.test(e.message) ? "The key kept in this browser is for another account." : `Your files could not be loaded: ${e.message}`);
+      }
+      vault.heard = null;
     }
-    vault.heard = null;
     v = E.vault = vault;
     stage("pictures");
     if (navigator.serviceWorker) {
@@ -1628,6 +1665,7 @@
     // The opened list is kept in this browser for the next visit (vaultcore.js, keep): soon after
     // starting, now and then while it changes, and when the page is put away.
     E.who = s.account;
+    try { localStorage.setItem("dd-e2e-who", s.account); } catch (e) { /* (opened after the server answers, next time) */ }
     const keep = () => v.keep(s.account);
     setTimeout(keep, 2500);
     setInterval(keep, 45000);

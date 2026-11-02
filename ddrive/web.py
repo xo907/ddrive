@@ -998,24 +998,44 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
         return got
 
     _VERSIONED = re.compile(r'(src|href)="/([a-z0-9-]+\.(?:js|css|svg|png))"')
+    _NEEDED = re.compile(r'(needs\()"/([a-z0-9-]+\.js)"')      # app.js: the parts fetched when first needed
+    _page_cache = {}
 
     @classmethod
     def _page_file(cls, name):
         """index.html with the address of each of its files carrying that file's version (?v=..), so
-        the browser keeps them for good and asks for a file again only when it has changed."""
+        the browser keeps them for good and asks for a file again only when it has changed; and app.js
+        the same way for the parts it fetches later (needs("/notesmd.js")). Worked out again only when
+        one of those files changed on disk."""
         got = cls._static_file(name)
-        if not name.endswith(".html"):
+        pattern = cls._VERSIONED if name.endswith(".html") else cls._NEEDED if name == "app.js" else None
+        if pattern is None:
             return got
         mtime, size, body, _, etag, ctype = got
+        text = body.decode("utf-8")
+        deps = sorted(set(m.group(2) for m in pattern.finditer(text)))
+        versions = {}
+        for dep in deps:
+            try:
+                versions[dep] = cls._page_file(dep)[4].strip('"')
+            except OSError:
+                pass
+        key = (etag, tuple(sorted(versions.items())))
+        kept = cls._page_cache.get(name)
+        if kept is not None and kept[0] == key:
+            return kept[1]
 
         def versioned(m):
-            try:
-                return f'{m.group(1)}="/{m.group(2)}?v={cls._static_file(m.group(2))[4].strip(chr(34))}"'
-            except OSError:
+            v = versions.get(m.group(2))
+            if v is None:
                 return m.group(0)
-        text = cls._VERSIONED.sub(versioned, body.decode("utf-8")).encode("utf-8")
+            return f'{m.group(1)}="/{m.group(2)}?v={v}"' if pattern is cls._VERSIONED else f'{m.group(1)}"/{m.group(2)}?v={v}"'
+        out = pattern.sub(versioned, text).encode("utf-8")
         import gzip
-        return mtime, size, text, gzip.compress(text, 6, mtime=0), '"' + hashlib.sha256(text).hexdigest()[:20] + '"', ctype
+        result = (mtime, size, out, gzip.compress(out, 6, mtime=0), '"' + hashlib.sha256(out).hexdigest()[:20] + '"', ctype)
+        with cls._static_lock:
+            cls._page_cache[name] = (key, result)
+        return result
 
     def _static(self, name):
         try:

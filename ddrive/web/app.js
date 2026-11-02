@@ -103,6 +103,9 @@ const ICONS = {
   star: '<path d="m10 3 2.1 4.4 4.8.6-3.5 3.3.9 4.8L10 13.8 5.7 16.1l.9-4.8L3.1 8l4.8-.6z"/>',
   grid: '<rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1"/><rect x="11" y="11" width="5.5" height="5.5" rx="1"/>',
   list: '<path d="M4 5.5h12M4 10h12M4 14.5h12"/>',
+  search: '<circle cx="9" cy="9" r="5"/><path d="m13 13 3.5 3.5"/>',
+  sidebar: '<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M8 4v12"/>',
+  compose: '<path d="M10 4H5a1.5 1.5 0 0 0-1.5 1.5v9A1.5 1.5 0 0 0 5 16h9a1.5 1.5 0 0 0 1.5-1.5V10"/><path d="m8.5 11.5.5-2.5 6-6a1.4 1.4 0 0 1 2 2l-6 6z"/>',
   sort: '<path d="M6.5 4v12M3.5 13l3 3 3-3M13.5 16V4M10.5 7l3-3 3 3"/>',
   color: '<path d="M10 3s-5 5.5-5 9a5 5 0 0 0 10 0c0-3.5-5-9-5-9z"/>',
   activity: '<path d="M2.5 10h3l2-5 3.5 10 2-5h4.5"/>',
@@ -537,6 +540,9 @@ async function askStatus() {
   return r.json();
 }
 
+// An end-to-end account's page is drawn from the list the browser kept; when what changed since is in, the
+// status (its rev) says so and what is shown is drawn again (liveCheck).
+window.addEventListener("dd-vault-synced", () => { liveAt = 0; refreshStatus(); });
 let statusSeen = "";                 // the last answer, as text: an unchanged one changes nothing on the page
 async function refreshStatus() {
   let first = null;
@@ -2685,10 +2691,47 @@ window.addEventListener("beforeunload", () => { if (note && note.dirty) saveNote
 const noteTitle = (name) => name.replace(/\.(md|txt)$/i, "");
 const cleanTitle = (t) => (t.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim() || "Untitled").slice(0, 120);
 
+/** What a note says, for its line in the list: its text without the Markdown signs (and without its title). */
+function notePreview(n) {
+  const text = (n.snippet || "")
+    .replace(/```[\w+#.-]*/g, " ").replace(/`([^`]*)`/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(^|\s)(#{1,6}|>|[-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?/g, "$1")
+    .replace(/(\*\*|__|~~|==|\*|_)(\S[^*_~=]*?)\1/g, "$2")
+    .replace(/\s+/g, " ").trim();
+  const t = n.title.trim();
+  return (text.toLowerCase().startsWith(t.toLowerCase()) ? text.slice(t.length) : text).trim();
+}
 function noteItem(n, name) {
   return h("a", { class: "note-item" + (n.name === name ? " on" : ""), href: "#/notes/" + encodeURIComponent(n.name) },
-    h("div", { class: "nt" }, n.locked && icon("lock", "tag-ico"), n.locked && " ", n.title),
-    h("div", { class: "ns" }, h("span", {}, when(n.mtime)), " ", n.snippet.replace(n.title, "").trim() || "Empty note"));
+    h("div", { class: "nt-row" },
+      h("div", { class: "nt" }, n.locked && icon("lock", "tag-ico"), n.title),
+      h("span", { class: "nd" }, when(n.mtime))),
+    h("div", { class: "ns" }, notePreview(n) || h("i", {}, "No more text")));
+}
+/** Which part of the list a note goes in: Today, Yesterday, Previous 7 days, Previous 30 days, then by month (fmtMonth). */
+function noteGroup(mtime) {
+  const d = new Date(), start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000;
+  if (mtime >= start) return "Today";
+  if (mtime >= start - 86400) return "Yesterday";
+  if (mtime >= start - 7 * 86400) return "Previous 7 days";
+  if (mtime >= start - 30 * 86400) return "Previous 30 days";
+  return fmtMonth.format(new Date(mtime * 1000));
+}
+function noteRows(shown, name) {
+  const out = [];
+  let last = "";
+  for (const n of shown) {
+    const g = noteGroup(n.mtime);
+    if (g !== last) { out.push(h("div", { class: "note-group" }, g)); last = g; }
+    out.push(noteItem(n, name));
+  }
+  return out;
+}
+/** The list beside the note can be put away on a wide screen (the note gets the whole width), kept in this browser. */
+function notesWide(on) {
+  if (on !== undefined) { try { localStorage.setItem("dd-notes-wide", on ? "1" : ""); } catch { /* (for now only) */ } }
+  try { return !!localStorage.getItem("dd-notes-wide"); } catch { return false; }
 }
 /** Something password-locked is closed in this browser (it may be notes or bookmarks: its name is sealed
  *  too, so nobody can tell without the password). */
@@ -2715,46 +2758,48 @@ async function renderNotes() {
   const data = await attempt(() => api("/api/notes"));
   notesList = data ? data.items : [];
   const current = notesList.find((n) => n.name === name);
-  const search = h("input", { type: "search", placeholder: "Search notes", class: "notes-search",
+  const search = h("input", { type: "search", placeholder: "Search", class: "notes-search", "aria-label": "Search notes",
                               oninput: () => fillList(search.value.trim().toLowerCase()) });
   const list = h("div", { class: "note-list" });
   function fillList(filter = "") {
     const shown = notesList.filter((n) => !filter || (n.title + " " + n.snippet).toLowerCase().includes(filter));
-    list.replaceChildren(...(shown.length ? shown.map((n) => noteItem(n, name))
+    list.replaceChildren(...(shown.length ? (filter ? shown.map((n) => noteItem(n, name)) : noteRows(shown, name))
       : [h("div", { class: "muted note-none" }, filter ? "No matches" : "No notes yet")]));
     if (!filter && someLocked()) list.append(h("div", { class: "note-none" }, h("button", { class: "btn ghost small", type: "button", onclick: unlockDialog }, icon("lock"), "Unlock locked notes")));
   }
   fillList();
   const locked = !!(data && data.locked);
   const side = h("div", { class: "notes-side" },
-    h("div", { class: "notes-head" }, h("h1", {}, "Notes"),
-      h("div", { style: "display:flex;gap:6px;align-items:center" },
-        !locked && h("button", { class: "btn small", onclick: newNote }, icon("plus"), "New"),
-        menuButton(() => folderLockItems(NOTES, !!(data && data.lock), "Notes"), "Notes"))),
-    !locked && search, !locked && list);
+    h("div", { class: "notes-head" },
+      h("div", { class: "notes-heading" }, h("h1", {}, "Notes"), !locked && h("span", { class: "notes-count" }, String(notesList.length))),
+      h("div", { class: "notes-head-actions" },
+        menuButton(() => folderLockItems(NOTES, !!(data && data.lock), "Notes"), "Notes"),
+        !locked && h("button", { class: "icon-btn notes-new", type: "button", title: "New note", "aria-label": "New note", onclick: newNote }, icon("compose")))),
+    !locked && h("label", { class: "notes-search-box" }, icon("search"), search), !locked && list);
   let editor;
   if (locked) {
     editor = lockedPanel("Notes", NOTES);
   } else if (current) {
     editor = noteEditor(current);
   } else {
-    editor = h("div", { class: "notes-empty" }, h("b", {}, notesList.length ? "Pick a note" : "Write your first note"),
-      h("p", { class: "muted" }, "Notes save as you type and sync to all your devices."),
-      h("button", { class: "btn", onclick: newNote }, "New note"));
+    editor = h("div", { class: "notes-empty" }, h("div", { class: "notes-empty-ico" }, icon("note")),
+      h("b", {}, notesList.length ? "Pick a note" : "Write your first note"),
+      h("p", { class: "muted" }, "Notes save as you type and sync to all your devices. Markdown and code blocks work too."),
+      h("button", { class: "btn", onclick: newNote }, icon("compose"), "New note"));
   }
-  page(h("div", { class: "notes" + (current ? " editing" : "") }, side, editor));
+  page(h("div", { class: "notes" + (current ? " editing" : "") + (current && notesWide() ? " wide" : "") }, side, editor));
   clearInterval(notesTimer);
   notesTimer = setInterval(pollNotes, 4000);
 }
 
 function noteEditor(n) {
   if (!note || note.path !== n.path) note = { path: n.path, name: n.name, mtime: n.mtime, dirty: false, gen: 0, saving: false };
-  const title = h("input", { class: "note-title", value: noteTitle(n.name), spellcheck: "false", "aria-label": "Title",
+  const title = h("input", { class: "note-title", value: noteTitle(n.name), spellcheck: "false", "aria-label": "Title", placeholder: "Title",
                              onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); body.focus(); } },
                              onchange: () => renameNote(title) });
   const body = h("textarea", { class: "note-body", placeholder: "Start writing…", "aria-label": "Note" });
   const state = h("span", { class: "note-state", id: "note-state" }, "Loading…");
-  const saveBtn = h("button", { class: "btn small", title: "Back up to Discord now (Ctrl+S)", onclick: () => saveNote("now") }, icon("save"), "Save");
+  const saveBtn = h("button", { class: "icon-btn note-save", type: "button", title: "Back up to Discord now (Ctrl+S)", "aria-label": "Save", onclick: () => saveNote("now") }, icon("save"));
   const it = { path: n.path, name: n.name, dir: false, size: n.size, mtime: n.mtime, state: n.state, locked: !!n.locked };
   note.locked = !!n.locked;
   const more = menuButton(() => [
@@ -2783,12 +2828,22 @@ function noteEditor(n) {
   });
   const md = noteMarkdown(body);
   loadNoteText(body, n.state);
+  const meta = h("div", { class: "note-meta", id: "note-meta" });
+  const showMeta = () => {
+    const words = (body.value.match(/[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu) || []).length;
+    meta.textContent = `${note.dirty ? "Edited just now" : "Edited " + (Date.now() / 1000 - note.mtime < 86400 ? ago(note.mtime) : when(note.mtime))} · ${plural(words, "word")}`;
+  };
+  body.addEventListener("input", () => { clearTimeout(note.metaTimer); note.metaTimer = setTimeout(showMeta, 250); });
+  note.showMeta = showMeta;
+  const side = h("button", { class: "icon-btn note-side", type: "button", title: "Show or hide the list of notes", "aria-label": "Show or hide the list of notes",
+                             onclick: () => { const wide = !notesWide(); notesWide(wide); document.querySelector(".notes").classList.toggle("wide", wide); } }, icon("sidebar"));
   const editor = h("div", { class: "note-editor" },
     h("div", { class: "note-bar" },
-      h("a", { class: "icon-btn note-back", href: "#/notes", "aria-label": "All notes" }, icon("back")),
+      h("a", { class: "icon-btn note-back", href: "#/notes", "aria-label": "All notes" }, icon("back")), side,
       state, h("div", { class: "actions" }, md.modes, saveBtn, more)),
-    title, h("div", { class: "note-conflict", id: "note-conflict", hidden: true }), md.tools,
-    h("div", { class: "note-panes" }, body, md.preview));
+    h("div", { class: "note-doc" },
+      title, meta, h("div", { class: "note-conflict", id: "note-conflict", hidden: true }), md.tools,
+      h("div", { class: "note-panes" }, body, md.preview)));
   md.attach(editor);
   return editor;
 }
@@ -2916,7 +2971,13 @@ function inFence(text, at) {
   return open;
 }
 
-function setState(text) { const el = $("#note-state"); if (el) el.textContent = text; }
+function setState(text) {
+  const el = $("#note-state");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.kind = /^Not saved|Could not/.test(text) ? "bad" : /…|uploading|Uploading/.test(text) ? "busy" : "ok";
+  if (note && note.showMeta) note.showMeta();
+}
 function noteUploadState() {
   const u = status && status.uploads.find((x) => x.path === note.path);
   const el = $("#note-state");
