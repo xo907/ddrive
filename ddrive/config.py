@@ -77,6 +77,7 @@ def config_path() -> str:
 
 MiB = 1024 * 1024
 SECRET_FIELDS = ("bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens", "spare_bot_tokens",
+                 "telegram_bot_tokens",
                  "web_token", "web_password", "discord_user_token", "monitor_key",
                  "recorder_key")
 _warned = set()
@@ -130,6 +131,9 @@ class Config:
     spare_bot_tokens: list = field(default_factory=list)  # a spare channel's own bot (same order; "" = the main bots)
     lost_channels: list = field(default_factory=list)     # spare channels given up: their pieces are rebuilt elsewhere
     channel_servers: dict = field(default_factory=dict)   # channel id -> server (guild) id, learnt from Discord
+    telegram_chats: list = field(default_factory=list)    # Telegram chats that keep pieces too (telegram.py): Discord can be lost
+    telegram_bot_tokens: list = field(default_factory=list)   # each chat's bot (same order)
+    telegram_api: str = ""                                # (tests: another address for Telegram's bot API)
     discord_pace: str = "gentle"       # how fast to talk to Discord: gentle | balanced | fast | off
     uploads_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 30)
     deletes_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 15)

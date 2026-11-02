@@ -68,7 +68,8 @@ class Eraser:
     def _channels(self):
         main = getattr(self.backend, "main", self.backend)
         out = [("the main channel", main)]
-        out += [(f"spare channel {c}", b) for c, b in (getattr(self.backend, "spares", None) or {}).items()]
+        out += [(f"{'Telegram chat' if str(c).startswith('tg') else 'spare channel'} {c}", b)
+                for c, b in (getattr(self.backend, "spares", None) or {}).items()]
         return out
 
     def run(self, local=True):
@@ -103,6 +104,10 @@ class Eraser:
 
     # ------------------------------------------------------------ Discord
     def _wipe_channel(self, b):
+        if callable(getattr(b, "wipe", None)):       # a Telegram chat (telegram.py): by message number, not listed
+            base = self.state["deleted"]
+            b.wipe(lambda n: self.state.__setitem__("deleted", base + n))
+            return
         api = getattr(b, "api", None)
         if api is None or not hasattr(api, "get_messages"):
             return self._wipe_folder(b)              # tests: a folder stands in for the channel

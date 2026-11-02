@@ -404,9 +404,11 @@ def cmd_approve_keys(args):
 
 
 _SECRET_FIELDS = {"bot_token", "encryption_key", "encryption_salt", "old_encryption_keys", "extra_bot_tokens", "spare_bot_tokens",
+                  "telegram_bot_tokens",
                   "web_token", "web_password", "discord_user_token", "monitor_key", "recorder_key"}
 _LIST_COMMANDS = {"extra_bot_tokens": "bots add <token>", "hidden_folders": "hide <folder>", "sync_jobs": "sync add",
                   "spare_channels": "spare add <channel id>", "spare_bot_tokens": "spare add <channel id> <bot token>",
+                  "telegram_chats": "telegram add <chat id> <bot token>", "telegram_bot_tokens": "telegram add <chat id> <bot token>",
                   "old_encryption_keys": "add-old-key", "web_user": "webdav-password",
                   "web_password": "webdav-password"}
 
@@ -1591,8 +1593,12 @@ def _grant_bots(cfg, chan, tokens=None):
 
 def _places(cfg):
     """(places that can fail on their own, how to say it): servers when the channels are in two or more."""
-    from .channels import spare_channels
+    from .channels import spare_channels, telegram_chats
     chans = [str(cfg.channel_id)] + spare_channels(cfg)
+    grams = telegram_chats(cfg)
+    if grams:
+        return 2, (f"Discord ({len(chans)} channel(s)) and Telegram ({len(grams)} chat(s)): either platform can be "
+                   "lost as a whole")
     known = dict(cfg.channel_servers or {})
     servers = {known.get(c) or "?" for c in chans}
     if len(servers) >= 2:
@@ -1762,6 +1768,99 @@ def cmd_spare(args):
     print(f"[SUCCESS] Added spare channel {chan}. New files get {m} spare pieces per group of {k}, spread over "
           f"{what} (about {100 * m // k}% extra space).")
     print("Files already on the drive get theirs in the background (health shows how far it is).")
+    if is_mounted(cfg.mount_point):
+        print("Restart the drive (stop, then start) to use it.")
+    return 0
+
+
+def cmd_telegram(args):
+    """Telegram chats that keep the drive's sealed pieces too (telegram.py), so Discord can be lost as a whole."""
+    from .channels import spread_pieces, telegram_chats
+    from .telegram import TelegramError, check_chat, place_of
+    cfg = Config.load()
+    if not cfg.is_configured():
+        print(f"[ERROR] Run '{launcher()} setup' first.")
+        return 1
+    chats = [str(c) for c in cfg.telegram_chats or []]
+    tokens = list(cfg.telegram_bot_tokens or [])
+    action = args.action or "list"
+    k = max(1, int(cfg.parity_group or 10))
+    if action == "list":
+        live = telegram_chats(cfg)
+        for i, (place, chat, _) in enumerate(live, 1):
+            print(f"  Telegram chat {i}:  {chat}  (in the drive: {place})")
+        if not live:
+            print(f"No Telegram chats. Add one with: {launcher()} telegram add <chat id> <bot token>")
+            print()
+            print("Then every file is kept so that it can be rebuilt from Telegram alone, and from Discord alone:")
+            print("Discord can lose everything (an account or bot banned, servers deleted) and no file is lost.")
+            print("It takes about as much space again on Telegram as the files take; the files already on the")
+            print("drive get theirs in the background.")
+            print()
+            print("How: in Telegram, make a private channel; make a bot with @BotFather (it gives the token);")
+            print("add the bot to the channel as an admin that may post and delete messages. The chat id is")
+            print("the channel's numeric id (-100...): forward a message from it to @userinfobot, for one.")
+        else:
+            m = max(int(cfg.parity_pieces or 0), spread_pieces(k, 2))
+            print(f"\nEvery group of {k} pieces gets {m} spare pieces: Discord or Telegram can be lost as a whole "
+                  f"(about {100 * m // k}% extra space).")
+        return 0
+    if action in ("remove", "lost"):
+        try:
+            i = int(args.chat or 0)
+            place, chat, _ = telegram_chats(cfg)[i - 1]
+        except (ValueError, IndexError):
+            print(f"[ERROR] Give the number of the Telegram chat to remove (see '{launcher()} telegram').")
+            return 1
+        idx = Index(os.path.join(cfg.resolved_data_dir, "index.db"))
+        try:
+            held = idx.pieces_in_channel(place)
+        finally:
+            idx.close()
+        pos = chats.index(chat)
+        cfg.telegram_chats = [c for n, c in enumerate(chats) if n != pos]
+        cfg.telegram_bot_tokens = [t for n, t in enumerate(tokens) if n != pos]
+        if held or action == "lost":
+            cfg.lost_channels = sorted(set(map(str, cfg.lost_channels or [])) | {place})
+        cfg.save()
+        if held or action == "lost":
+            print(f"[OK] Telegram chat {chat} is given up. Its {held:,} piece(s) are rebuilt from their other pieces")
+            print("     into the channels that are left while the drive runs ('health' shows how far it is).")
+        else:
+            print(f"[OK] Removed Telegram chat {chat}.")
+        print("Restart the drive (stop, then start) for it to take effect.")
+        return 0
+    chat = (args.chat or "").strip()
+    token = (args.token or "").strip()
+    if not chat or not token:
+        print(f"[ERROR] {launcher()} telegram add <chat id> <bot token>")
+        print("        The chat id is the channel's numeric id (-100...) or a public channel's @name;")
+        print("        the bot token comes from @BotFather.")
+        return 1
+    print("Checking the bot and the chat (posting and deleting a test file)...")
+    try:
+        chat_id, title, bot, problems = check_chat(token, chat, base=cfg.telegram_api or None)
+    except TelegramError as e:
+        print(f"  [FAIL] {e}")
+        print("         The bot has to be an admin of the channel, allowed to post and delete messages.")
+        return 1
+    if chat_id in chats:
+        print("[ERROR] That chat is already used by this drive.")
+        return 1
+    for p in problems:
+        print(f"  [!] {p}")
+    if any("couldn't" in p for p in problems):
+        print("[ERROR] Pieces couldn't be kept there safely. Fix that and try again.")
+        return 1
+    cfg.telegram_chats = chats + [chat_id]
+    cfg.telegram_bot_tokens = (tokens + [""] * len(chats))[:len(chats)] + [token]
+    cfg.lost_channels = [c for c in cfg.lost_channels or [] if str(c) != place_of(chat_id)]
+    cfg.save()
+    m = max(int(cfg.parity_pieces or 0), spread_pieces(k, 2))
+    print(f"[SUCCESS] Added Telegram chat \"{title}\" ({chat_id}), posted to by {bot}.")
+    print(f"New files get {m} spare pieces per group of {k}, so that Discord or Telegram alone can rebuild every")
+    print(f"file (about {100 * m // k}% extra space). Files already on the drive get theirs in the background")
+    print("('health' shows how far it is). Copies of the file list go there too.")
     if is_mounted(cfg.mount_point):
         print("Restart the drive (stop, then start) to use it.")
     return 0
@@ -2860,6 +2959,11 @@ def main():
     p_spare = subparsers.add_parser("spare", help="Spare channels, so any one channel can be lost: list, add <id> [token], "
                                               "assign, grant, remove <n>, lost <n>")
     p_spare.add_argument("action", nargs="?", choices=["list", "add", "assign", "grant", "remove", "lost"])
+    p_tg = subparsers.add_parser("telegram", help="Telegram chats that keep the pieces too, so Discord can be lost: "
+                                                  "list, add <chat id> <bot token>, remove <n>, lost <n>")
+    p_tg.add_argument("action", nargs="?", choices=["list", "add", "remove", "lost"])
+    p_tg.add_argument("chat", nargs="?", help="The chat's id (add) or number (remove, lost)")
+    p_tg.add_argument("token", nargs="?", help="The bot's token, from @BotFather (add)")
     p_spare.add_argument("channel", nargs="?", help="Channel id (add) or number (remove)")
     p_spare.add_argument("token", nargs="?", help="The spare channel's own bot token (optional)")
     p_spare.add_argument("--force", action="store_true", help="(no longer needed: a channel holding pieces is given up "
@@ -3049,6 +3153,8 @@ def main():
         return cmd_bots(args)
     elif args.command == "spare":
         return cmd_spare(args)
+    elif args.command == "telegram":
+        return cmd_telegram(args)
     elif args.command == "erase-everything":
         return cmd_erase_everything(args)
     elif args.command == "snapshots":

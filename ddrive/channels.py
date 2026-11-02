@@ -17,12 +17,18 @@ spare channel or server costs as much as a second copy (m = n); two cost half th
 A channel given up for good (`lost_channels`: deleted, its server gone, or removed while it held
 pieces) is left out of placement, and its pieces count as gone: reads rebuild them, and repairs put
 them in the channels that are left.
+
+Telegram chats (telegram.py) are places too, named "tg<chat id>". With one or more of them, the places
+that can fail on their own are the two platforms: every Discord channel together, and every Telegram
+chat together. A group then gets as many spare pieces as data pieces, placed so that either platform
+alone holds enough to rebuild it: Discord can go entirely (or Telegram) and no file is lost.
 """
 
 import logging
 
 from .backend import DiscordBackend, LocalBackend, StoredChunk, sort_checkpoints, tag_of
 from .discord_api import DiscordError
+from .telegram import MAX_READ, TelegramAPI, TelegramBackend, is_place, place_of
 
 log = logging.getLogger("ddrive.channels")
 
@@ -183,6 +189,19 @@ def lost_channels(cfg):
     return {str(c).strip() for c in getattr(cfg, "lost_channels", None) or [] if str(c).strip()}
 
 
+def telegram_chats(cfg):
+    """[(place name, chat id, bot token)] of the Telegram chats in `cfg` (telegram.py), without lost ones."""
+    lost = lost_channels(cfg)
+    tokens = list(getattr(cfg, "telegram_bot_tokens", None) or [])
+    out = []
+    for i, chat in enumerate(getattr(cfg, "telegram_chats", None) or []):
+        chat = str(chat).strip()
+        token = tokens[i] if i < len(tokens) else ""
+        if chat and token and place_of(chat) not in lost and all(chat != c for _, c, _ in out):
+            out.append((place_of(chat), chat, token))
+    return out
+
+
 def _gone(what):
     return DiscordError(404, '{"message": "Unknown Message (%s)", "code": 10008}' % what)
 
@@ -226,7 +245,10 @@ class SpreadBackend:
 
     @property
     def layout(self):
-        return Layout(self.channels, self.server_of)
+        chans = self.channels
+        if any(is_place(c) for c in chans):         # two platforms: each can be lost as a whole
+            return Layout(chans, {c: "telegram" if is_place(c) else "discord" for c in chans})
+        return Layout(chans, self.server_of)
 
     def route(self, mid):
         """(backend, message id in that channel) for a piece id."""
@@ -424,7 +446,12 @@ def with_spares(cfg, main, api_for=None, local_root=None):
     uses the main channel's bots. `local_root`: tests (a folder per channel next to the main one)."""
     chans = spare_channels(cfg)
     lost = lost_channels(cfg)
-    if not chans and not lost:
+    grams = telegram_chats(cfg)
+    if grams and int(getattr(cfg, "chunk_size", 0) or 0) > MAX_READ - 1024 * 1024:
+        log.error("Telegram is left out: pieces of %d bytes are bigger than Telegram gives a bot back (20 MB). "
+                  "Lower chunk_size to use it.", cfg.chunk_size)
+        grams = []
+    if not chans and not lost and not grams:
         return main
     spares = {}
     # One connection per bot: a bot posting in the main channel and in its own spare channel keeps to one
@@ -441,11 +468,21 @@ def with_spares(cfg, main, api_for=None, local_root=None):
             spares[chan] = DiscordBackend(known[token], chan, crypto=main.crypto)
         else:
             spares[chan] = DiscordBackend(main.api, chan, crypto=main.crypto, extra_apis=main.apis[1:])
+    discord_spares = len(spares)
+    bots = {}
+    for place, chat, token in grams:
+        if local_root is not None and not getattr(cfg, "telegram_api", ""):     # (tests: a folder, or a fake Telegram)
+            spares[place] = LocalBackend(f"{local_root}{SEP}{place}", crypto=getattr(main, "crypto", None))
+            continue
+        bots.setdefault(token, TelegramAPI(token, base=getattr(cfg, "telegram_api", "") or None))
+        spares[place] = TelegramBackend(bots[token], chat, crypto=getattr(main, "crypto", None))
     known = dict(getattr(cfg, "channel_servers", None) or {})
     main_id = str(getattr(cfg, "channel_id", "") or "")
     server_of = {None: known.get(main_id), **{c: known.get(c) for c in spares}}
-    if spares:
-        log.info("Pieces are spread over %d channels (the main one and %d spare).", 1 + len(spares), len(spares))
+    if discord_spares:
+        log.info("Pieces are spread over %d channels (the main one and %d spare).", 1 + discord_spares, discord_spares)
+    if grams:
+        log.info("Pieces are also kept in %d Telegram chat(s): Discord or Telegram can be lost as a whole.", len(grams))
     if lost:
         log.warning("%d spare channel(s) given up: their pieces are rebuilt into the channels that are left.", len(lost))
     return SpreadBackend(main, spares, server_of=server_of, lost=lost, tag=main_id or "main")

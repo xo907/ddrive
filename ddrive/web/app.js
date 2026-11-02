@@ -2337,6 +2337,10 @@ function renderHealth(quiet) {
            sc.last_pass ? "last full check" : (hl.leader ? "pieces, first check running" : "another device checks"), checkPct),
       stat("Repaired", Number((sc.repaired || 0) + (hl.healer.repaired || 0)).toLocaleString(),
            (sc.lost || hl.healer.lost) ? `${sc.lost || hl.healer.lost} could not be rebuilt` : "nothing lost")),
+    hl.telegram ? h("p", { class: "muted", style: "max-width:680px" },
+      `Pieces are kept on Discord (${plural(hl.channels, "channel")}) and on Telegram (${plural(hl.telegram, "chat")}), so that either `
+      + "platform alone can rebuild every file: losing all of Discord, or all of Telegram, loses no file. "
+      + (hl.spread && hl.spread.checked && !hl.spread.left ? "Every group is spread." : "")) :
     hl.channels > 1 ? h("p", { class: "muted", style: "max-width:680px" },
       `Pieces are spread over ${hl.channels} channels (the main one and ${hl.channels - 1} spare)` +
       (hl.servers > 1 ? ` in ${hl.servers} servers, so losing any one server loses no file. ` : ", so losing any one of them loses no file. ") +

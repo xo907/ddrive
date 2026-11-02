@@ -1011,7 +1011,8 @@ class Maintenance:
         days = max(0.01, float(getattr(self.cfg, "scrub_days", 2.0) or 2.0))
         self._next_scrub = now + max(self.TICK, days * 86400 / max(1, L["total"] / PAGE))
         if L["missing"]:                       # pieces the list didn't have: asked about one by one
-            for mid in L["missing"][:20]:
+            paced = L.get("paced", False)      # (a Telegram chat's, all asked about: a few at a time)
+            for mid in L["missing"][:5 if paced else 20]:
                 with self.healer._lock:
                     repairing = mid in self.healer._queued or mid in self.healer._done
                 if repairing:                  # already put back (its new place isn't in the index yet)
@@ -1020,9 +1021,11 @@ class Maintenance:
                     self._scrub_missing(mid, st)
                     self._scrub_group_of(mid, st)
                 st["checked"] = st.get("checked", 0) + 1
-            del L["missing"][:20]
+            del L["missing"][:5 if paced else 20]
+            if not L["missing"]:
+                L["paced"] = False
             self._save_scrub(st)
-            self._next_scrub = now
+            self._next_scrub = now + (3.0 if paced else 0.0)
             return
         if L["ci"] >= len(L["chans"]):
             st["last_pass"] = now
@@ -1032,6 +1035,17 @@ class Maintenance:
             self._listing = None
             return
         chan = L["chans"][L["ci"]]
+        b = self.backend.route(f"{chan}-0")[0] if chan is not None and hasattr(self.backend, "route") else None
+        if b is not None and not getattr(b, "can_list", True):
+            # A Telegram chat can't be listed (telegram.py): each of its pieces is asked about instead.
+            L["missing"] = [f"{chan}-{raw}" for raw in sorted(L["expected"][chan])]
+            L["paced"] = True
+            L["done"] += len(L["expected"][chan])
+            L["ci"] += 1
+            L["after"], L["seen"] = "0", set()
+            self._save_scrub(st)
+            self._next_scrub = now
+            return
         page = self.backend.messages_in(chan, L["after"], PAGE)     # network errors: this page again later
         want = L["expected"][chan]
         for m in page:

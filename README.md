@@ -647,6 +647,43 @@ spare lost <n>                       The channel is gone (deleted, server gone):
 - A repair goes back into the channel the piece was in, or into another one if that channel is gone.
 - Accounts on your dashboard (end-to-end ones included) are spread the same way as your own files.
 
+### Telegram: a second platform
+
+Spare channels protect against losing a channel or a server, but they are all on Discord. A Telegram
+channel adds a second platform: with one, every file is kept so that **Discord alone, or Telegram
+alone, can rebuild it**. Discord can lose everything at once (your account or bots banned, every server
+deleted) and no file is lost; so can Telegram.
+
+```text
+telegram                             List the Telegram chats, and how to set one up
+telegram add <chat id> <bot token>   Add one (checked first: a test file is posted, read back and deleted)
+telegram remove <n>                  Remove one; if it holds pieces, they are rebuilt into Discord first
+telegram lost <n>                    The chat is gone: rebuild its pieces elsewhere
+```
+
+- **Setting it up:** make a private Telegram channel; make a bot with @BotFather (it gives the token);
+  add the bot to the channel as an admin that may post and **delete** messages (Telegram lets a bot
+  delete messages older than 48 hours only with that right). The chat id is the channel's numeric id
+  (-100...). Then `telegram add <chat id> <bot token>` and restart the drive.
+- **What Telegram sees:** what Discord sees. Pieces are sealed (AES-256-GCM) before they leave the
+  computer and have random names; Telegram can read neither the files nor their names.
+- **Space:** Discord and Telegram count as two places that can each be lost whole, so every group of 10
+  pieces gets 10 spare pieces, placed so that each platform holds enough to rebuild it: about as much
+  space again as the files take. Both platforms store it for free.
+- **Files already on the drive** get their share on Telegram in the background, a group at a time,
+  while nothing uploads; `health` and the dashboard's Health page show how many groups are left.
+- **Copies of what finds the files:** index checkpoints, accounts' checkpoints and the list of accounts
+  are copied to Telegram too. A bot can't read a Telegram chat's history, so a small directory of those
+  copies is the chat's pinned message (keep it pinned). If Discord is gone: make a new Discord channel,
+  put its id in the config, and start the drive; it starts from the copy on Telegram and rebuilds what
+  Discord held. Only changes made after the last checkpoint (one is saved every hour) are not on Telegram.
+- **The background check** asks about each Telegram piece on its own (bots can't list a chat), at an
+  easy pace. A bot posts about one message a second per chat, so a channel (not a group, which allows
+  20 a minute) and, for a lot of data, a second chat with a bot of its own are faster.
+- **Limits:** a piece must be at most 20 MB (Telegram gives a bot back files up to that size): the
+  default 9 MB is fine; don't raise `chunk_size` above 20 MB with Telegram in use.
+- `erase-everything` deletes the bot's messages in the Telegram chats too.
+
 ### Erase everything
 
 A hard reset, for starting over: **Settings → Erase everything** in the dashboard (the owner's only), or
