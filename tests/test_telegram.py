@@ -109,6 +109,11 @@ class TelegramTest(helpers.DriveTest):
             check_chat(TOKEN, "-100404", base=self.fake.base)
         self.assertEqual(self.fake.documents(CHAT), [])                       # (the test files went again)
 
+    def test_the_chats_a_bot_has_heard_of_are_found(self):
+        from ddrive.telegram import chats_seen
+        bot, seen = chats_seen(TOKEN, base=self.fake.base)
+        self.assertEqual((bot, seen), ("@ddrive_test_bot", [(CHAT, "Pieces", "channel")]))
+
     # ------------------------------------------------------------ a drive with Telegram
     def tg_drive(self, device="aaaa", **more):
         return self.drive(device=device, telegram_chats=[CHAT], telegram_bot_tokens=[TOKEN], telegram_api=self.fake.base, **more)

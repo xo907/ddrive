@@ -1776,7 +1776,7 @@ def cmd_spare(args):
 def cmd_telegram(args):
     """Telegram chats that keep the drive's sealed pieces too (telegram.py), so Discord can be lost as a whole."""
     from .channels import spread_pieces, telegram_chats
-    from .telegram import TelegramError, check_chat, place_of
+    from .telegram import TelegramError, chats_seen, check_chat, place_of
     cfg = Config.load()
     if not cfg.is_configured():
         print(f"[ERROR] Run '{launcher()} setup' first.")
@@ -1798,8 +1798,8 @@ def cmd_telegram(args):
             print("drive get theirs in the background.")
             print()
             print("How: in Telegram, make a private channel; make a bot with @BotFather (it gives the token);")
-            print("add the bot to the channel as an admin that may post and delete messages. The chat id is")
-            print("the channel's numeric id (-100...): forward a message from it to @userinfobot, for one.")
+            print("add the bot to the channel as an admin that may post and delete messages; post any message")
+            print(f"in the channel; then '{launcher()} telegram find <bot token>' shows the channel's id (-100...).")
         else:
             m = max(int(cfg.parity_pieces or 0), spread_pieces(k, 2))
             print(f"\nEvery group of {k} pieces gets {m} spare pieces: Discord or Telegram can be lost as a whole "
@@ -1830,6 +1830,25 @@ def cmd_telegram(args):
             print(f"[OK] Removed Telegram chat {chat}.")
         print("Restart the drive (stop, then start) for it to take effect.")
         return 0
+    if action == "find":
+        token = (args.chat or args.token or "").strip()
+        if not token:
+            print(f"[ERROR] {launcher()} telegram find <bot token>")
+            return 1
+        try:
+            bot, seen = chats_seen(token, base=cfg.telegram_api or None)
+        except TelegramError as e:
+            print(f"  [FAIL] {e}" + ("  (the token isn't right)" if e.status in (401, 404) else ""))
+            return 1
+        if not seen:
+            print(f"{bot} hasn't heard of any chat lately. Add it to the channel as an admin, post any message in the")
+            print(f"channel, then run this again ({launcher()} telegram find <bot token>).")
+            return 1
+        print(f"Chats {bot} has heard of:")
+        for cid, title, kind in seen:
+            print(f"  {cid:>16}  {kind:<10} {title}")
+        print(f"\nAdd one with: {launcher()} telegram add <id from above> <bot token>")
+        return 0
     chat = (args.chat or "").strip()
     token = (args.token or "").strip()
     if not chat or not token:
@@ -1842,7 +1861,18 @@ def cmd_telegram(args):
         chat_id, title, bot, problems = check_chat(token, chat, base=cfg.telegram_api or None)
     except TelegramError as e:
         print(f"  [FAIL] {e}")
-        print("         The bot has to be an admin of the channel, allowed to post and delete messages.")
+        if "chat not found" in e.description.lower():
+            hint = (" (it has no -100 in front: a channel's id looks like -100" + chat.lstrip("-") + ")"
+                    if chat.lstrip("-").isdigit() and not chat.startswith("-100") else "")
+            print(f"         The bot can't see a chat with the id {chat}{hint}. Either the id isn't the channel's,")
+            print("         or the bot isn't in the channel yet: add it as an admin (Channel > Administrators >")
+            print("         Add admin), allowed to post and delete messages.")
+            print(f"         To see the exact id: post any message in the channel, then run")
+            print(f"         {launcher()} telegram find <bot token>")
+        elif e.status in (401, 404):
+            print("         The bot token isn't right: copy it again from @BotFather.")
+        else:
+            print("         The bot has to be an admin of the channel, allowed to post and delete messages.")
         return 1
     if chat_id in chats:
         print("[ERROR] That chat is already used by this drive.")
@@ -2961,8 +2991,8 @@ def main():
     p_spare.add_argument("action", nargs="?", choices=["list", "add", "assign", "grant", "remove", "lost"])
     p_tg = subparsers.add_parser("telegram", help="Telegram chats that keep the pieces too, so Discord can be lost: "
                                                   "list, add <chat id> <bot token>, remove <n>, lost <n>")
-    p_tg.add_argument("action", nargs="?", choices=["list", "add", "remove", "lost"])
-    p_tg.add_argument("chat", nargs="?", help="The chat's id (add) or number (remove, lost)")
+    p_tg.add_argument("action", nargs="?", choices=["list", "add", "find", "remove", "lost"])
+    p_tg.add_argument("chat", nargs="?", help="The chat's id (add), number (remove, lost), or the bot token (find)")
     p_tg.add_argument("token", nargs="?", help="The bot's token, from @BotFather (add)")
     p_spare.add_argument("channel", nargs="?", help="Channel id (add) or number (remove)")
     p_spare.add_argument("token", nargs="?", help="The spare channel's own bot token (optional)")

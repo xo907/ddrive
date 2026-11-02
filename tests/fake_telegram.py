@@ -48,6 +48,9 @@ class FakeTelegram:
             chat = self.chats.get(str(params.get("chat_id", "")))
             if method == "getMe":
                 return self.ok({"id": self.bot_id, "is_bot": True, "username": "ddrive_test_bot"})
+            if method == "getUpdates":
+                return self.ok([{"update_id": n, "channel_post": {"message_id": 1, "chat": {"id": int(cid), "title": c["title"], "type": c["type"]}}}
+                                for n, (cid, c) in enumerate(self.chats.items(), 1)])
             if method == "getFile":
                 fid = params.get("file_id", "")
                 if fid not in self.files:

@@ -657,6 +657,7 @@ deleted) and no file is lost; so can Telegram.
 ```text
 telegram                             List the Telegram chats, and how to set one up
 telegram add <chat id> <bot token>   Add one (checked first: a test file is posted, read back and deleted)
+telegram find <bot token>            The chats the bot can see, with their ids (post a message in the channel first)
 telegram remove <n>                  Remove one; if it holds pieces, they are rebuilt into Discord first
 telegram lost <n>                    The chat is gone: rebuild its pieces elsewhere
 ```
@@ -664,7 +665,8 @@ telegram lost <n>                    The chat is gone: rebuild its pieces elsewh
 - **Setting it up:** make a private Telegram channel; make a bot with @BotFather (it gives the token);
   add the bot to the channel as an admin that may post and **delete** messages (Telegram lets a bot
   delete messages older than 48 hours only with that right). The chat id is the channel's numeric id
-  (-100...). Then `telegram add <chat id> <bot token>` and restart the drive.
+  (-100...): post any message in the channel, then `telegram find <bot token>` shows it. Then
+  `telegram add <chat id> <bot token>` and restart the drive.
 - **What Telegram sees:** what Discord sees. Pieces are sealed (AES-256-GCM) before they leave the
   computer and have random names; Telegram can read neither the files nor their names.
 - **Space:** Discord and Telegram count as two places that can each be lost whole, so every group of 10

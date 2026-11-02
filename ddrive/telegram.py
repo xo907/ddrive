@@ -409,6 +409,21 @@ class TelegramBackend:
         return done
 
 
+def chats_seen(token, base=None):
+    """The bot's own name and the chats it has heard of lately [(id, title, type)]: a channel it was made an
+    admin of, or one where something was posted since. (Telegram keeps these for a day, until read.)"""
+    api = TelegramAPI(token, timeout=60, retries=1, base=base)
+    me = api.call("getMe")
+    found = {}
+    for u in api.call("getUpdates", {"allowed_updates": ["channel_post", "message", "my_chat_member"], "timeout": 0}) or []:
+        for key in ("channel_post", "message", "my_chat_member", "edited_channel_post"):
+            chat = (u.get(key) or {}).get("chat")
+            if chat and chat.get("id") is not None:
+                found[str(chat["id"])] = (str(chat["id"]), chat.get("title") or chat.get("username") or chat.get("first_name") or "",
+                                          chat.get("type") or "")
+    return "@" + (me.get("username") or "?"), list(found.values())
+
+
 def check_chat(token, chat_id, base=None):
     """Can this bot keep pieces in this chat? (its numeric id, its name, the bot's name, problems) — posts and
     deletes one test file. `chat_id`: the numeric id (-100...) or a public channel's @name."""

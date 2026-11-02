@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.32.1 (2026-11-02)
+
+- **`ddrive telegram find <bot token>` shows the chats the bot can see, with their exact ids.** "Chat not found" when adding a Telegram channel now says why it usually is: an id without the -100 every channel id starts with (and what it would be with it), or a bot that isn't an admin of the channel yet; and a wrong token is told apart.
+
 ## 3.32.0 (2026-11-02)
 
 - **Telegram as a second platform for your files.** `ddrive telegram add <chat id> <bot token>` adds a Telegram channel (checked first: a test file is posted, read back and deleted). From then on Discord and Telegram count as two places that can each be lost whole: every group of pieces gets as many spare pieces as data pieces, placed so that **Discord alone or Telegram alone can rebuild every file**. Losing all of Discord at once (account or bots banned, every server deleted) loses no file. Files already on the drive get their share on Telegram in the background; accounts (end-to-end ones too) are protected the same way. Telegram sees only sealed pieces under random names, as Discord does. Copies of the index checkpoints and of the list of accounts go there too, found again through the chat's pinned message (a bot can't read a chat's history), so a drive whose Discord is gone starts again from Telegram. The background check asks about Telegram pieces one at a time at an easy pace; posting keeps to Telegram's pace (about one message a second per chat); `erase-everything` clears the Telegram chats too. It takes about as much space again as the files (free on both). The Health page says where pieces are. See the README, "Telegram: a second platform".
