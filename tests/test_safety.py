@@ -106,7 +106,8 @@ class SafetyTest(helpers.DriveTest):
         d = self.drive(parity_enabled=False, dedup=False)
         self.write(d, "/a.txt", b"one")
         self.upload(d)
-        mid = self.mids(d, "/a.txt")[0]
+        from ddrive.backend import physical
+        mid = physical(self.mids(d, "/a.txt")[0])          # (a small file is packed: its pack is what is stored)
         d.index.purge_node(d.index.resolve("/a.txt")["id"])
         d.uploader._running = True
         try:

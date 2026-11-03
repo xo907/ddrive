@@ -517,8 +517,10 @@ def cmd_verify(args):
         def check(chunk):
             problem = None
             try:
-                data, _ = j.backend.download(chunk["message_id"], chunk.get("url"))
-                data = codec.decode(data, crypto, chunk.get("sha256"))
+                from .backend import pack_slice, part_of
+                mid = chunk["message_id"]
+                data, _ = j.backend.download(mid, chunk.get("url"))
+                data = part_of(codec.decode(data, crypto, None if pack_slice(mid)[1] is not None else chunk.get("sha256")), mid)
                 if chunk.get("sha256") and hashlib.sha256(data).hexdigest() != chunk["sha256"]:
                     problem = "checksum mismatch (damaged)"
             except AuthenticationError:
@@ -2275,8 +2277,9 @@ def _health_why(cfg, idx, backend, mid):
         lost = json.loads(idx.kv_get("lost_pieces") or "{}")
     except ValueError:
         lost = {}
-    if mid in lost:
-        print(f"{'Listed as lost:':20}since {_fmt_time(lost[mid])}")
+    from .backend import physical
+    if physical(mid) in lost:
+        print(f"{'Listed as lost:':20}since {_fmt_time(lost[physical(mid)])}")
     line = find_deletion(cfg, mid)
     print(f"{'Deleted by DDrive:':20}" + ("YES, by this device: " + "  ".join(line.split("\t")[:1] + line.split("\t")[3:])
                                           if line else "not by this device"))

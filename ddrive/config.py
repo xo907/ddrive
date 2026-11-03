@@ -109,6 +109,7 @@ class Config:
     prefetch_chunks: int = 2           # chunks to read ahead while streaming
     download_threads: int = 4
     upload_threads: int = 3            # chunks/files uploaded in parallel
+    pack_small_files: bool = True      # small files go up packed together, many in one piece (fewer messages)
     staging_max_bytes: int = 10 * 1024 * MiB  # pause new file creation while this much is waiting to upload (0 = no limit)
     min_free_disk_bytes: int = 2 * 1024 * MiB  # also pause while the local disk has less free space than this
     max_file_size: int = 0             # refuse files larger than this (0 = no limit)

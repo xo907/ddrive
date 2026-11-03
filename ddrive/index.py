@@ -25,6 +25,8 @@ import threading
 import time
 from contextlib import contextmanager
 
+from .backend import PACK_SEP, physical
+
 log = logging.getLogger("ddrive.index")
 
 ROOT_ID = 1
@@ -499,20 +501,26 @@ class Index:
         return True
 
     def update_chunk_url(self, message_id, url):
+        mid = physical(message_id)
         with self.lock:
-            self.db.execute("UPDATE chunks SET url=? WHERE message_id=?", (url, message_id))
+            self.db.execute("UPDATE chunks SET url=? WHERE message_id=? OR (message_id>=? AND message_id<?)",
+                            (url, mid, mid + PACK_SEP, mid + chr(ord(PACK_SEP) + 1)))
 
     # --------------------------------------------------- piece references
     @staticmethod
     def _data_used(db, mid):
-        """Does a file, an old version or a snapshot still need this piece?"""
+        """Does a file, an old version or a snapshot still need this piece (a pack: a part of it)?"""
+        mid = physical(mid)
+        lo, hi = mid + PACK_SEP, mid + chr(ord(PACK_SEP) + 1)     # (its packed parts: "<mid>+<offset>+<length>")
         return db.execute(
-            "SELECT 1 FROM chunks WHERE message_id=? UNION ALL "
-            "SELECT 1 FROM version_chunks WHERE message_id=? UNION ALL "
-            "SELECT 1 FROM snapshot_chunks WHERE message_id=? LIMIT 1", (mid, mid, mid)).fetchone() is not None
+            "SELECT 1 FROM chunks WHERE message_id=? OR (message_id>=? AND message_id<?) UNION ALL "
+            "SELECT 1 FROM version_chunks WHERE message_id=? OR (message_id>=? AND message_id<?) UNION ALL "
+            "SELECT 1 FROM snapshot_chunks WHERE message_id=? OR (message_id>=? AND message_id<?) LIMIT 1",
+            (mid, lo, hi) * 3).fetchone() is not None
 
     @classmethod
     def _used(cls, db, mid):
+        mid = physical(mid)
         return cls._data_used(db, mid) or db.execute(
             "SELECT 1 FROM parity_shards WHERE message_id=? LIMIT 1", (mid,)).fetchone() is not None
 
@@ -603,7 +611,7 @@ class Index:
         spare pieces of groups that no longer protect anything."""
         now = time.time()
         gids = set()
-        for mid in mids:
+        for mid in dict.fromkeys(physical(m) for m in mids):        # (a packed file's part: its pack)
             if not cls._used(db, mid):
                 db.execute("INSERT OR IGNORE INTO trash(message_id, added) VALUES(?, ?)", (mid, now))
             gids.update(r[0] for r in db.execute("SELECT gid FROM parity_members WHERE message_id=?", (mid,)))
@@ -678,6 +686,7 @@ class Index:
 
     def parity_groups_for(self, mid):
         """Every group that can rebuild piece `mid`: [{gid, members: [(mid, size, sha)], shards: [...]}]."""
+        mid = physical(mid)
         with self.lock:
             out = []
             for (gid,) in self.db.execute(
@@ -708,15 +717,19 @@ class Index:
                    "SELECT message_id FROM parity_shards WHERE message_id >= ? AND message_id < ?")
 
     def pieces_in_channel(self, chan):
-        """How many stored pieces the drive keeps in spare channel `chan`."""
+        """How many stored pieces the drive keeps in spare channel `chan` (a pack once, however many parts)."""
         with self.lock:
-            return self.db.execute(f"SELECT COUNT(*) FROM ({self._IN_CHANNEL})",
-                                   (f"{chan}-", f"{chan}.") * 4).fetchone()[0]
+            return len({physical(r[0]) for r in self.db.execute(self._IN_CHANNEL, (f"{chan}-", f"{chan}.") * 4)})
 
     def pieces_in(self, chan, limit=50):
-        """Up to `limit` of the pieces the drive keeps in spare channel `chan` (their full ids)."""
+        """Up to `limit` of the pieces the drive keeps in spare channel `chan` (their full ids; a pack's own)."""
+        out = {}
         with self.lock:
-            return [r[0] for r in self.db.execute(f"{self._IN_CHANNEL} LIMIT ?", (f"{chan}-", f"{chan}.") * 4 + (limit,))]
+            for (mid,) in self.db.execute(self._IN_CHANNEL, (f"{chan}-", f"{chan}.") * 4):
+                out[physical(mid)] = True
+                if len(out) >= limit:
+                    break
+        return list(out)
 
     def parity_group(self, gid):
         """One group as parity_groups_for gives them, or None."""
@@ -728,9 +741,11 @@ class Index:
         return {"gid": gid, "members": members, "shards": shards} if members else None
 
     def piece_info(self, mid):
-        """(kind, size, sha256) of a stored piece: kind is 'data' or 'parity'; None if unknown."""
+        """(kind, size, sha256) of a stored piece: kind is 'data' or 'parity'; None if unknown. (A pack is known
+        by its spare-piece group: its files know only their parts.)"""
+        mid = physical(mid)
         with self.lock:
-            for table in ("chunks", "version_chunks", "snapshot_chunks"):
+            for table in ("chunks", "version_chunks", "snapshot_chunks", "parity_members"):
                 row = self.db.execute(f"SELECT size, sha256 FROM {table} WHERE message_id=? LIMIT 1", (mid,)).fetchone()
                 if row:
                     return "data", row[0], row[1]
@@ -740,31 +755,35 @@ class Index:
     def piece_users(self, mid):
         """What a stored piece belongs to: {"files": [paths], "versions": [{path, at, reason}],
         "snapshots": [{path, at}], "protects": [paths of files it is a spare piece for]}."""
+        mid = physical(mid)
+        lo, hi = mid + PACK_SEP, mid + chr(ord(PACK_SEP) + 1)
         with self.lock:
             db = self.db
-            files = sorted({self._path(db, r[0]) for r in db.execute("SELECT DISTINCT node_id FROM chunks WHERE message_id=?", (mid,))})
+            files = sorted({self._path(db, r[0]) for r in db.execute(
+                "SELECT DISTINCT node_id FROM chunks WHERE message_id=? OR (message_id>=? AND message_id<?)", (mid, lo, hi))})
             versions = [{"path": r["path"] or "/" + r["name"], "at": r["superseded"], "reason": r["reason"]} for r in db.execute(
                 "SELECT DISTINCT v.id, v.path, v.name, v.superseded, v.reason FROM version_chunks c JOIN versions v ON v.id = c.version_id "
-                "WHERE c.message_id=? ORDER BY v.superseded DESC", (mid,))]
+                "WHERE c.message_id=? OR (c.message_id>=? AND c.message_id<?) ORDER BY v.superseded DESC", (mid, lo, hi))]
             snapshots = [{"path": r["path"], "at": r["at"]} for r in db.execute(
                 "SELECT DISTINCT e.path, s.at FROM snapshot_chunks c JOIN snapshot_entries e ON e.id = c.entry_id "
-                "JOIN snapshots s ON s.id = c.snap_id WHERE c.message_id=? ORDER BY s.at DESC LIMIT 50", (mid,))]
+                "JOIN snapshots s ON s.id = c.snap_id WHERE c.message_id=? OR (c.message_id>=? AND c.message_id<?) "
+                "ORDER BY s.at DESC LIMIT 50", (mid, lo, hi))]
             protects = sorted({self._path(db, r[0]) for r in db.execute(
                 "SELECT DISTINCT k.node_id FROM parity_shards s JOIN parity_members m ON m.gid = s.gid "
                 "JOIN chunks k ON k.message_id = m.message_id WHERE s.message_id=?", (mid,))})
         return {"files": files, "versions": versions, "snapshots": snapshots, "protects": protects}
 
     def data_mids(self):
-        """Every stored data piece something still uses (files, earlier versions, snapshots)."""
+        """Every stored data piece something still uses (files, earlier versions, snapshots); packs as themselves."""
         with self.lock:
-            return {r[0] for r in self.db.execute(
+            return {physical(r[0]) for r in self.db.execute(
                 "SELECT message_id FROM chunks UNION SELECT message_id FROM version_chunks UNION "
                 "SELECT message_id FROM snapshot_chunks")}
 
     def referenced_mids(self):
         """Every stored piece the drive needs (for the background check), in upload order."""
         with self.lock:
-            mids = {r[0] for r in self.db.execute(
+            mids = {physical(r[0]) for r in self.db.execute(
                 "SELECT message_id FROM chunks UNION SELECT message_id FROM version_chunks UNION "
                 "SELECT message_id FROM snapshot_chunks UNION SELECT message_id FROM parity_shards")}
         return sorted(mids, key=lambda m: (len(m), m))
@@ -776,9 +795,9 @@ class Index:
         with self.lock:
             nids = [r[0] for r in self.db.execute(
                 "SELECT DISTINCT c.node_id FROM chunks c JOIN nodes n ON n.id = c.node_id "
-                "WHERE n.state='synced' AND NOT EXISTS "
+                "WHERE n.state='synced' AND instr(c.message_id, ?) = 0 AND NOT EXISTS "      # (packs have their own)
                 "(SELECT 1 FROM parity_members p WHERE p.message_id = c.message_id) LIMIT ?",
-                (limit * 4 + len(skip),))]
+                (PACK_SEP, limit * 4 + len(skip),))]
             for nid in nids:
                 if nid in skip:
                     continue
@@ -1337,10 +1356,15 @@ class Index:
         old, new = str(op["o"]), str(op["n"])
         if old == new:
             return
-        nodes = {r[0] for r in db.execute("SELECT node_id FROM chunks WHERE message_id=?", (old,))}
+        lo, hi = old + PACK_SEP, old + chr(ord(PACK_SEP) + 1)     # (a pack: its parts "<old>+<offset>+<length>")
+        nodes = {r[0] for r in db.execute("SELECT node_id FROM chunks WHERE message_id=? OR (message_id>=? AND message_id<?)",
+                                          (old, lo, hi))}
         updated = 0
         for table in _PIECE_TABLES:
             updated += db.execute(f"UPDATE {table} SET message_id=? WHERE message_id=?", (new, old)).rowcount
+            if table in ("chunks", "version_chunks", "snapshot_chunks"):
+                updated += db.execute(f"UPDATE {table} SET message_id=? || substr(message_id, ?) "
+                                      "WHERE message_id>=? AND message_id<?", (new, len(old) + 1, lo, hi)).rowcount
         if updated:
             db.execute("UPDATE chunks SET url=NULL, attachment_id=NULL WHERE message_id=?", (new,))
             db.execute("DELETE FROM trash WHERE message_id=?", (new,))

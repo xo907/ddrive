@@ -3,6 +3,7 @@
 import posixpath
 import time
 
+from .backend import physical
 from .index import new_uid
 
 
@@ -93,13 +94,13 @@ def intact_copy(idx, lost, path):
                           (s["id"], path)):
             chunks = [[r["message_id"], r["size"], r["sha256"]] for r in idx._all(
                 "SELECT message_id, size, sha256 FROM snapshot_chunks WHERE entry_id=? ORDER BY idx", (e["id"],))]
-            if not any(c[0] in lost for c in chunks):
+            if not any(physical(c[0]) in lost for c in chunks):
                 best = {"source": "snapshot", "at": s["at"], "size": e["size"], "mtime": e["mtime"], "chunks": chunks}
     for v in idx.versions_for(node["uid"]):          # newest first
         if best is not None and v["superseded"] <= best["at"]:
             break
         chunks = [[c["message_id"], c["size"], c["sha256"]] for c in idx.version_chunks(v["id"])]
-        if not any(c[0] in lost for c in chunks):
+        if not any(physical(c[0]) in lost for c in chunks):
             best = {"source": "version", "at": v["superseded"], "size": v["size"], "mtime": v["mtime"], "chunks": chunks}
             break
     return best

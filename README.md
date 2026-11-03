@@ -596,6 +596,22 @@ gets 2 spare pieces at 10, 4 at 20). Raising it also adds spare pieces to files 
 the background while nothing uploads (each group is downloaded once); `health` shows how many are
 left.
 
+### Small files are packed
+
+Each stored piece is a Discord message, and the bots keep to a gentle pace (30 messages a minute each).
+A file on its own costs at least two (its piece and a spare piece), so thousands of small files used to
+take hours. Files of up to 1 MB are packed instead: they wait a moment (2 seconds, or until 8 MB or 500
+of them are together) and go up as one piece, a pack, with its spare pieces; each file refers to its part
+of it. That is tens of times fewer messages.
+
+- A pack is checked, rebuilt and repaired like any piece: reading a file whose pack is gone rebuilds the
+  pack from its spare pieces and every file in it follows the repair.
+- It stays while any file, earlier version or snapshot uses a part of it, and goes (with its spare pieces)
+  when none does. Deleting some of its files frees nothing until the last one goes.
+- A copy of a small file refers to the part that is already stored.
+- `config pack_small_files false` turns it off (files already packed stay readable).
+- Every computer running the full DDrive on the same drive needs 3.35.0 or newer to read packed files.
+
 ### Spare channels
 
 Spare pieces protect against Discord losing *some* pieces. A whole channel can go too: deleted,

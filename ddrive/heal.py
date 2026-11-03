@@ -25,6 +25,7 @@ from .logbuf import tname
 from . import codec, rs
 from concurrent.futures import ThreadPoolExecutor
 
+from .backend import pack_slice, part_of, physical
 from .channels import Layout, channel_of, layout_of, split
 from .crypto import AuthenticationError
 from .discord_api import DiscordError, is_gone
@@ -184,7 +185,9 @@ class Healer:
         return enc.parity()[0]
 
     def recover(self, mid):
-        """Rebuild piece `mid` (data or spare) and schedule its repair. Returns its bytes or None."""
+        """Rebuild piece `mid` (data or spare) and schedule its repair. Returns its bytes or None. (A packed file's
+        part: its pack is rebuilt, and the pack's bytes are returned; the repair moves every part with it.)"""
+        mid = physical(mid)
         for group in self.index.parity_groups_for(mid):
             member_mids = [x[0] for x in group["members"]]
             try:
@@ -227,6 +230,7 @@ class Healer:
     def rebuild_for_read(self, mid):
         """Piece `mid` rebuilt from the rest of its group, only to be read: nothing is uploaded and nothing
         is counted lost (its channel refused access; the piece itself may well still be there)."""
+        mid = physical(mid)
         for group in self.index.parity_groups_for(mid):
             if mid not in [x[0] for x in group["members"]]:
                 continue
@@ -664,7 +668,7 @@ def confirm_unreadable(index, backend, crypto, nid, healer=None):
         mid = chunk["message_id"]
         try:
             payload, _ = backend.download(mid, None)
-            data = codec.decode(payload, crypto, chunk.get("sha256"))
+            data = part_of(codec.decode(payload, crypto, None if pack_slice(mid)[1] is not None else chunk.get("sha256")), mid)
             broken = bool(chunk.get("sha256")) and hashlib.sha256(data).hexdigest() != chunk["sha256"]
         except AuthenticationError:
             broken = True
@@ -727,8 +731,9 @@ class Checker:
 
     def _problem(self, chunk):
         try:
-            payload, _ = self.backend.download(chunk["message_id"], chunk.get("url"))
-            data = codec.decode(payload, self.crypto, chunk.get("sha256"))
+            mid = chunk["message_id"]
+            payload, _ = self.backend.download(mid, chunk.get("url"))
+            data = part_of(codec.decode(payload, self.crypto, None if pack_slice(mid)[1] is not None else chunk.get("sha256")), mid)
             if chunk.get("sha256") and hashlib.sha256(data).hexdigest() != chunk["sha256"]:
                 problem = "damaged"
             else:

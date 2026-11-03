@@ -3,6 +3,11 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.35.0 (2026-11-03)
+
+- **Small files are packed: tens of times faster to upload.** Every file used to be at least two Discord messages (its piece and a spare piece), and at the pace the bots keep to ("gentle", 30 posts a minute each) a folder of thousands of small files took a day: a project's `node_modules` was 31,000 of them. Now files of up to 1 MB (and a quarter of a piece) wait a moment and go up together: up to 8 MB or 500 files in one stored piece, a "pack", protected by spare pieces, checked, rebuilt and repaired like any other piece; each file refers to its part of it. Measured at the same pace: 48 small files a second instead of 2, 300 files in 6 messages instead of about 600. A pack stays as long as any of its files, earlier versions or snapshots needs it, and goes with its spare pieces when none does; a copy of a small file refers to the part already stored. This also counts for every end-to-end encrypted account's files (and its list of changes). `pack_small_files` (on by default) turns it off.
+  Every computer that runs the full DDrive on the same drive needs this version to read packed files; DDrive Lite, the Android app and browsers read through the host and need nothing.
+
 ## 3.34.1 (2026-11-03)
 
 - **3.33.2 and 3.33.3 are in the published code too.** They were made on another computer and run on the host already, but weren't on GitHub, so every other copy (and 3.34.0) was without them: file locks on the drive (3.33.2) and uploads that don't wait for Telegram (3.33.3), below. Nothing else changes.

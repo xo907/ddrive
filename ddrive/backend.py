@@ -100,6 +100,39 @@ def _is_index_msg(m) -> bool:
     return (m.get("content") or "").startswith(INDEX_MARKER) and bool(m.get("attachments"))
 
 
+# Small files packed together (uploader.py, packing): many small files are one stored piece, a "pack", and each
+# of them refers to its part of it as "<pack's id>+<offset>+<length>". A pack is an ordinary piece: it is stored,
+# protected by spare pieces, checked and repaired like any other. Only reading a file (cache.py) and counting what
+# a piece is still used for (index.py) look at the part after the "+"; the backends get the pack's own id.
+PACK_SEP = "+"
+
+
+def physical(mid):
+    """The stored piece a piece reference is (a packed file's part: its pack)."""
+    s = str(mid)
+    i = s.find(PACK_SEP)
+    return s if i < 0 else s[:i]
+
+
+def pack_ref(mid, offset, length):
+    return f"{mid}{PACK_SEP}{int(offset)}{PACK_SEP}{int(length)}"
+
+
+def pack_slice(mid):
+    """(stored piece, offset, length) of a packed file's part; (mid, None, None) for a piece of its own."""
+    s = str(mid)
+    if PACK_SEP not in s:
+        return s, None, None
+    base, off, length = s.split(PACK_SEP)[:3]
+    return base, int(off), int(length)
+
+
+def part_of(data, mid):
+    """Of a stored piece's bytes, those of `mid` (a packed file's part: its slice of the pack)."""
+    _, off, length = pack_slice(mid)
+    return data if off is None else data[off:off + length]
+
+
 def snowflake_time(mid) -> float:
     """Unix time a Discord message id ("snowflake") was created."""
     return ((int(mid) >> 22) + 1420070400000) / 1000.0
@@ -159,6 +192,7 @@ class DiscordBackend:
     def _get_message(self, message_id):
         """The message holding a piece. A bot that is refused (403) is not the last word: the main bot and
         then every other bot are asked before the refusal is passed on. Only a 404 means it is gone."""
+        message_id = physical(message_id)
         first = self._pick()
         order = [first] + [a for a in [self.api, *self.apis] if a is not first]
         tried, last = set(), None
@@ -205,6 +239,7 @@ class DiscordBackend:
 
     def download(self, message_id: str, url: str):
         """Returns (data, refreshed_url_or_None)."""
+        message_id = physical(message_id)
         if url and not url_expired(url):
             try:
                 return self.api.download_url(url), None
@@ -221,6 +256,7 @@ class DiscordBackend:
 
     def message_info(self, message_id: str):
         """{'filename', 'url', 'attachment_id'} of a stored piece, or None if it is gone from Discord."""
+        message_id = physical(message_id)
         try:
             msg = self._get_message(message_id)
         except DiscordError as e:
@@ -234,9 +270,10 @@ class DiscordBackend:
 
     @staticmethod
     def time_of(mid) -> float:
-        return snowflake_time(mid)
+        return snowflake_time(physical(mid))
 
     def delete(self, message_id: str) -> None:
+        message_id = physical(message_id)
         try:
             self.api.delete_message(self.channel_id, message_id)
         except DiscordError as e:
@@ -411,7 +448,7 @@ class LocalBackend:
             return str(mid)
 
     def _p(self, mid, ext):
-        return os.path.join(self.root, f"{mid}.{ext}")
+        return os.path.join(self.root, f"{physical(mid)}.{ext}")
 
     def _msg(self, mid):
         with open(self._p(mid, "json"), encoding="utf-8") as f:
@@ -453,7 +490,7 @@ class LocalBackend:
 
     @staticmethod
     def time_of(mid) -> float:
-        return int(mid) / 1e9
+        return int(physical(mid)) / 1e9
 
     def delete(self, message_id):
         for ext in ("bin", "json"):

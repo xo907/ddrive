@@ -18,12 +18,20 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .logbuf import tname
 from . import codec, rs
+from .backend import pack_ref, pack_slice, physical
 from .channels import Layout, layout_of, spread_pieces
 
 log = logging.getLogger("ddrive.uploader")
 
 MAX_PIECE_WORKERS = 16     # pieces in flight at once (each holds a few copies of up to chunk_size in RAM)
 PARITY_BATCH = 8           # spare pieces computed (and held in memory) at a time
+# Small files are packed: many go into one stored piece (a "pack", backend.py), uploaded once with its spare pieces,
+# each file referring to its part. Discord is asked to take one message for hundreds of files instead of two or
+# more for every one: at the same pace, a folder of small files goes up tens of times faster.
+PACK_FILE = 1024 * 1024    # a file is packed when it is this small (and fits in a quarter of a piece)...
+PACK_TARGET = 8 * 1024 * 1024   # ...into packs of up to this much (at most a piece)...
+PACK_MAX_FILES = 500       # ...or this many files...
+PACK_WAIT = 2.0            # ...or what has come in when the oldest has waited this long
 PROGRESS_EVERY = 2.0       # seconds between saves of an upload's progress (always saved at the end of a group)
 REVERIFY_AFTER = 300.0     # re-check reused pieces still exist if the upload took longer than this
 
@@ -105,6 +113,9 @@ class Uploader:
         self._pool = None
         self._parity_pool = None  # computes and uploads a group's spare pieces while the next group uploads
         self._reserved = collections.Counter()   # reused pieces of uploads in progress: never trash them
+        self._pack_items = {}                     # nid -> (version, size, when): small files waiting to be packed
+        self._packing = False                     # a pack is being uploaded
+        self._pack_thread = None
         self.progress = {}                         # nid -> {"path", "done", "total", "size"} (status page)
         self.stats = {"uploaded_bytes": 0, "reused_bytes": 0, "compressed_saved": 0, "spare_bytes": 0,
                       "files": 0, "file_bytes": 0, "failed": 0, "last_done": 0.0, "last_failed": 0.0}   # since the drive started
@@ -183,9 +194,11 @@ class Uploader:
                 for i in range(n)
             ]
             self._trash_thread = threading.Thread(target=self._trash_loop, name=tname("TrashCleanerWorker"), daemon=True)
+            self._pack_thread = threading.Thread(target=self._pack_loop, name=tname("Packer"), daemon=True)
             for t in self._upload_threads:
                 t.start()
             self._trash_thread.start()
+            self._pack_thread.start()
         log.info("Uploader started (%d file worker(s), %d piece(s) at a time over %d bot(s)).",
                  len(self._upload_threads), self._piece_workers(), getattr(self.backend, "upload_slots", 1))
 
@@ -197,7 +210,7 @@ class Uploader:
         if not was_running:
             return
 
-        for t in (*self._upload_threads, self._trash_thread):
+        for t in (*self._upload_threads, self._trash_thread, self._pack_thread):
             if t and t.is_alive():
                 t.join(timeout=timeout)
         if self._pool is not None:
@@ -219,6 +232,8 @@ class Uploader:
             with self._lock:
                 self._pending.pop(nid, None)
             self._process_upload(nid)
+            if nid in self._pack_items:          # (a small file: its pack goes now, with what else waits)
+                self._flush_packs()
         finally:
             self._running = was
 
@@ -232,12 +247,12 @@ class Uploader:
 
     def is_idle(self) -> bool:
         with self._lock:
-            return len(self._pending) == 0 and len(self._active) == 0
+            return len(self._pending) == 0 and len(self._active) == 0 and not self._pack_items and not self._packing
 
     def wait_idle(self, timeout: float = None) -> bool:
         end = time.time() + timeout if timeout is not None else float("inf")
         with self._lock:
-            while len(self._pending) > 0 or len(self._active) > 0:
+            while len(self._pending) > 0 or len(self._active) > 0 or self._pack_items or self._packing:
                 now = time.time()
                 if now >= end:
                     return False
@@ -329,6 +344,13 @@ class Uploader:
         if file_size == 0:
             if self.fs.commit_upload(nid, version, []):
                 log.info("Uploaded empty file %s", path)
+            return
+
+        # 3b. A small file waits a moment to be packed with others (_pack_loop)
+        if self._packable(file_size):
+            with self._lock:
+                self._pack_items[nid] = (version, file_size, time.time())
+                self._cv.notify_all()
             return
 
         # 4. Upload the pieces group by group, each group followed by its spare pieces
@@ -640,7 +662,7 @@ class Uploader:
         if not getattr(self.cfg, "dedup", True):
             return None
         mid = self.index.find_dedup(sha256, size)
-        if mid is None:
+        if mid is None or pack_slice(mid)[1] is not None:    # (a packed file's part isn't a piece of its own)
             return None
         try:
             info = self.backend.message_info(mid)
@@ -734,6 +756,169 @@ class Uploader:
         if stale:
             self.index.release(stale)
         return good, parity
+
+    # -------------------------------------------------------- packing small files
+    def _packable(self, size):
+        if not getattr(self.cfg, "pack_small_files", True):
+            return False
+        return 0 < size <= min(PACK_FILE, int(self.cfg.chunk_size or 0) // 4)
+
+    def _pack_take(self, force=False):
+        """The next batch of small files to pack ([(nid, version, size)]) if one is due, else None. Lock held."""
+        if not self._pack_items or self._packing:
+            return None
+        items = list(self._pack_items.items())
+        target = min(PACK_TARGET, int(self.cfg.chunk_size))
+        total = sum(v[1] for _, v in items)
+        oldest = min(v[2] for _, v in items)
+        if not (force or total >= target or len(items) >= PACK_MAX_FILES or time.time() - oldest >= PACK_WAIT):
+            return None
+        batch, size = [], 0
+        for nid, (version, n, _) in items:
+            if batch and (size + n > target or len(batch) >= PACK_MAX_FILES):
+                break
+            batch.append((nid, version, n))
+            size += n
+            del self._pack_items[nid]
+        self._packing = True
+        return batch
+
+    def _pack_loop(self):
+        while True:
+            batch = None
+            with self._lock:
+                while self._running:
+                    batch = self._pack_take()
+                    if batch:
+                        break
+                    self._cv.wait(0.5)
+                if not self._running:
+                    return
+            self._pack_run(batch)
+
+    def _flush_packs(self):
+        """Pack and upload everything waiting, now (run_now: tests and one-off tools)."""
+        while True:
+            with self._lock:
+                while self._packing:
+                    self._cv.wait(0.5)
+                batch = self._pack_take(force=True)
+            if not batch:
+                return
+            self._pack_run(batch)
+
+    def _pack_run(self, batch):
+        try:
+            self._upload_pack(batch)
+        except Exception as e:
+            log.error("Unhandled error packing %d small file(s): %s", len(batch), e, exc_info=True)
+        finally:
+            with self._lock:
+                self._packing = False
+                self._cv.notify_all()
+
+    def _upload_pack(self, batch):
+        """Upload small files as one pack: their bytes one after another in one piece, with the spare pieces of a
+        one-piece group; then each file is committed as its part of it ("<pack>+<offset>+<length>"), and the
+        pack's group is published once its files are (before, nothing would be using the pack)."""
+        parts, entries, reserved = [], [], []
+        offset = 0
+        for nid, version, size in batch:
+            node = self.index.get(nid)
+            if node is None or node["is_dir"] or node["state"] == "synced" or node["version"] != version:
+                continue
+            if self.fs.is_busy(nid):
+                self.enqueue(nid, delay=self.cfg.upload_delay)
+                continue
+            try:
+                with open(self.fs.staging_path(nid), "rb") as f:
+                    data = f.read(size + 1)
+            except OSError:
+                continue
+            if len(data) != size:                    # changed since: it comes back by itself
+                self.enqueue(nid, delay=self.cfg.upload_delay)
+                continue
+            sha = hashlib.sha256(data).hexdigest()
+            same = self.index.find_dedup(sha, size)
+            if same is not None:                     # already stored (a copy): it refers to that
+                with self._lock:
+                    self._reserved[physical(same)] += 1
+                reserved.append(physical(same))
+                entries.append((nid, version, {"idx": 0, "message_id": same, "attachment_id": None, "url": None,
+                                               "size": size, "sha256": sha}))
+                continue
+            entries.append((nid, version, {"idx": 0, "offset": offset, "size": size, "sha256": sha}))
+            parts.append(data)
+            offset += size
+        if not entries:
+            return
+        pack_mid, group = None, None
+        try:
+            if parts:
+                pack = b"".join(parts)
+                del parts
+                psha = hashlib.sha256(pack).hexdigest()
+                k, _ = parity_shape(self.cfg, 1, self._layout().places)
+                job = _Job(0, "(small files)", "small_files", 0, len(pack), self.cfg.chunk_size, False)
+                stored = self._store_piece(job, 0, pack, psha, self._channel_for(0, k))
+                pack_mid = stored["message_id"]
+                if k:
+                    tmp = os.path.join(self.fs.staging_dir, f"pack-{secrets.token_hex(6)}.tmp")
+                    try:
+                        with open(tmp, "wb") as f:
+                            f.write(pack)
+                        group = self._upload_parity(tmp, [0], self.cfg.chunk_size, [psha], [pack_mid])
+                    finally:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                for _, _, c in entries:
+                    if "offset" in c:
+                        c["message_id"] = pack_ref(pack_mid, c.pop("offset"), c["size"])
+                        c["attachment_id"], c["url"] = stored["attachment_id"], stored["url"]
+        except Exception as e:
+            # Nothing was committed: what was uploaded goes to the trash, and the files are tried again.
+            self.index.release(([pack_mid] if pack_mid else []) + [m[0] for m in (group or [None, []])[1]])
+            with self._lock:
+                for m in reserved:
+                    self._reserved[m] -= 1
+            for nid, _, _ in entries:
+                self._retry_later(nid)
+            self.stats["failed"] += len(entries)
+            self.stats["last_failed"] = time.time()
+            log.error("Failed uploading a pack of %d small file(s): %s (retrying)", len(entries), e)
+            return
+        done, names = 0, []
+        try:
+            for nid, version, c in entries:
+                if self.fs.commit_upload(nid, version, [c]):
+                    done += 1
+                    if len(names) < 3:
+                        names.append(self.index.path_of(nid))
+                    self._failures.pop(nid, None)
+                    self.stats["files"] += 1
+                    self.stats["file_bytes"] += c["size"]
+                elif self.index.get(nid) is not None:
+                    self.enqueue(nid, delay=self.cfg.upload_delay)
+            if pack_mid:
+                if group and self.index.is_referenced(pack_mid):
+                    self.index.add_parity_group(group[0], [[pack_mid, offset, psha]], group[1])
+                elif group:
+                    self.index.release([m[0] for m in group[1]])
+                if not self.index.is_referenced(pack_mid):
+                    self.index.release([pack_mid])     # (every file in it changed meanwhile)
+        finally:
+            with self._lock:
+                for m in reserved:
+                    self._reserved[m] -= 1
+        self.stats["last_done"] = time.time()
+        if self.journal is not None and done:
+            self.journal.wake()
+        if done:
+            log.info("Uploaded %s%s as one pack (%d bytes%s)", ", ".join(names),
+                     f" and {done - len(names)} more small file(s)" if done > len(names) else "", offset,
+                     f", {len(group[1])} spare" if group else "")
 
     # -------------------------------------------------------- backup & trash
     def _trash_loop(self):

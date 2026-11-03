@@ -18,6 +18,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 from . import codec
+from .backend import pack_slice, physical
 from .crypto import AuthenticationError
 from .discord_api import DiscordError, is_gone
 
@@ -78,11 +79,26 @@ class ChunkCache:
             self._mem.clear()
             self._mem_total = 0
 
+    def _stored(self, chunk):
+        """(the stored piece to fetch, as a chunk, offset of this chunk's bytes in it). A packed file's part is its
+        pack, fetched and kept whole (all the pack's files are read from it) and checked whole: its size and
+        checksum are those of the pack's spare-piece group, the file knows only its own part."""
+        mid, off, length = pack_slice(chunk["message_id"])
+        if off is None:
+            return chunk, 0
+        info = None
+        try:
+            info = self.index.piece_info(mid)
+        except Exception:
+            info = None
+        return {"message_id": mid, "url": chunk.get("url"), "node_id": chunk.get("node_id"), "idx": chunk.get("idx"),
+                "size": info[1] if info else length, "sha256": info[2] if info else None}, off
+
     def _pinned_mids(self):
         t, mids = self._pinned
         if time.time() - t > 5.0:
             try:
-                mids = self.index.get_pinned_message_ids()
+                mids = {physical(m) for m in self.index.get_pinned_message_ids()}
             except Exception:
                 mids = set()
             self._pinned = (time.time(), mids)
@@ -129,6 +145,8 @@ class ChunkCache:
         return p
 
     def read(self, chunk, start, length) -> bytes:
+        chunk, off = self._stored(chunk)
+        start += off
         for attempt in range(3):
             src = self._ensure(chunk)
             if isinstance(src, bytes):
@@ -142,6 +160,7 @@ class ChunkCache:
         raise IOError(f"could not read chunk {chunk['message_id']}")
 
     def prefetch(self, chunk):
+        chunk = self._stored(chunk)[0]
         mid = chunk["message_id"]
         with self._lock:
             if mid in self._mem or mid in self._lru or mid in self._inflight:
@@ -218,6 +237,7 @@ class ChunkCache:
 
     def peek(self, mid):
         """A cached piece's bytes, without downloading (None if it isn't cached)."""
+        mid = physical(mid)
         with self._lock:
             data = self._mem.get(mid)
             if data is not None:
@@ -232,6 +252,7 @@ class ChunkCache:
         return None
 
     def is_chunk_cached(self, message_id: str) -> bool:
+        message_id = physical(message_id)
         with self._lock:
             if message_id in self._mem:
                 return True
@@ -265,9 +286,9 @@ class ChunkCache:
             while to_visit:
                 cur = to_visit.pop()
                 to_visit.extend(c["id"] for c in self.index.children(cur))
-                target_mids.update(c["message_id"] for c in self.index.get_chunks(cur))
+                target_mids.update(physical(c["message_id"]) for c in self.index.get_chunks(cur))
         else:
-            pinned = set() if force else self.index.get_pinned_message_ids()
+            pinned = set() if force else {physical(m) for m in self.index.get_pinned_message_ids()}
             with self._lock:
                 target_mids = (set(self._lru.keys()) | set(self._mem.keys())) - pinned
         self._pinned = (0.0, set())
@@ -299,6 +320,13 @@ class ChunkCache:
                 to_visit.extend(c["id"] for c in self.index.children(cur))
             elif node:
                 all_chunks.extend(self.index.get_chunks(cur))
+        # (a pack holding several of them is fetched once)
+        stored = {}
+        for c in all_chunks:
+            sc = self._stored(dict(c))[0]
+            stored.setdefault(sc["message_id"], sc)
+        n_chunks = len(all_chunks)
+        all_chunks = list(stored.values())
 
         futures = []
         for c in all_chunks:
@@ -324,7 +352,7 @@ class ChunkCache:
             finally:
                 self.jobs.pop(node_id, None)
 
-        return len(all_chunks)
+        return n_chunks
 
 
 def _silent_remove(p):

@@ -26,7 +26,7 @@ alone holds enough to rebuild it: Discord can go entirely (or Telegram) and no f
 
 import logging
 
-from .backend import DiscordBackend, LocalBackend, StoredChunk, sort_checkpoints, tag_of
+from .backend import DiscordBackend, LocalBackend, StoredChunk, physical, sort_checkpoints, tag_of
 from .discord_api import DiscordError
 from .telegram import MAX_READ, TelegramAPI, TelegramBackend, is_place, place_of
 
@@ -258,8 +258,8 @@ class SpreadBackend:
         return Layout([c for c in self.channels if not is_place(c)], self.server_of)
 
     def route(self, mid):
-        """(backend, message id in that channel) for a piece id."""
-        chan, raw = split(mid)
+        """(backend, message id in that channel) for a piece id (a packed file's part: its pack's)."""
+        chan, raw = split(physical(mid))
         if chan is None:
             return self.main, raw
         if chan in self.lost:
