@@ -4,6 +4,8 @@ drive that loses every Discord channel at once and still has every file."""
 
 import os
 import shutil
+import threading
+import time
 from unittest import mock
 
 import helpers
@@ -29,6 +31,8 @@ class TelegramTest(helpers.DriveTest):
         patch = mock.patch.object(telegram, "PACE", 0.0)            # (no second between posts in a test)
         patch.start()
         self.addCleanup(patch.stop)
+        telegram._PACE.clear()                                       # (a 429's hold is for the whole program)
+        self.addCleanup(telegram._PACE.clear)
 
     def backend(self, crypto=None):
         return TelegramBackend(TelegramAPI(TOKEN, timeout=10, retries=2, base=self.fake.base), CHAT, crypto=crypto)
@@ -58,6 +62,33 @@ class TelegramTest(helpers.DriveTest):
         self.assertEqual(b.download(piece.message_id, piece.url)[0], b"hello")
         with self.assertRaises(TelegramError):
             b.upload("big.bin", b"x" * (telegram.MAX_READ + 1))
+
+    def test_one_turn_per_chat_for_every_drive_and_a_429_holds_it_for_all(self):
+        # Every drive (the owner's, each account's) makes its own TelegramAPI for the same bot and chat:
+        # they take turns together, or the chat gets their posts all at once and answers 429 for a minute.
+        a, b = self.backend(), self.backend()
+        with mock.patch.object(telegram, "PACE", 0.3):
+            t = time.time()
+            a.upload("1.bin", b"x")
+            b.upload("2.bin", b"x")
+            self.assertGreaterEqual(time.time() - t, 0.3)
+        # One of them is told to wait: the other waits too, instead of being told the same a moment later
+        self.fake.too_many, self.fake.retry_after = 1, 1
+        a.upload("3.bin", b"x")
+        calls = len(self.fake.calls)
+        t = time.time()
+        b.upload("4.bin", b"x")
+        self.assertEqual(len(self.fake.calls), calls + 1)                    # (no 429 for it: it waited)
+        self.assertLess(time.time() - t, 1.0)                                # (the hold was over by then)
+        self.fake.too_many, self.fake.retry_after = 1, 1
+        hold = threading.Thread(target=a.upload, args=("5.bin", b"x"))
+        hold.start()
+        time.sleep(0.2)                                                      # a has its 429 and holds the chat
+        t = time.time()
+        b.upload("6.bin", b"x")
+        self.assertGreaterEqual(time.time() - t, 0.5)
+        hold.join()
+        self.assertEqual(sum(m == "sendDocument" for m, _ in self.fake.calls[calls + 1:]), 3)   # 5 twice (429), 6 once
 
     def test_a_chat_that_refuses_the_bot_is_left_out_for_a_while(self):
         b = TelegramBackend(TelegramAPI(TOKEN, timeout=10, retries=0, base=self.fake.base), "-100999", crypto=None)
@@ -125,6 +156,30 @@ class TelegramTest(helpers.DriveTest):
                 out.append(([x[0] for x in g["members"]], [x[0] for x in g["shards"]]))
         return out
 
+    def spread(self, d, path):
+        """What the healer does while nothing uploads (Maintenance.spread_step): an upload stores a file's pieces
+        on Discord only, and its groups get their share on Telegram here."""
+        lay = d.backend.layout
+        mine = {c["message_id"] for c in d.index.get_chunks(d.index.resolve(path)["id"])}
+        todo = [gid for gid in d.maintenance.groups_to_spread(lay)
+                if mine & {x[0] for x in d.index.parity_group(gid)["members"]}]
+        for gid in todo:
+            group = d.index.parity_group(gid)
+            mids = [x[0] for x in group["members"]] + [x[0] for x in group["shards"]]
+            self.assertTrue(d.healer.spread(group, lay, d.maintenance.need(mids, len(group["members"]), lay)))
+        left = [gid for gid in d.maintenance.groups_to_spread(lay) if mine & {x[0] for x in d.index.parity_group(gid)["members"]}]
+        self.assertEqual(left, [])
+        return len(todo)
+
+    def strongest(self, d, path):
+        """Per data piece set, the group with the most spare pieces (spreading records a new group over the same pieces)."""
+        best = {}
+        for members, shards in self.groups(d, path):
+            key = tuple(members)
+            if key not in best or len(shards) > len(best[key][1]):
+                best[key] = (members, shards)
+        return list(best.values())
+
     def lose(self, d, path, telegram_side):
         """Every piece of `path` on one platform disappears (Discord: every channel at once)."""
         place = place_of(CHAT)
@@ -142,7 +197,11 @@ class TelegramTest(helpers.DriveTest):
             self.write(d, "/f.bin", data)
             self.upload(d)
             place = place_of(CHAT)
-            for members, shards in self.groups(d, "/f.bin"):
+            # An upload doesn't wait for Telegram (~20 posts a minute): its pieces are all on Discord...
+            self.assertFalse([m for ms, ss in self.groups(d, "/f.bin") for m in ms + ss if channel_of(m) == place])
+            # ...and the healer gives it its share on Telegram afterwards
+            self.assertGreater(self.spread(d, "/f.bin"), 0)
+            for members, shards in self.strongest(d, "/f.bin"):
                 on_tg = sum(channel_of(m) == place for m in members + shards)
                 self.assertGreaterEqual(len(shards), len(members))            # as many spare pieces as data pieces
                 self.assertGreaterEqual(on_tg, len(members))                   # Telegram alone can rebuild it
@@ -175,6 +234,7 @@ class TelegramTest(helpers.DriveTest):
         data = os.urandom(helpers.PIECE * 4)
         self.write(d, "/f.bin", data)
         self.upload(d)
+        self.spread(d, "/f.bin")
         place = place_of(CHAT)
         gone = next(m for members, shards in self.groups(d, "/f.bin") for m in members + shards if channel_of(m) == place)
         d.backend.delete(gone)
@@ -194,6 +254,9 @@ class TelegramTest(helpers.DriveTest):
         data = os.urandom(helpers.PIECE * 4)
         self.write(d, "/Docs/f.bin", data)
         self.upload(d)
+        self.spread(d, "/Docs/f.bin")
+        d.journal.flush()                        # (the new groups are published and read back before the copy)
+        d.journal.poll()
         d.journal.checkpoint(force=True)
         d.stop_background_services()
         # Every Discord channel is gone: a new, empty one is made. Telegram still has its pieces and the copy.

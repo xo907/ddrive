@@ -65,6 +65,14 @@ class LiteTest(helpers.DriveTest):
             self.client.list("/")
         self.assertEqual(e.exception.status, 401)
 
+    def test_file_locks_are_left_to_the_kernel(self):
+        # FUSE registers a lock handler for any `lock` attribute: an RLock there made every flock/fcntl
+        # lock on the drive fail with EINVAL (SQLite: "disk I/O error"). None leaves locks to the kernel.
+        from ddrive.fs import DDriveFS
+        self.assertIsNone(self.fs.lock)
+        self.assertIsNone(DDriveFS.lock)
+        self.assertNotIn("lock", vars(self.host.fs))
+
     def test_the_drive_as_programs_use_it(self):
         fs = self.fs
         self.assertEqual(fs.readdir("/", None), [".", ".."])

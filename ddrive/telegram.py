@@ -16,7 +16,9 @@ What Telegram's bot API allows, and what follows from it:
   a small directory (DIRECTORY) naming the copies of the index checkpoints and of the list of accounts
   kept here, so a drive whose Discord is gone can start again from Telegram.
 * A bot deletes messages older than 48 hours only as an admin with the right to delete messages.
-* About one message a second per chat: posting is paced (PACE).
+* About 20 messages a minute per group or channel: every call in a chat is paced (PACE), with one turn per
+  bot and chat for the whole program (the owner's drive, every account's and the healer share a chat), and
+  a 429's "retry after" holds the chat for every caller, not only the one that was told.
 """
 
 import io
@@ -39,7 +41,7 @@ log = logging.getLogger("ddrive.telegram")
 API = "https://api.telegram.org"
 PREFIX = "tg"                         # a Telegram place's name among the channels: tg<chat id, "-" as "n">
 MAX_READ = 20 * 1024 * 1024           # the biggest file a bot can read back
-PACE = 1.05                           # seconds between two posts in one chat
+PACE = 3.1                            # seconds between two calls in one chat (Telegram: ~20 a minute in a group or channel)
 NO_ACCESS_PAUSE = 600.0               # a chat that refuses the bot is left out this long
 DIRECTORY = "DDRIVE_DIRECTORY"
 KEEP_INDEX = 2                        # index checkpoint copies kept in the chat
@@ -71,6 +73,12 @@ class TelegramError(Exception):
         return self.status in (401, 403) or "chat not found" in self.description.lower()
 
 
+# (bot token, chat) -> when it may be called in again. For the whole program: every drive (the owner's, each
+# account's) makes its own TelegramAPI, and they post in the same chat with the same bot.
+_PACE = {}
+_PACE_LOCK = threading.Lock()
+
+
 class TelegramAPI:
     """Calls to Telegram's bot API for one bot (no library: urllib), with 429s and dropped connections retried."""
 
@@ -79,22 +87,29 @@ class TelegramAPI:
         self.timeout = timeout
         self.retries = retries
         self.base = (base or os.environ.get("DDRIVE_TELEGRAM_API") or API).rstrip("/")
-        self._pace = {}                # chat -> when it may be posted to again
-        self._pace_lock = threading.Lock()
 
     def _wait_turn(self, chat):
-        with self._pace_lock:
+        with _PACE_LOCK:
             now = time.time()
-            at = max(now, self._pace.get(chat, 0.0))
-            self._pace[chat] = at + PACE
+            at = max(now, _PACE.get((self.token, chat), 0.0))
+            _PACE[(self.token, chat)] = at + PACE
         if at > now:
             time.sleep(at - now)
 
+    def _hold(self, chat, seconds):
+        """Telegram said to wait: no call in `chat` from anyone until then."""
+        with _PACE_LOCK:
+            key = (self.token, chat)
+            _PACE[key] = max(_PACE.get(key, 0.0), time.time() + seconds)
+
     def call(self, method, params=None, files=None):
         url = f"{self.base}/bot{self.token}/{method}"
+        chat = str(params["chat_id"]) if params and params.get("chat_id") is not None else None
         params = {k: (json.dumps(v) if isinstance(v, (dict, list)) else str(v)) for k, v in (params or {}).items() if v is not None}
         last = None
         for attempt in range(self.retries + 1):
+            if chat is not None:
+                self._wait_turn(chat)
             if files:
                 boundary = uuid.uuid4().hex
                 body = io.BytesIO()
@@ -129,7 +144,11 @@ class TelegramAPI:
             err = TelegramError(int(got.get("error_code") or 0), got.get("description") or "",
                                 (got.get("parameters") or {}).get("retry_after"))
             if err.status == 429 and attempt < self.retries:                 # too fast: told how long to wait
-                time.sleep(min(120, float(err.retry_after or 5)))
+                wait = min(120, float(err.retry_after or 5))
+                if chat is not None:
+                    self._hold(chat, wait)                                   # (the next turn waits it out)
+                else:
+                    time.sleep(wait)
                 last = err
                 continue
             if err.status >= 500 and attempt < self.retries:
@@ -140,7 +159,6 @@ class TelegramAPI:
         raise last
 
     def send_document(self, chat, name, data, caption=""):
-        self._wait_turn(str(chat))
         return self.call("sendDocument", {"chat_id": chat, "caption": caption or None, "disable_notification": "true",
                                           "disable_content_type_detection": "true"}, files={"document": (name, data)})
 

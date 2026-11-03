@@ -183,7 +183,7 @@ class Journal:
                     if any(isinstance(o, dict) and (o.get("t") in self.index.EXTRA_OPS or o.get("x")) for o in ops):
                         fs = self.fs
                         if fs is not None:
-                            with fs.lock:
+                            with fs.mutex:
                                 fs.on_remote_change(self.index.apply_ops(ops, None, extras_only=True))
                         else:
                             self.index.apply_ops(ops, None, extras_only=True)
@@ -213,7 +213,7 @@ class Journal:
         fs = self.fs
         if fs is None:
             return len(self.index.apply_ops(ops, mid, device=device))
-        with fs.lock:  # keep FUSE operations from interleaving with the batch
+        with fs.mutex:  # keep FUSE operations from interleaving with the batch
             changed = self.index.apply_ops(ops, mid, busy=fs.is_busy, device=device)
             fs.on_remote_change(changed)
         return len(changed)
@@ -299,7 +299,7 @@ class Journal:
                 return
             log.info("This device's file list is empty; rebuilding it from Discord...")
             if self.fs is not None:
-                with self.fs.lock:
+                with self.fs.mutex:
                     self.restore_any(found)
                     self.fs._chunk_maps.clear()
             else:

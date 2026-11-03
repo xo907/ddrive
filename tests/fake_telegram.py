@@ -20,6 +20,7 @@ class FakeTelegram:
         self.files = {}             # file id -> bytes
         self.calls = []             # (method, params)
         self.too_many = 0           # answer this many calls with 429 first
+        self.retry_after = 0        # ...telling them to wait this long
         self.lock = threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
@@ -43,8 +44,8 @@ class FakeTelegram:
             self.calls.append((method, params))
             if self.too_many > 0:
                 self.too_many -= 1
-                return 429, {"ok": False, "error_code": 429, "description": "Too Many Requests: retry after 0",
-                             "parameters": {"retry_after": 0}}
+                return 429, {"ok": False, "error_code": 429, "description": f"Too Many Requests: retry after {self.retry_after}",
+                             "parameters": {"retry_after": self.retry_after}}
             chat = self.chats.get(str(params.get("chat_id", "")))
             if method == "getMe":
                 return self.ok({"id": self.bot_id, "is_bot": True, "username": "ddrive_test_bot"})

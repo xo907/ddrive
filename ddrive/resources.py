@@ -262,7 +262,7 @@ def cancel_waiting_uploads(drive):
             pass
         chunks = idx.get_chunks(nid)
         path = idx.path_of(nid)
-        with fs.lock:
+        with fs.mutex:
             fs._chunk_maps.pop(nid, None)
             if chunks:
                 idx.update(nid, state="synced", size=sum(c["size"] for c in chunks))

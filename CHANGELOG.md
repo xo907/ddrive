@@ -3,9 +3,22 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.34.1 (2026-11-03)
+
+- **3.33.2 and 3.33.3 are in the published code too.** They were made on another computer and run on the host already, but weren't on GitHub, so every other copy (and 3.34.0) was without them: file locks on the drive (3.33.2) and uploads that don't wait for Telegram (3.33.3), below. Nothing else changes.
+
 ## 3.34.0 (2026-11-03)
 
 - **Folders that are made again by themselves are left out of folder syncing and folder uploads**: `node_modules`, `bower_components`, `__pycache__`, `.venv`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.gradle`, `.parcel-cache`, `.turbo`, `.next`, `.nuxt`, `.svelte-kit`. A synced Projects folder with one project's `node_modules` in it sent 31,657 tiny files, one by one, each with its own entry in the list of changes, and the host's upload queue grew faster than Discord took it ("Uploading" kept going up). Now sync skips them (a name left out counts at every level of a path, so what is already on the drive under such a folder isn't touched either), the dashboard's folder upload and drag-and-drop leave them out and say so (a dropped one isn't even read), and so does `lite put`. `.git` is kept: history isn't made again by itself.
+
+## 3.33.3 (2026-11-03)
+
+- **Uploads don't wait for Telegram any more.** A Telegram chat takes about 20 posts a minute, and every upload put pieces there (spare pieces, and data pieces too) before it was done: with a Telegram chat, a drive uploaded about 3 small files a minute and its backlog grew until the host turned new files away for room. Uploads now put their pieces on Discord only, at Discord's pace; the healer gives what was stored its share on Telegram afterwards, while nothing uploads (as it already did for files stored before a chat was added), so Discord or Telegram can still each be lost as a whole once it has caught up.
+- **Telegram's pace is kept by the whole program.** Each drive (the owner's, every account's) posted in the shared chat at its own pace of one a second, so Telegram answered "too many requests, retry after 30 s" to calls all the time. Now there's one turn per bot and chat for everyone, at about 20 calls a minute, and when Telegram says to wait, everyone waits.
+
+## 3.33.2 (2026-11-03)
+
+- **File locks work on the drive.** Every lock a program took on a file of the drive (flock, fcntl: SQLite, editors, package managers) failed with "invalid argument", on the full drive and on Lite: the drive's own internal lock was where FUSE looks for the handler of file locks. Locks are now kept by this computer, as they are on any local folder. (SQLite databases still belong on a local disk: a file written through one open handle is seen by another only once the first is closed.)
 
 ## 3.33.1 (2026-11-02)
 

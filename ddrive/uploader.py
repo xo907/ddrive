@@ -18,7 +18,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .logbuf import tname
 from . import codec, rs
-from .channels import layout_of, spread_pieces
+from .channels import Layout, layout_of, spread_pieces
 
 log = logging.getLogger("ddrive.uploader")
 
@@ -549,7 +549,8 @@ class Uploader:
         return self._store_piece(job, i, data, sha256, self._channel_for(i, getattr(job, "k", 0)))
 
     def _layout(self):
-        return layout_of(self.backend)
+        lay = getattr(self.backend, "upload_layout", None)      # (Discord only: channels.SpreadBackend)
+        return lay if isinstance(lay, Layout) else layout_of(self.backend)
 
     def _put(self, filename, payload, content, channel):
         if channel is None:

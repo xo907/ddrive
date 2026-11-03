@@ -250,6 +250,13 @@ class SpreadBackend:
             return Layout(chans, {c: "telegram" if is_place(c) else "discord" for c in chans})
         return Layout(chans, self.server_of)
 
+    @property
+    def upload_layout(self):
+        """Where an upload puts its pieces: the Discord channels only. A Telegram chat takes ~20 posts a minute,
+        so a file waiting for its share there held up every upload behind it; groups stored without it get
+        their Telegram share from the healer (Maintenance.spread_step), while nothing uploads."""
+        return Layout([c for c in self.channels if not is_place(c)], self.server_of)
+
     def route(self, mid):
         """(backend, message id in that channel) for a piece id."""
         chan, raw = split(mid)

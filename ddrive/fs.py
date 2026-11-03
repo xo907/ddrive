@@ -79,7 +79,7 @@ class DDriveFS(Operations):
         self.cache = cache
         self.staging_dir = staging_dir
         os.makedirs(staging_dir, exist_ok=True)
-        self.lock = threading.RLock()   # protects open_nodes / handles / _chunk_maps
+        self.mutex = threading.RLock()   # protects open_nodes / handles / _chunk_maps
         self.open_nodes = {}
         self.handles = {}               # fh -> (nid, writable)
         self._next_fh = 0
@@ -90,7 +90,7 @@ class DDriveFS(Operations):
         self._staging_usage = (0.0, 0)  # (timestamp, bytes) cache for _pending_staging_bytes
         self._space_warned = 0.0
         self._size_warned = {}
-        self.change_listeners = []      # called (with self.lock held) after other devices changed something
+        self.change_listeners = []      # called (with self.mutex held) after other devices changed something
         self.locks = None               # password-locked folders (locks.Locks)
         self.scope = threading.local()  # .unlocked: which locks are open for the current thread (see locks.py)
 
@@ -111,7 +111,7 @@ class DDriveFS(Operations):
         t, used = self._staging_usage
         if time.time() - t < 1.0:
             return used
-        with self.lock:
+        with self.mutex:
             open_ids = set(self.open_nodes)
         used = 0
         for nid in self.index.unsynced_ids():
@@ -321,7 +321,7 @@ class DDriveFS(Operations):
     def read_file(self, nid, offset, size):
         """Read part of a file by node id, from its local copy if there is one (web dashboard)."""
         p = self.staging_path(nid)
-        with self.lock:
+        with self.mutex:
             on = self.open_nodes.get(nid)
         if on is not None or os.path.exists(p):
             try:
@@ -336,7 +336,7 @@ class DDriveFS(Operations):
         is_dir = bool(n["is_dir"])
         size, mtime = n["size"], n["mtime"]
         if not is_dir:
-            with self.lock:
+            with self.mutex:
                 on = self.open_nodes.get(n["id"])
             if on is not None and on.dirty:
                 f = on.f
@@ -360,7 +360,7 @@ class DDriveFS(Operations):
         }
 
     def _open_handle(self, nid, writable):
-        """Caller must hold self.lock."""
+        """Caller must hold self.mutex."""
         on = self.open_nodes.get(nid)
         if on is None:
             on = self.open_nodes[nid] = OpenNode(nid)
@@ -372,14 +372,14 @@ class DDriveFS(Operations):
         return self._next_fh
 
     def _handle(self, fh):
-        with self.lock:
+        with self.mutex:
             entry = self.handles.get(fh)
             if entry is None:
                 raise FuseOSError(errno.EBADF)
             return entry[0], entry[1], self.open_nodes[entry[0]]
 
     def _chunk_map(self, nid):
-        with self.lock:
+        with self.mutex:
             m = self._chunk_maps.get(nid)
             if m is None:
                 chunks = self.index.get_chunks(nid)
@@ -464,7 +464,7 @@ class DDriveFS(Operations):
 
     # ============================================== hooks used by the uploader
     def is_busy(self, nid):
-        with self.lock:
+        with self.mutex:
             on = self.open_nodes.get(nid)
             return on is not None and on.dirty
 
@@ -473,7 +473,7 @@ class DDriveFS(Operations):
         mids = [u["message_id"] for u in uploaded]
         for _, shards in (parity or {}).get("g") or []:
             mids += [s[0] for s in shards]
-        with self.lock:
+        with self.mutex:
             node = self.index.get(nid)
             on = self.open_nodes.get(nid)
             if node is None or node["version"] != version or (on is not None and on.dirty):
@@ -492,7 +492,7 @@ class DDriveFS(Operations):
 
 
     def on_remote_change(self, nids):
-        """Called (with self.lock held) after operations from other devices were applied."""
+        """Called (with self.mutex held) after operations from other devices were applied."""
         for nid in nids:
             self._chunk_maps.pop(nid, None)
             if nid in self.open_nodes:
@@ -622,7 +622,7 @@ class DDriveFS(Operations):
         ppath, name = split_path(path)
         if wait:
             self._wait_for_staging_space()
-        with self.lock:
+        with self.mutex:
             parent = self._get(ppath)
             if not parent["is_dir"]:
                 raise FuseOSError(errno.ENOTDIR)
@@ -646,7 +646,7 @@ class DDriveFS(Operations):
         if n["is_dir"]:
             raise FuseOSError(errno.EISDIR)
         writable = (flags & O_ACCMODE) != os.O_RDONLY
-        with self.lock:
+        with self.mutex:
             fh = self._open_handle(n["id"], writable)
             on = self.open_nodes[n["id"]]
         if writable and flags & O_TRUNC:
@@ -681,7 +681,7 @@ class DDriveFS(Operations):
     def truncate(self, path, length, fh=None):
         self._check_size_limit(length, path)
         temp_fh = None
-        with self.lock:
+        with self.mutex:
             if fh is not None and fh in self.handles:
                 nid = self.handles[fh][0]
             else:
@@ -735,7 +735,7 @@ class DDriveFS(Operations):
         return 0
 
     def release(self, path, fh):
-        with self.lock:
+        with self.mutex:
             entry = self.handles.pop(fh, None)
             if entry is None:
                 return 0
@@ -779,7 +779,7 @@ class DDriveFS(Operations):
         if n["is_dir"]:
             raise FuseOSError(errno.EISDIR)
         nid = n["id"]
-        with self.lock:
+        with self.mutex:
             on = self.open_nodes.get(nid)
             if on is not None:
                 on.deleted = True
@@ -793,7 +793,7 @@ class DDriveFS(Operations):
         self._refuse_hidden(new)
         n = self._get(old)
         nparent_path, nname = split_path(new)
-        with self.lock:
+        with self.mutex:
             np_ = self._get(nparent_path)
             if not np_["is_dir"]:
                 raise FuseOSError(errno.ENOTDIR)
@@ -819,7 +819,7 @@ class DDriveFS(Operations):
         now = time.time()
         atime, mtime = times if times else (now, now)
         self.index.touch(n["id"], atime, mtime)
-        with self.lock:
+        with self.mutex:
             on = self.open_nodes.get(n["id"])
             if on is not None:
                 on.mtime = mtime

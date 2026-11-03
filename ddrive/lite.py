@@ -424,7 +424,7 @@ class LiteFS(Operations):
         self.tmp_dir = tmp_dir or os.path.join(default_data_dir(), "lite-tmp")
         shutil.rmtree(self.tmp_dir, ignore_errors=True)       # left over from a run that was cut off
         os.makedirs(self.tmp_dir, exist_ok=True)
-        self.lock = threading.RLock()
+        self.mutex = threading.RLock()
         self._lists = {}                     # folder -> (when, {name: entry})
         self._blocks = collections.OrderedDict()               # (path, size, mtime, n) -> bytes
         self._blocks_size = 0
@@ -434,12 +434,12 @@ class LiteFS(Operations):
 
     # ------------------------------------------------------------ what is there
     def _listing(self, folder):
-        with self.lock:
+        with self.mutex:
             hit = self._lists.get(folder)
             if hit and time.monotonic() - hit[0] < LIST_SECONDS:
                 return hit[1]
         items = {e["name"]: e for e in self.client.list(folder)}
-        with self.lock:
+        with self.mutex:
             self._lists[folder] = (time.monotonic(), items)
             if len(self._lists) > 2000:
                 self._lists.pop(next(iter(self._lists)))
@@ -459,7 +459,7 @@ class LiteFS(Operations):
         return entry
 
     def _changed(self, *paths):
-        with self.lock:
+        with self.mutex:
             for path in paths:
                 self._lists.pop(posixpath.dirname("/" + path.strip("/")) or "/", None)
                 self._lists.pop("/" + path.strip("/"), None)
@@ -476,7 +476,7 @@ class LiteFS(Operations):
 
     @_translated
     def getattr(self, path, fh=None):
-        with self.lock:
+        with self.mutex:
             h = self._writing.get(path)
         if h is not None:
             with h.lock:                     # (waits while the file is being handed to the host)
@@ -490,20 +490,20 @@ class LiteFS(Operations):
         if not self._entry(path)["dir"]:
             raise FuseOSError(errno.ENOTDIR)
         names = set(self._listing("/" + path.strip("/")))
-        with self.lock:
+        with self.mutex:
             names.update(posixpath.basename(p) for p in self._writing if posixpath.dirname(p) == "/" + path.strip("/"))
         return [".", ".."] + sorted(names)
 
     # ------------------------------------------------------------ reading
     def _block(self, entry, n):
         key = (entry["path"], entry["size"], entry["mtime"], n)
-        with self.lock:
+        with self.mutex:
             data = self._blocks.get(key)
             if data is not None:
                 self._blocks.move_to_end(key)
                 return data
         data = self.client.read(entry["path"], n * self.block, self.block)
-        with self.lock:
+        with self.mutex:
             if key not in self._blocks:
                 self._blocks[key] = data
                 self._blocks_size += len(data)
@@ -512,14 +512,14 @@ class LiteFS(Operations):
         return data
 
     def _handle(self, fh):
-        with self.lock:
+        with self.mutex:
             h = self._handles.get(fh)
         if h is None:
             raise FuseOSError(errno.EBADF)
         return h
 
     def _new_handle(self, h):
-        with self.lock:
+        with self.mutex:
             self._next_fh += 1
             self._handles[self._next_fh] = h
             return self._next_fh
@@ -561,7 +561,7 @@ class LiteFS(Operations):
                     self.client.download(h.entry["path"], h.tmp)
                 else:
                     h.dirty = True
-                with self.lock:
+                with self.mutex:
                     self._writing[h.path] = h
             elif empty:
                 h.tmp.seek(0)
@@ -621,7 +621,7 @@ class LiteFS(Operations):
                 if close:
                     h.tmp.close()            # a temporary file: closing removes it
                     h.tmp = None
-                    with self.lock:
+                    with self.mutex:
                         if self._writing.get(h.path) is h:
                             del self._writing[h.path]
 
@@ -632,7 +632,7 @@ class LiteFS(Operations):
 
     @_translated
     def release(self, path, fh):
-        with self.lock:
+        with self.mutex:
             h = self._handles.pop(fh, None)
         if h is not None:
             self._finish(h, close=True)

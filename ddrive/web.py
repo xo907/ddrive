@@ -3059,7 +3059,7 @@ class _Handler(PlusHandlers, BookmarkHandlers, ChatHandlers, FindXHandlers, Base
                     log.warning("Did not remove %s: it can be read now (or Discord could not be asked).",
                                 idx.path_of(node["id"]))
                     continue
-                with self.drive.fs.lock:
+                with self.drive.fs.mutex:
                     idx.purge_node(node["id"])
                     self.drive.fs._chunk_maps.pop(node["id"], None)
                 removed += 1
