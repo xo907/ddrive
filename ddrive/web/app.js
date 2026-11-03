@@ -1647,7 +1647,31 @@ async function pumpUploads() {
   if (upWaiting.length) upTimer = setTimeout(pumpUploads, 5000);      // (room comes as what was sent goes on to Discord)
 }
 
+// Folders a project's tools fill and fill again by themselves (npm install, Python, build caches): tens of
+// thousands of tiny files each, a day of uploading, made again in a minute. Left out of folder uploads (and of
+// folder syncing: sync.py DEPENDENCY_FOLDERS has the same list).
+const SKIP_FOLDERS = new Set(["node_modules", "bower_components", "__pycache__", ".venv", ".pytest_cache", ".mypy_cache",
+                              ".ruff_cache", ".tox", ".gradle", ".parcel-cache", ".turbo", ".next", ".nuxt", ".svelte-kit"]);
+const skipFolder = (name) => SKIP_FOLDERS.has(String(name).toLowerCase());
+let skippedNow = null;          // folders left out of the folder being read (droppedFiles): name -> times
+/** The files to upload without those in SKIP_FOLDERS, and a message saying what was left out (or ""). */
+function leaveOutDependencies(entries) {
+  const out = [], left = new Map(skippedNow || []);
+  let files = 0;
+  for (const e of entries) {
+    const hit = e.rel.split("/").slice(0, -1).find(skipFolder);
+    if (hit) { files++; left.set(hit, (left.get(hit) || 0) + 1); } else out.push(e);
+  }
+  skippedNow = null;
+  if (!left.size) return [out, ""];
+  const names = [...left.keys()].join(", ");
+  return [out, `Left out ${files ? plural(files, "file") + " in " : ""}${names}: folders that are made again by themselves (npm install and the like).`];
+}
+
 async function uploadAll(entries, dir) {
+  let leftOut = "";
+  [entries, leftOut] = leaveOutDependencies(entries);
+  if (leftOut) toast(leftOut);
   entries = await settleExisting(entries, dir);
   if (!entries || !entries.length) return;
   let n = 0, failed = 0;
@@ -1699,6 +1723,11 @@ async function readEntries(entry, prefix, out) {
   if (entry.isFile) {
     await new Promise((res) => entry.file((file) => { out.push({ file, rel: prefix + file.name }); res(); }, res));
   } else if (entry.isDirectory) {
+    if (prefix && skipFolder(entry.name)) {             // (not even read: it can hold tens of thousands)
+      skippedNow = skippedNow || new Map();
+      skippedNow.set(entry.name, 0);
+      return;
+    }
     const reader = entry.createReader();
     for (;;) {
       const batch = await new Promise((res) => reader.readEntries(res, () => res([])));

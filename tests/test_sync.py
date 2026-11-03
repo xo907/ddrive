@@ -260,3 +260,21 @@ class SyncTest(helpers.DriveTest):
         self.assertEqual((j["remote"], j["at"], j["name"]), ("/Downloads", "07:05", "here"))
         with self.assertRaises(SyncError):
             normalize_job(dict(local=self.here, remote="/Downloads", mode="mirror"), self.d.cfg, existing=[j])
+
+
+class DependencyFoldersTest(helpers.unittest.TestCase):
+    def test_folders_made_again_by_themselves_are_left_out_at_any_level(self):
+        import tempfile, shutil
+        from ddrive.sync import _Excluder, scan_local
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for rel in ("app/src/main.js", "app/node_modules/core-js/x.js", "tool/__pycache__/a.pyc", "tool/a.py", "node_modules_notes.txt"):
+            os.makedirs(os.path.join(root, os.path.dirname(rel)), exist_ok=True)
+            with open(os.path.join(root, rel), "w") as f:
+                f.write("x")
+        ex = _Excluder([])
+        files, dirs = scan_local(root, ex, [])
+        self.assertEqual(sorted(files), ["app/src/main.js", "node_modules_notes.txt", "tool/a.py"])
+        self.assertNotIn("app/node_modules", dirs)
+        self.assertTrue(ex("app/node_modules/core-js/x.js"))           # (listed on the drive side file by file)
+        self.assertFalse(ex(".git/config"))                             # (history isn't made again by itself)

@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.34.0 (2026-11-03)
+
+- **Folders that are made again by themselves are left out of folder syncing and folder uploads**: `node_modules`, `bower_components`, `__pycache__`, `.venv`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.gradle`, `.parcel-cache`, `.turbo`, `.next`, `.nuxt`, `.svelte-kit`. A synced Projects folder with one project's `node_modules` in it sent 31,657 tiny files, one by one, each with its own entry in the list of changes, and the host's upload queue grew faster than Discord took it ("Uploading" kept going up). Now sync skips them (a name left out counts at every level of a path, so what is already on the drive under such a folder isn't touched either), the dashboard's folder upload and drag-and-drop leave them out and say so (a dropped one isn't even read), and so does `lite put`. `.git` is kept: history isn't made again by itself.
+
 ## 3.33.1 (2026-11-02)
 
 - **The words and Telegram are in the menu** (run.sh / run.bat > Tools and troubleshooting): "Forget the 24 words on this computer" (stops the drive first, asks about removing the readable copies), "Type 24 words" (the drive's own: offers to start it; an account's: shows its files), "Close an account's files", and "Telegram" (lists the chats, finds a new channel's id with the bot token and adds it). The main screen says when the drive is closed because its words are forgotten, and Start says what to do instead of failing.

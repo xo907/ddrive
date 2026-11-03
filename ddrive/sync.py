@@ -79,6 +79,12 @@ TRIGGERS = {
 }
 DEFAULT_EXCLUDE = ["*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload", "*.tmp", "~$*",
                    ".~lock.*", "Thumbs.db", "desktop.ini", ".DS_Store", "*.ddsync-part"]
+# Folders a project's tools fill and fill again by themselves (npm install, Python, build caches): tens of
+# thousands of tiny files each, which took a day to send and are made again in a minute. Not synced, and not
+# sent by folder uploads either (app.js SKIP_FOLDERS has the same list).
+DEPENDENCY_FOLDERS = ["node_modules", "bower_components", "__pycache__", ".venv", ".pytest_cache", ".mypy_cache",
+                      ".ruff_cache", ".tox", ".gradle", ".parcel-cache", ".turbo", ".next", ".nuxt", ".svelte-kit"]
+DEFAULT_EXCLUDE += DEPENDENCY_FOLDERS
 JOB_DEFAULTS = {"name": "", "local": "", "remote": "", "mode": "backup", "trigger": "live", "every": 60,
                 "at": "03:00", "exclude": [], "enabled": True}
 
@@ -331,8 +337,8 @@ class _Excluder:
 
     def __call__(self, rel):
         rel = rel.lower()
-        name = rel.rsplit("/", 1)[-1]
-        return any(fnmatch.fnmatchcase(name, p) for p in self.names) or \
+        # (a name matches at any level: what is in a folder left out is left out too, wherever it is listed)
+        return any(fnmatch.fnmatchcase(part, p) for part in rel.split("/") for p in self.names) or \
             any(fnmatch.fnmatchcase(rel, p) or rel.startswith(p + "/") for p in self.paths)
 
 

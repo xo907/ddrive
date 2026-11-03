@@ -455,7 +455,8 @@
       return { jobs: [], running: null, can_edit: false, local: false, remote_edit: false, host: "", mount: "", windows: false, home: "", account: true,
                devices: await devices(), modes: MODES.map(([id, label, direction, text]) => ({ id, label, direction, text })),
                triggers: [["live", "As soon as something changes"], ["interval", "Every few minutes / hours"], ["daily", "Once a day"], ["manual", "Only when I start it"]].map(([id, label]) => ({ id, label })),
-               default_exclude: ["*.crdownload", "*.part", "*.partial", "*.download", "*.tmp", "~$*"] };
+               default_exclude: ["*.crdownload", "*.part", "*.partial", "*.download", "*.tmp", "~$*", "node_modules", "__pycache__",
+                                 ".venv", "bower_components", ".gradle", ".next", "and other dependency and cache folders"] };
     },
     async "sync/browse"(q) {
       const d = await device(q.get("device"));

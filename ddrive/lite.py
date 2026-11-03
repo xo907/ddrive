@@ -51,6 +51,9 @@ from .config import default_config_dir, default_data_dir, format_size, launcher,
 
 log = logging.getLogger("ddrive.lite")
 
+# Folders left out of a folder sent with put (sync.py DEPENDENCY_FOLDERS): made again by themselves.
+DEPENDENCY_FOLDERS = frozenset(("node_modules", "bower_components", "__pycache__", ".venv", ".pytest_cache", ".mypy_cache",
+                                ".ruff_cache", ".tox", ".gradle", ".parcel-cache", ".turbo", ".next", ".nuxt", ".svelte-kit"))
 BLOCK = 4 * 1024 * 1024          # files are read from the host in parts of this size
 PART = 8 * 1024 * 1024           # a folder sync sends files to the host in parts of this size
 CACHE_BYTES = 128 * 1024 * 1024  # parts kept in memory for re-reading and seeking back
@@ -1355,6 +1358,9 @@ def _e2e_put(s, args):
             if v.resolve(dst) is None:
                 v.mkdir(dst)
             for name in sorted(os.listdir(src)):
+                if name.lower() in DEPENDENCY_FOLDERS and os.path.isdir(os.path.join(src, name)):
+                    print(f"  (left out {os.path.join(src, name)}: it is made again by itself, npm install and the like)")
+                    continue
                 send(os.path.join(src, name), posixpath.join(dst, name))
             return
         size = os.path.getsize(src)
@@ -1487,6 +1493,9 @@ def cmd_put(args):
                 if e.status != 409:
                     raise
             for name in sorted(os.listdir(src)):
+                if name.lower() in DEPENDENCY_FOLDERS and os.path.isdir(os.path.join(src, name)):
+                    print(f"  (left out {os.path.join(src, name)}: it is made again by itself, npm install and the like)")
+                    continue
                 send(os.path.join(src, name), posixpath.join(dst, name))
             return
         size = os.path.getsize(src)

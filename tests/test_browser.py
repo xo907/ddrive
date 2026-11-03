@@ -362,7 +362,9 @@ class BrowserTest(helpers.DriveTest):
 
     def _a_folder_on_this_computer(self):
         top = os.path.join(self.tmp, "pick", "Project")
-        for rel, text in (("readme.txt", "top"), ("src/main.py", "code"), ("src/lib/util.py", "util"), ("docs/a/b/deep.txt", "deep")):
+        # (and what npm and Python make again by themselves, which a folder upload leaves out)
+        for rel, text in (("readme.txt", "top"), ("src/main.py", "code"), ("src/lib/util.py", "util"), ("docs/a/b/deep.txt", "deep"),
+                          ("node_modules/pkg/index.js", "dep"), ("src/__pycache__/main.cpython-312.pyc", "cache")):
             os.makedirs(os.path.dirname(os.path.join(top, rel)), exist_ok=True)
             with open(os.path.join(top, rel), "w") as f:
                 f.write(text)
