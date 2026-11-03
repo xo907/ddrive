@@ -174,6 +174,8 @@ def drive_line(cfg):
     """'Drive Z: RUNNING  |  4,372 files, 141.4 GB in Discord  |  3 uploading'"""
     running = is_mounted(cfg)
     state = f"{GREEN}RUNNING{RESET}" if running else f"{GRAY}not running{RESET}"
+    if getattr(cfg, "words_forgotten", False) and not cfg.encryption_key:
+        state = f"{YELLOW}closed: its 24 words are forgotten here (Tools > Type 24 words){RESET}"
     parts = [f"Drive {BOLD}{cfg.mount_point}{RESET} {state}"]
     db = os.path.join(cfg.resolved_data_dir, "index.db")
     # Not set up here (or only used through Lite): a file list left from an earlier setup says nothing
@@ -237,6 +239,10 @@ def start_drive():
         return
     if is_mounted(cfg):
         done(f"Already running on {cfg.mount_point}.")
+        return
+    if getattr(cfg, "words_forgotten", False) and not cfg.encryption_key:
+        warn("This drive's 24 words were forgotten on this computer: type them in first")
+        warn("(Tools and troubleshooting > Type 24 words).")
         return
     step(f"Starting DDrive on {cfg.mount_point}")
     if not WINDOWS or FROZEN:
@@ -724,6 +730,11 @@ def tools_menu():
             ("12", "Self-healing status"),
             ("13", "Check every piece on Discord now and repair what's missing"),
             ("14", "Add spare pieces to files uploaded before self-healing"),
+            ("19", "Telegram: keep the files on Telegram too, so Discord can be lost"),
+            (None, None),
+            ("16", "Forget the 24 words on this computer (the drive stays closed until they are typed again)"),
+            ("17", "Type 24 words (this drive's own, after forgetting them; or an account's, to see its files)"),
+            ("18", "Close an account's files and forget its words here"),
             (None, None),
         ]
         if WINDOWS:
@@ -819,6 +830,49 @@ def tools_menu():
             info("from its menu: 'Approve a new device'.")
             print()
             cli("request-key")
+        elif pick == "16":
+            cfg = Config.load()
+            warn("Once they are forgotten here, the drive, its dashboard and every account on it stay closed until")
+            warn("the 24 words are typed in again. Without them nobody can open anything, you neither.")
+            info("Make sure you have them written down: you type them now, as proof.")
+            print()
+            if is_mounted(cfg):
+                if not confirm("The drive has to stop for this. Stop it now?", default=False):
+                    back(title)
+                    continue
+                print()
+                stop_drive()
+                print()
+            wipe = confirm("Also remove this computer's readable copies (the list of files, the cache, thumbnails)?",
+                           default=False)
+            print()
+            cli("forget-words", *(["--wipe"] if wipe else []))
+        elif pick == "17":
+            info("This drive's own words open it again (after 'Forget the 24 words'). An account's words show that")
+            info("account's files on this computer, while the drive runs.")
+            print()
+            cfg = Config.load()
+            if cli("words") == 0 and Config.load().encryption_key and not is_mounted(cfg) and cfg.words_forgotten:
+                print()
+                if confirm("Start the drive now?"):
+                    print()
+                    start_drive()
+        elif pick == "18":
+            cli("words", "--forget")
+        elif pick == "19":
+            cli("telegram")
+            print()
+            if confirm("Add a Telegram channel now?", default=False):
+                token = ask("The bot's token (from @BotFather)")
+                if token:
+                    print()
+                    info("Post any message in the channel first, so the bot has heard of it.")
+                    cli("telegram", "find", token)
+                    print()
+                    chat = ask("The channel's id (-100...)")
+                    if chat:
+                        print()
+                        cli("telegram", "add", chat, token)
         elif pick == "8":
             if WINDOWS:
                 cli("context-menu", "install")
