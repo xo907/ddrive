@@ -859,6 +859,164 @@ def cmd_recovery_phrase(args):
     return 0
 
 
+def _words_check(key_hex):
+    """What tells this drive's words from any others while they are forgotten (a hash: it gives nothing away)."""
+    import hashlib
+    return hashlib.sha256(b"DDrive words check v1:" + bytes.fromhex(key_hex)).hexdigest()
+
+
+def _ask_words(args, prompt):
+    """The 24 words (from --phrase, or typed without showing), as a key; None after saying what is wrong."""
+    import getpass
+    from . import words
+    phrase = getattr(args, "phrase", None)
+    try:
+        if not phrase:
+            phrase = getpass.getpass(prompt) if sys.stdin.isatty() else input(prompt)
+        return words.phrase_to_key(phrase)
+    except (ValueError, EOFError, KeyboardInterrupt) as e:
+        print(f"[ERROR] {str(e) or 'Nothing entered'}.")
+        return None
+
+
+# Where an account's files are shown on this computer (`words` with an account's words): Lite, against this host.
+def _account_mount(cfg, args):
+    return normalize_mount_point(getattr(args, "mount", None) or (cfg.mount_point.rstrip("/\\") + "-account"
+                                                                   if sys.platform != "win32" else "Y:"))
+
+
+def cmd_forget_words(args):
+    """Forget the drive's 24 words (its encryption key) on this computer. The drive doesn't start until they are
+    typed in again (`words`). Proof that they are kept elsewhere first: they have to be typed."""
+    cfg = Config.load()
+    if getattr(args, "account", False):
+        return _forget_account(cfg)
+    if cfg.words_forgotten and not cfg.encryption_key:
+        print("[OK] This drive's words are already forgotten on this computer.")
+        return 0
+    if not (cfg.encryption_enabled and cfg.encryption_key):
+        print("[ERROR] This drive has no encryption key on this computer to forget.")
+        return 1
+    if is_mounted(cfg.mount_point):
+        print(f"[ERROR] The drive is running. Stop it first ({launcher()} stop, or: systemctl stop ddrive).")
+        return 1
+    print("The drive's 24 words are its key: once they are forgotten here, the drive, its dashboard and every account")
+    print("on it stay closed until they are typed in again. Without them nobody can open anything, you neither.")
+    print("To show that you have them, type them now.")
+    key = _ask_words(args, "The drive's 24 words: ")
+    if key is None:
+        return 1
+    if key.hex() != cfg.encryption_key.lower():
+        print("[ERROR] Those are not this drive's words. Nothing was forgotten.")
+        print(f"        ('{launcher()} phrase' shows them while they are still here.)")
+        return 1
+    wipe = getattr(args, "wipe", False)
+    if wipe:
+        idx = Index(os.path.join(cfg.resolved_data_dir, "index.db"))
+        try:
+            waiting = len(idx.unsynced_ids()) + idx.outbox_count()
+        finally:
+            idx.close()
+        if waiting:
+            print(f"[ERROR] {waiting} change(s) or upload(s) haven't reached Discord yet. Start the drive and let them")
+            print("        finish (the dashboard says \"Up to date\"), then forget the words. Nothing was forgotten.")
+            return 1
+    # Older keys and the salt can't be made from the words again: they are kept sealed under them.
+    ring = KeyRing.from_hex(cfg.encryption_key, [])
+    keep = json.dumps({"old_encryption_keys": list(cfg.old_encryption_keys or []), "encryption_salt": cfg.encryption_salt or ""})
+    import base64
+    cfg.words_sealed = base64.b64encode(ring.encrypt(keep.encode("utf-8"), b"ddrive words sealed")).decode("ascii")
+    cfg.words_check = _words_check(cfg.encryption_key)
+    cfg.words_forgotten = True
+    cfg.encryption_key, cfg.old_encryption_keys, cfg.encryption_salt = "", [], ""
+    cfg.save()
+    print("[OK] The drive's words are forgotten on this computer.")
+    if wipe:
+        import shutil
+        data = cfg.resolved_data_dir
+        gone = []
+        for name in ("index.db", "index.db-wal", "index.db-shm", "backups", "cache", "thumbs"):
+            path = os.path.join(data, name)
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+                gone.append(name)
+            elif os.path.exists(path):
+                os.remove(path)
+                gone.append(name)
+        print(f"     Removed this computer's readable copies too ({', '.join(gone) or 'none there'}): the list of files")
+        print("     is read back from Discord when the words are typed in again.")
+    else:
+        print("     This computer still has its readable copies (the list of files, the cache, thumbnails). To remove")
+        print(f"     them too: type the words again ({launcher()} words), then {launcher()} forget-words --wipe.")
+    print(f"     To open the drive again: {launcher()} words")
+    return 0
+
+
+def _forget_account(cfg):
+    from . import lite
+    if not lite.load_settings().get("host"):
+        print("[OK] No account's words are kept on this computer.")
+        return 0
+    lite.main(["stop"])
+    lite.main(["disconnect"])
+    print("[OK] The account's files are no longer shown here, and its words are forgotten on this computer.")
+    return 0
+
+
+def cmd_words(args):
+    """Type 24 words. This drive's own (forgotten with forget-words): they are its key again and it can start. An
+    account's (on this drive, which runs): that account's files are shown on this computer, as DDrive Lite does."""
+    cfg = Config.load()
+    if getattr(args, "forget", False):
+        return _forget_account(cfg)
+    forgotten = cfg.words_forgotten and not cfg.encryption_key
+    key = _ask_words(args, "24 words: ")
+    if key is None:
+        return 1
+    if forgotten:
+        if _words_check(key.hex()) != cfg.words_check:
+            print("[ERROR] Those are not this drive's words. While its own are forgotten, nothing on it can be opened")
+            print("        (an account's files too: the drive keeps them under its words). Type the drive's words.")
+            return 1
+        import base64
+        ring = KeyRing.from_hex(key.hex(), [])
+        kept = {}
+        if cfg.words_sealed:
+            try:
+                kept = json.loads(ring.decrypt(base64.b64decode(cfg.words_sealed), b"ddrive words sealed"))
+            except Exception as e:
+                print(f"[ERROR] The older keys kept under the words can't be opened ({e}). Nothing was changed.")
+                return 1
+        cfg.encryption_key = key.hex()
+        cfg.old_encryption_keys = list(kept.get("old_encryption_keys") or [])
+        cfg.encryption_salt = kept.get("encryption_salt") or ""
+        cfg.words_forgotten, cfg.words_check, cfg.words_sealed = False, "", ""
+        cfg.save()
+        print("[OK] The drive's words are back on this computer.")
+        print(f"     Start it: {launcher()} start   (as a service: systemctl start ddrive)")
+        return 0
+    if cfg.encryption_key and key.hex() == cfg.encryption_key.lower():
+        print("[OK] Those are this drive's own words, and it has them already.")
+        print(f"     It shows on {cfg.mount_point} while it runs ({launcher()} start).")
+        return 0
+    # An account's words: shown here through this drive's dashboard, the way DDrive Lite shows it on other computers.
+    if not (cfg.web_enabled and is_mounted(cfg.mount_point)):
+        print("[ERROR] An account's files are opened through this drive's dashboard, and the drive isn't running.")
+        print(f"        Start it first ({launcher()} start, or: systemctl start ddrive).")
+        return 1
+    from . import lite, words
+    mp = _account_mount(cfg, args)
+    lite.main(["stop"]) if lite.load_settings().get("host") else None
+    address = f"http://127.0.0.1:{cfg.web_port}"
+    if lite.main(["connect", address, "-p", words.key_to_phrase(key)]) != 0:
+        print("[ERROR] No account on this drive has those words.")
+        return 1
+    if lite.main(["mount", "-m", mp, "-b"]) != 0:
+        return 1
+    print(f"[OK] The account's files are on {mp}. To close them and forget the words here: {launcher()} words --forget")
+    return 0
+
+
 def cmd_export_key(args):
     """Print the encryption key so it can be copied to another device (setup -k <key>)."""
     cfg = Config.load()
@@ -1035,6 +1193,9 @@ def cmd_status(args):
     return 0
 
 
+WORDS_FORGOTTEN = 3          # what `mount` ends with while the drive's words are forgotten (forget-words)
+
+
 def cmd_mount(args):
     setup_logging(args.verbose)
     if FUSE_ERROR:
@@ -1045,6 +1206,9 @@ def cmd_mount(args):
     if not cfg.is_configured() and not args.mock:
         print(f"[ERROR] DDrive is not configured. Run '{launcher()} setup' first.")
         return 1
+    if cfg.words_forgotten and not cfg.encryption_key and not args.mock:
+        print(f"[ERROR] This drive's 24 words were forgotten on this computer. Type them in again first: {launcher()} words")
+        return WORDS_FORGOTTEN                   # (the service doesn't start it again and again: RestartPreventExitStatus)
 
     mount_point = normalize_mount_point(args.mount or cfg.mount_point)
     try:
@@ -2956,6 +3120,17 @@ def main():
     subparsers.add_parser("start", help="Start the drive in the background")
     subparsers.add_parser("menu-start", help=argparse.SUPPRESS)
     subparsers.add_parser("export-key", help="Show the encryption key in hex (see also recovery-phrase)")
+    p_forget = subparsers.add_parser("forget-words", help="Forget the drive's 24 words (its key) on this computer; "
+                                                          "'words' brings them back. --account: an account's instead")
+    p_forget.add_argument("-p", "--phrase", help="The drive's 24 words (asked for when left out: better, they stay out of your history)")
+    p_forget.add_argument("--wipe", action="store_true", help="Also remove this computer's readable copies (the list of "
+                                                              "files, the cache, thumbnails); read back from Discord later")
+    p_forget.add_argument("--account", action="store_true", help="Forget an account's words given with 'words' instead")
+    p_words = subparsers.add_parser("words", help="Type 24 words: the drive's own (after forget-words) open it again; "
+                                                  "an account's show that account's files here")
+    p_words.add_argument("-p", "--phrase", help="The 24 words (asked for when left out)")
+    p_words.add_argument("-m", "--mount", help="Where an account's files are shown (default: the drive's folder + -account)")
+    p_words.add_argument("--forget", action="store_true", help="Close the account's files and forget its words here")
     p_phrase = subparsers.add_parser("recovery-phrase", aliases=["phrase"],
                                      help="Show this drive's 24-word recovery phrase (its key, as words)")
     p_phrase.add_argument("--check", action="store_true", help="Type your phrase to check you wrote it down right")
@@ -3183,6 +3358,10 @@ def main():
         return cmd_bots(args)
     elif args.command == "spare":
         return cmd_spare(args)
+    elif args.command == "forget-words":
+        return cmd_forget_words(args)
+    elif args.command == "words":
+        return cmd_words(args)
     elif args.command == "telegram":
         return cmd_telegram(args)
     elif args.command == "erase-everything":

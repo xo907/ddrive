@@ -3,6 +3,10 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.33.0 (2026-11-02)
+
+- **The host can forget its 24 words, and take them (or an account's) again, from the command line.** `ddrive forget-words` (the drive stopped) forgets the drive's words, its key, on that computer, after you type them as proof that you have them; keys from before a key change are kept sealed under the words. Nothing starts meanwhile: `mount` says why and ends with exit code 3, which the systemd service (ddrive.service, RestartPreventExitStatus=3) doesn't start again and again. `--wipe` also removes the computer's readable copies (the list of files, the cache, thumbnails) once everything has reached Discord. `ddrive words` asks for 24 words: the drive's own give it its key back; an account's, while the drive runs, show that account's files on the computer (the drive's folder + "-account", or `-m`), as DDrive Lite does, end-to-end accounts opened with their words on that computer only; `words --forget` closes them and forgets them there.
+
 ## 3.32.1 (2026-11-02)
 
 - **`ddrive telegram find <bot token>` shows the chats the bot can see, with their exact ids.** "Chat not found" when adding a Telegram channel now says why it usually is: an id without the -100 every channel id starts with (and what it would be with it), or a bot that isn't an admin of the channel yet; and a wrong token is told apart.

@@ -471,6 +471,8 @@ status                               What is stored, what is uploading, cache an
 mount                                Run the drive in this window (Ctrl+C to stop)
 setup                                Bot token, channel; shows or asks for the recovery phrase
 recovery-phrase [--check]            Show this drive's 24-word recovery phrase (or check the one you wrote down)
+forget-words [--wipe]                Forget the 24 words on this computer (typed first, as proof); --wipe: its readable copies too
+words [-m <folder>] [--forget]       Type 24 words: the drive's own open it again; an account's show its files here
 config [<name> [<value>]]            Show or change a setting (sizes like 500M, 2G)
 offline <path>                       Keep a file/folder on this computer for offline use
 free-space [<path>] [--all]          Remove cached data (one path, or everything)
@@ -646,6 +648,22 @@ spare lost <n>                       The channel is gone (deleted, server gone):
   fly when a file is read, and in the background check.
 - A repair goes back into the channel the piece was in, or into another one if that channel is gone.
 - Accounts on your dashboard (end-to-end ones included) are spread the same way as your own files.
+
+### Forgetting the 24 words on the host
+
+On a computer you don't fully trust (a rented server), the drive's 24 words, its key, need not stay there.
+
+- `forget-words` (with the drive stopped) forgets them. You type them first, so they can't be forgotten
+  by someone who doesn't have them. Keys from before a key change, which the words can't make again,
+  stay, sealed under the words. Until they are typed in again, the drive, its dashboard and every
+  account on it stay closed, and nothing starts by itself (the service gives up: exit code 3).
+  `forget-words --wipe` also removes this computer's readable copies (the list of files, the cache,
+  thumbnails) once everything has reached Discord; they are read back from Discord later.
+- `words` asks for 24 words. The drive's own: it has its key again; start it. An account's (yours, an
+  end-to-end one too), while the drive runs: that account's files are shown on this computer, in the
+  drive's folder + "-account" (or `-m <folder>`), the way DDrive Lite shows them elsewhere: an
+  end-to-end account's are opened here with its words and nowhere else. `words --forget` closes them
+  and forgets that account's words here.
 
 ### Telegram: a second platform
 

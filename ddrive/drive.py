@@ -76,6 +76,9 @@ class DDrive:
                 log.info("Uploading with %d bots.", 1 + len(extra))
 
         if self.cfg.encryption_enabled:
+            if not self.cfg.encryption_key and getattr(self.cfg, "words_forgotten", False):
+                raise RuntimeError("This drive's 24 words were forgotten on this computer (forget-words). Type them in "
+                                   f"again first: {launcher()} words")
             if not self.cfg.encryption_key:
                 self._generate_key_if_safe()
             # Never fall back to uploading plaintext because of a bad key.

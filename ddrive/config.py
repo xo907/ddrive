@@ -134,6 +134,9 @@ class Config:
     telegram_chats: list = field(default_factory=list)    # Telegram chats that keep pieces too (telegram.py): Discord can be lost
     telegram_bot_tokens: list = field(default_factory=list)   # each chat's bot (same order)
     telegram_api: str = ""                                # (tests: another address for Telegram's bot API)
+    words_forgotten: bool = False      # the drive's 24 words (its key) were forgotten here (forget-words): `words` brings them back
+    words_check: str = ""              # a hash that tells the drive's words from others, while they are forgotten
+    words_sealed: str = ""             # older keys and the salt, sealed under the words while they are forgotten
     discord_pace: str = "gentle"       # how fast to talk to Discord: gentle | balanced | fast | off
     uploads_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 30)
     deletes_per_minute: int = 0        # per bot; 0 = from discord_pace (gentle: 15)
