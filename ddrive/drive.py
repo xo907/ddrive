@@ -331,6 +331,14 @@ class DDrive:
             if allow_other:
                 fuse_kwargs["allow_other"] = True
 
+        if sys.platform != "win32":
+            # Again, right before mounting: starting up takes a while (the file list from Discord), and another
+            # service writing into the bare folder meanwhile made libfuse refuse ("mountpoint is not empty").
+            strays = _prepare_mount_dir(mp, self.cfg.resolved_data_dir)
+            if strays:
+                threading.Thread(target=_import_strays, args=(strays, mp), name="ImportStrays", daemon=True).start()
+            from . import service
+            service.on_mount(self.cfg, mp, self._stop_event)       # systemd: unit settings, one launcher, watchdog
         try:
             fuse.FUSE(
                 self.fs,

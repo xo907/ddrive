@@ -32,14 +32,27 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/ddrive mount
 ExecStop=/usr/bin/ddrive stop
 KillSignal=SIGTERM
 TimeoutStopSec=60
-Restart=on-failure
+# Hard memory cap only (no MemoryHigh: a soft limit throttled DDrive into a silent hang). DDrive writes a
+# drop-in (ddrive.service.d/50-ddrive-defaults.conf) with the cap for this computer: half its memory, at most 2 GB.
+MemoryMax=2048M
+MemorySwapMax=0
+# Short of memory, the kernel's OOM killer (or earlyoom) takes DDrive, which restarts cleanly, before databases or sshd.
+OOMScoreAdjust=300
+Environment=MALLOC_ARENA_MAX=2
+# Restarted when it stops answering (it pings systemd only while the mounted drive and the dashboard answer).
+Type=notify
+NotifyAccess=all
+WatchdogSec=180
+TimeoutStartSec=900
+Restart=always
 RestartSec=10
+# 3: the drive's words were forgotten (forget-words): nothing to start until `ddrive words`.
+RestartPreventExitStatus=3
 
 [Install]
 WantedBy=default.target

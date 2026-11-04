@@ -783,6 +783,17 @@ def cmd_autostart(args):
                 except OSError:
                     pass
     else:
+        from . import service
+        scope = service.enabled_scope()
+        if scope is not None:
+            # One launcher only: the service starts the drive at boot (a cron line started a second copy).
+            service.remove_cron_autostart()
+            label = "systemctl" + (" --user" if scope else "")
+            if on:
+                print(f"[OK] The {service.UNIT} service starts the drive at boot already; no cron line is added.")
+            else:
+                print(f"The {service.UNIT} service starts the drive at boot. To stop that: {label} disable ddrive")
+            return 0
         try:
             current = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
         except OSError:
@@ -1208,6 +1219,18 @@ def cmd_mount(args):
     if not cfg.is_configured() and not args.mock:
         print(f"[ERROR] DDrive is not configured. Run '{launcher()} setup' first.")
         return 1
+    if not args.mock and not os.environ.get("DDRIVE_IGNORE_SERVICE"):
+        from . import service
+        scope = service.enabled_scope() if service.linux() and not service.running_in_unit() else None
+        if scope is not None:
+            # The service runs the drive: a second copy here would run without its limits, and systemd would kill it.
+            label = "systemctl" + (" --user" if scope else "")
+            if service.is_active(scope):
+                print(f"[OK] DDrive runs as the {service.UNIT} service already ({label} status ddrive).")
+                return 0
+            print(f"DDrive is set up as the {service.UNIT} service: starting it ({label} start ddrive)...")
+            r = subprocess.run(["systemctl", *scope, "start", service.UNIT])
+            return r.returncode
     if cfg.words_forgotten and not cfg.encryption_key and not args.mock:
         print(f"[ERROR] This drive's 24 words were forgotten on this computer. Type them in again first: {launcher()} words")
         return WORDS_FORGOTTEN                   # (the service doesn't start it again and again: RestartPreventExitStatus)
