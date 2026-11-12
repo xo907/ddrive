@@ -174,6 +174,57 @@ class BrowserTest(helpers.DriveTest):
         p.wait_for_selector("#bars >> text=DDrive isn't answering", state="detached", timeout=20000)
         self.assertEqual(self.errors, [])
 
+    # ------------------------------------------------------------ files encrypted by SaveX
+    def upload_bytes(self, path, data):
+        r = self.page.evaluate("""async ([path, b64]) => {
+            const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            const r = await fetch('/api/upload?path=' + encodeURIComponent(path), { method: 'POST', headers: { 'X-DD': '1' }, body: new Blob([bytes]) });
+            return r.status;
+        }""", [path, __import__("base64").b64encode(data).decode()])
+        self.assertEqual(r, 200)
+
+    def check_savex_files(self):
+        """Files encrypted with a password by SaveX (made by its own code: tests/data) open in the viewer with the
+        password, and download decrypted; a wrong password is said and asked again."""
+        p = self.page
+        data = os.path.join(os.path.dirname(__file__), "data")
+        for name in ("savex-dot.png.sxe", "savex-note.txt.sxe"):
+            with open(os.path.join(data, name), "rb") as f:
+                self.upload_bytes("/" + name, f.read())
+        p.goto(self.base + "/#/files/")
+        p.click(".row >> text=savex-dot.png.sxe")
+        p.wait_for_selector("dialog[open] >> text=Encrypted by SaveX")
+        p.fill("dialog[open] input[type=password]", "wrong password")
+        p.click("dialog[open] .modal-actions button")
+        p.wait_for_selector("dialog[open] >> text=That password doesn't open it")
+        p.fill("dialog[open] input[type=password]", "correct horse")
+        p.click("dialog[open] .modal-actions button")
+        p.wait_for_function("() => { const i = document.querySelector('.lightbox img'); return i && i.complete && i.naturalWidth === 2; }")
+        self.assertEqual(p.inner_text(".lightbox .lb-title .t"), "dot.png")         # (its own name, from inside it)
+        p.keyboard.press("Escape")
+        p.wait_for_selector(".lightbox", state="detached")
+        # The password is known now, for everything sealed with it: the next opens without asking.
+        p.click(".row >> text=savex-note.txt.sxe")
+        p.wait_for_selector(".lightbox >> text=saved by SaveX, opened by DDrive")
+        self.assertFalse(p.is_visible("dialog[open]"))
+        with p.expect_download() as info:
+            p.click(".lightbox [aria-label='Download decrypted']")
+        d = info.value
+        target = os.path.join(tempfile.mkdtemp(prefix="dd-dl-"), d.suggested_filename)
+        d.save_as(target)
+        with open(target, "rb") as f:
+            self.assertEqual((d.suggested_filename, f.read()), ("note.txt", b"saved by SaveX, opened by DDrive"))
+        p.keyboard.press("Escape")
+        self.assertEqual(self.errors, [])
+
+    def test_files_encrypted_by_savex(self):
+        self.sign_in_owner()
+        self.check_savex_files()
+
+    def test_files_encrypted_by_savex_in_an_end_to_end_account(self):
+        self.sign_up_e2e()
+        self.check_savex_files()
+
     # ------------------------------------------------------------ an end-to-end encrypted account
     def test_the_recorder_key_is_made_in_the_settings(self):
         self.sign_in_owner()

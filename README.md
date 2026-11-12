@@ -85,7 +85,7 @@ snapshots can be brought back. A background check finds problems before you do.
 | **Efficiency** | Compression · identical pieces stored once · parallel uploads with extra bots · gentle pacing that stays inside Discord's limits |
 
 All of it is described further down: [Web dashboard](#web-dashboard) ·
-[Sync and back up folders](#sync-and-back-up-folders) · [Password-locked folders](#password-locked-folders) ·
+[Sync and back up folders](#sync-and-back-up-folders) · [Password-locked folders](#password-locked-folders) · [Files encrypted by SaveX](#files-encrypted-by-savex) ·
 [Self-healing](#self-healing) · [Snapshots](#snapshots) · [Accounts](#accounts) · [The config file](#the-config-file).
 
 ## Screenshots
@@ -1419,6 +1419,31 @@ dashboard; it does not stop someone with technical skill who can run programs as
 folder is unlocked on the drive letter, every program on that computer can read it, and Windows may
 remember file names it saw (recent files, Explorer's thumbnail cache). The log *file* on disk and the
 terminal commands (`deleted`, `versions`) still name locked files; the dashboard's Log tab does not.
+
+## Files encrypted by SaveX
+
+SaveX, the browser extension that saves the photos and videos from social media posts, can
+encrypt what it saves with a password: every file it saves, only the ones under the folders you name, or
+files and folders already on your computer. Each one becomes `<name>.sxe` (`photo.jpg.sxe`), which nothing
+else can read. File and folder names stay readable.
+
+The dashboard opens them. Put the `.sxe` files on the drive (upload them, or sync the SaveX folder), click one
+and type the SaveX password. The file is decrypted in your browser and shown as usual: photos, videos, sound,
+PDFs and text. **Download decrypted** saves the original. The password is asked for once for everything
+sealed with it, and is forgotten when the page is closed or reloaded. It never goes to the computer running
+DDrive, which only ever holds the files encrypted. This works the same in an end-to-end encrypted account.
+
+- **A whole folder:** right-click it, then **Save SaveX files decrypted…** (Chrome or Edge). Every `.sxe` file
+  in it and in its folders is decrypted into a folder you choose on your computer, keeping the same folders.
+- **Without uploading:** right-click an empty spot in Files, then **Open an encrypted file…**, and pick one on
+  your computer. It's opened in the page, and nothing is sent anywhere.
+- **No DDrive of your own?** SaveX points to `dd.xo.st`, a DDrive run by XO for SaveX users. Make an account
+  there first (24 words, end-to-end encrypted), then do as above.
+
+How the files are made (the same in SaveX's `src/lib/sxe.js` and the dashboard's `ddrive/web/sxe.js`): the
+password is stretched with PBKDF2-SHA256 (600,000 rounds) and a salt made with the password, and each file
+gets its own AES-256-GCM key from that (HKDF with a salt of its own). The content is sealed in 1 MB chunks,
+so a file cut short or changed doesn't open.
 
 ## Sync and back up folders
 

@@ -137,6 +137,7 @@ const EXT = {
 };
 const KIND_OF = new Map(Object.entries(EXT).flatMap(([k, list]) => list.split(" ").map((e) => [e, k])));
 function kind(name) {
+  if (/\.sxe$/i.test(name)) return "lock";              // encrypted by SaveX: opened with its password (sxe.js)
   const dot = name.lastIndexOf(".");
   return (dot >= 0 && KIND_OF.get(name.slice(dot + 1).toLowerCase())) || "file";
 }
@@ -419,11 +420,13 @@ function menuButton(items, title, sub) {
 function itemMenu(it) {
   return [
     it.dir ? { label: "Open", icon: "enter", run: () => go("#/files" + enc(it.path)) }
-           : { label: "Preview", icon: "open", run: () => view(it) },
+           : { label: SXE.is(it.name) ? "Open with the password…" : "Preview", icon: "open", run: () => view(it) },
     it.dir && { label: "Open as gallery", icon: "gallery", run: () => go("#/gallery" + enc(it.path)) },
     !it.dir && route.name === "gallery" && { label: "Show in Files", icon: "enter", run: () => go("#/files" + enc(parent(it.path))) },
     it.dir ? { label: "Download as ZIP", icon: "download", run: () => download("/api/zip" + q({ path: it.path }), it.name + ".zip") }
-           : { label: "Download", icon: "download", run: () => download(fileUrl(it.path, true), it.name) },
+           : { label: SXE.is(it.name) ? "Download encrypted" : "Download", icon: "download", run: () => download(fileUrl(it.path, true), it.name) },
+    !it.dir && SXE.is(it.name) && { label: "Download decrypted…", icon: "download", run: () => SXE.downloadFile(it) },
+    it.dir && window.showDirectoryPicker && { label: "Save SaveX files decrypted…", icon: "download", run: () => SXE.downloadFolder(it) },
     { label: "Share…", icon: "link", run: () => shareDialog(it) },
     it.dir && { label: "Request files…", icon: "upload", run: () => requestDialog(it) },
     !it.dir && kind(it.name) === "text" && { label: "Edit", icon: "rename", run: () => editText(it) },
@@ -454,6 +457,7 @@ function backgroundMenu() {
     { label: "Upload files…", icon: "upload", run: () => $("#pick").click() },
     { label: "Upload a folder…", icon: "upload", run: () => $("#pick-dir").click() },
     { label: "Save from a link…", icon: "download", run: () => saveFromLink(currentDir) },
+    { label: "Open an encrypted file…", icon: "lock", run: SXE.openLocal },
     currentDir !== "/" && { label: "Request files into this folder…", icon: "link", run: () => requestDialog({ path: currentDir, name: base(currentDir), dir: true }) },
     currentDir !== "/" && { label: "Download this folder as ZIP", icon: "download",
                             run: () => download("/api/zip" + q({ path: currentDir }), base(currentDir) + ".zip") },
@@ -1244,6 +1248,9 @@ function preview(it) {
   const url = fileUrl(it.path);
   const k = kind(it.name);
   if (it.dir) return h("div", { class: "preview" }, icon("folder", "big folder"));
+  if (SXE.is(it.name)) return h("div", { class: "preview" }, h("div", { class: "note" }, icon("lock", "big"),
+    h("div", {}, "Encrypted by SaveX with a password"),
+    h("button", { class: "btn", onclick: () => { closeSheet(); SXE.view(it); } }, "Open with the password")));
   if (k === "image") return h("div", { class: "preview" }, h("img", { src: url, alt: it.name }));
   if (k === "video") return h("div", { class: "preview" }, h("video", { src: url, controls: true, preload: "metadata", playsinline: true }));
   if (k === "audio") return h("div", { class: "preview" }, h("audio", { src: url, controls: true, preload: "metadata" }));
@@ -1278,7 +1285,8 @@ function openItem(it, focus) {
   const actions = h("div", { class: "sheet-actions" },
     // Through download(), not a plain link: for an end-to-end encrypted account the file is opened in
     // this page (the server only has it sealed), and a link the browser follows by itself skips that.
-    !it.dir && h("button", { class: "btn", onclick: () => download(fileUrl(it.path, true), it.name) }, "Download"),
+    !it.dir && h("button", { class: "btn", onclick: () => download(fileUrl(it.path, true), it.name) }, SXE.is(it.name) ? "Download encrypted" : "Download"),
+    !it.dir && SXE.is(it.name) && h("button", { class: "btn ghost", onclick: () => SXE.downloadFile(it) }, "Download decrypted"),
     h("button", { class: "btn ghost", onclick: () => shareDialog(it) }, "Share…"),
     !it.dir && kind(it.name) === "text" && h("button", { class: "btn ghost", onclick: () => editText(it) }, "Edit"),
     h("button", { class: "btn ghost", onclick: () => setStar(it, !it.starred) }, it.starred ? "Remove the star" : "Star"),
@@ -4058,7 +4066,8 @@ async function thumbsForAll(path, prog) {
 
 /** A file clicked: a video plays in the cinema, anything else opens its details (with its preview). */
 function view(it) {
-  if (!it.dir && kind(it.name) === "video") cinema(it);
+  if (!it.dir && SXE.is(it.name)) SXE.view(it);
+  else if (!it.dir && kind(it.name) === "video") cinema(it);
   else openItem(it);
 }
 

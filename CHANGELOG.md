@@ -3,6 +3,12 @@
 Every change to DDrive gets a new version number and an entry here. The dashboard shows this
 list under the account menu, "What's new".
 
+## 3.37.0 (2026-11-12)
+
+- **Files encrypted by SaveX open in the dashboard.** SaveX (the browser extension that saves posts' photos and videos) can now encrypt what it saves with a password, as `<name>.sxe`. Click one, type the SaveX password, and it's decrypted in the browser and shown like any other file: photos, videos, sound, PDFs and text. Download decrypted gives back the original. The password is asked for once per page for everything sealed with it, and never leaves the browser. The computer running DDrive only ever has the files encrypted. This works in end-to-end encrypted accounts too.
+- **A folder of them at once:** right-click a folder, then **Save SaveX files decrypted…** (Chrome and Edge). Every `.sxe` in it and its folders is decrypted into a folder on your computer, keeping the same folders.
+- **Open an encrypted file…** (right-click in Files) opens one from your computer without uploading it.
+
 ## 3.36.0 (2026-11-04)
 
 - **A small shared server no longer freezes or hangs because of DDrive.** From a live incident: with no swap, MemoryMax=75% was never reached and the whole server froze; with a soft limit (MemoryHigh) DDrive sat throttled and silent for an hour, and Restart= never saw it. ddrive.service now has a hard cap only (half the memory, at most 2 GB), MemorySwapMax=0, OOMScoreAdjust=300 (the OOM killer takes DDrive, which restarts cleanly, before databases or sshd), MALLOC_ARENA_MAX=2, Restart=always, and a watchdog: DDrive tells systemd it is ready once mounted, and pings it only while the mounted drive and the dashboard answer, so a hang from any cause is restarted. An existing install gets these by itself: when the drive runs in ddrive.service it writes a drop-in (ddrive.service.d/50-ddrive-defaults.conf) and reloads systemd; they apply from the next start.
